@@ -3,6 +3,7 @@ add_mlir_dialect_library(MLIRRelAlg
         RelAlgOps.cpp
         RelAlgOpsEnums.cpp
         OperatorInterfaceImpl.cpp
+        Transforms/PythonCodeGen.cpp
         Transforms/MetaData.cpp
         Transforms/InferNotNullConditions.cpp
         Transforms/ColumnFolding.cpp
