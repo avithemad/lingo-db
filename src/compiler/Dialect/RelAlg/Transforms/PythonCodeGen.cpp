@@ -28,7 +28,48 @@ struct TupleStreamCode {
    }
 };
 
-static std::vector<std::pair<int, mlir::Value>> translateSelection(mlir::Region& predicate) {
+struct ColumnDetail {
+   std::string name;
+   std::string relation;
+   mlir::Type type;  
+   ColumnDetail(std::string name, std::string relation, mlir::Type type) : name(name), relation(relation), type(type) {}
+   void print() {
+      std::clog << relation << "->" << name << " : "; type.dump();
+      std::cout << std::endl;
+   }
+   ColumnDetail(tuples::GetColumnOp &op) {
+      auto attr = op.getAttr();
+      for (auto n: attr.getName().getNestedReferences()) {
+         name = n.getAttr().str();
+      }
+      relation = attr.getName().getRootReference().str();
+      type = attr.getColumn().type;
+   }
+};
+
+std::string operandToString(mlir::Operation *operand) {
+   std::string result = "";
+   if (auto getColOp = mlir::dyn_cast_or_null<tuples::GetColumnOp>(operand)) {
+      ColumnDetail detail(getColOp);
+      // TODO(avinash): add the table index corresponding to detail.relation to the string.
+      result = detail.name;
+   } else if (auto constantOp = mlir::dyn_cast_or_null<db::ConstantOp>(operand)) {
+      if (auto integerAttr = mlir::dyn_cast_or_null<mlir::IntegerAttr>(constantOp.getValue())) {
+         result = std::to_string(integerAttr.getInt());
+      } else if (auto floatAttr = mlir::dyn_cast_or_null<mlir::FloatAttr>(constantOp.getValue())) {
+         result = std::to_string(floatAttr.getValueAsDouble());
+      } else if (auto stringAttr = mlir::dyn_cast_or_null<mlir::StringAttr>(constantOp.getValue())) {
+         result = "\"" + stringAttr.str() + "\""; 
+      } else {
+         assert(false && "Unknown constant type");
+      }
+   } else {
+      assert(false && "Unhandled operand for selection translation");
+   }
+   return result;
+}
+
+static std::string translateSelection(mlir::Region& predicate) {
    auto terminator = mlir::cast<tuples::ReturnOp>(predicate.front().getTerminator());
    if (!terminator.getResults().empty()) {
       auto& predicateBlock = predicate.front();
@@ -43,35 +84,47 @@ static std::vector<std::pair<int, mlir::Value>> translateSelection(mlir::Region&
             auto cmp = compareOp.getPredicate();
             auto left = compareOp.getLeft();
             auto right = compareOp.getRight();
-            
+
+            // TODO(avinash): convert the string to py arrow date integer, if the typeof column is datetime (the other operand)
+            std::string leftOperand = operandToString(left.getDefiningOp());
+           
+            std::string rightOperand = operandToString(right.getDefiningOp());
             switch (cmp)
             {
             case db::DBCmpPredicate::eq:
                /* code */
             {
-
+               return leftOperand + " == " + rightOperand;
             }
             break;
             case db::DBCmpPredicate::neq: 
             {
-
+               return leftOperand + " != " + rightOperand;
             }
+            break;
             case db::DBCmpPredicate::lt: 
             {
-
+               return leftOperand + " < " + rightOperand;
             }
+            break;
             case db::DBCmpPredicate::gt: 
             {
-
+               return leftOperand + " > " + rightOperand;
+               
             }
+            break;
             case db::DBCmpPredicate::lte: 
             {
 
+               return leftOperand + " <= " + rightOperand;
             }
+            break;
             case db::DBCmpPredicate::gte: 
             {
+               return leftOperand + " >= " + rightOperand;
 
             }
+            break;
             case db::DBCmpPredicate::isa: 
             {
                assert(false && "should not happen");
@@ -84,10 +137,9 @@ static std::vector<std::pair<int, mlir::Value>> translateSelection(mlir::Region&
          }
       } else {
          assert(false && "invalid");
-         return std::vector<std::pair<int, mlir::Value>>();
       }
    }
-   return std::vector<std::pair<int, mlir::Value>>();
+   return "";
 }
 
 class PythonCodeGen : public mlir::PassWrapper<PythonCodeGen, mlir::OperationPass<mlir::func::FuncOp>> {
@@ -114,14 +166,9 @@ class PythonCodeGen : public mlir::PassWrapper<PythonCodeGen, mlir::OperationPas
 
             // Get the predicate region
             ::mlir::Region& predicateRegion = selection.getPredicate();
-            auto conditions = translateSelection(predicateRegion);
-            for (auto &c: conditions) {
-               std::cout << "condition: " << c.first << std::endl;
-               c.second.dump();
-            }
-            std::cout << std::endl;
+            auto condition = translateSelection(predicateRegion);
 
-               streamCode->appendKernel("if (!predicate) return;");
+            streamCode->appendKernel("if (!(" + condition + ")) return;");
             streamCodeMap[op] = streamCode;
             /**
                  * TODO(avinash): check if the implemented predicate in python is good
@@ -147,6 +194,7 @@ class PythonCodeGen : public mlir::PassWrapper<PythonCodeGen, mlir::OperationPas
             streamCodeMap[op] = streamCode;
          }
          if (auto table_scan = llvm::dyn_cast<relalg::BaseTableOp>(op)) {
+            // TODO(avinash): Create a relation index identifier map 
             std::string tableIdentifier = table_scan.getTableIdentifier().data();
             TupleStreamCode* streamCode = new TupleStreamCode();
             streamCode->appendKernel("size_t tid = blockIdx.x * blockDim.x + threadIdx.x;");
