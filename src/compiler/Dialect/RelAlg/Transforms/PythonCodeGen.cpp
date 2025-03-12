@@ -96,20 +96,20 @@ struct TupleStreamCode {
 		controlCode += code + "\n";
 	}
 	std::string launchKernel(KernelType ty) {
-		std::string kernelName;
+		std::string _kernelName;
 		std::map<std::string, std::string> _stateArgs;
 		std::map<std::string, mlir::Type> _kernelArgs;
 		if (ty == KernelType::Main) {
-			kernelName = "main";
+			_kernelName = "main";
 			_stateArgs = stateArgs;
 			_kernelArgs = kernelArgs;
 		}
 		else {
 			_stateArgs = stateCountArgs;
 			_kernelArgs = kernelCountArgs;
-			kernelName = "count";
+			_kernelName = "count";
 		} 
-		std::string res = kernelName + "_pipeline_" + convertToHex((void*)this);	
+		std::string res = _kernelName + "_pipeline_" + convertToHex((void*)this);	
 		res += "<<<std::ceil((float)" + baseRelation[baseRelation.size()-1] + "_size/(float)" + std::to_string(threadBlockSize) + "), " + std::to_string(threadBlockSize) + ">>>(";
 		auto i=0ull;
 		for (auto p: _kernelArgs) {
@@ -168,16 +168,16 @@ struct TupleStreamCode {
 		}
 		stream << "__global__ void " + _kernelName + "_pipeline_" + convertToHex((void*)this) + "(";	
 		auto i = 0ull;
-		for (auto p: kernelArgs) {
+		for (auto p: _kernelArgs) {
 			stream << mlirTypeToCudaType(p.second) << " ";
 			stream << p.first;
-			if (i < kernelArgs.size() + _stateArgs.size() - 1)
+			if (i < _kernelArgs.size() + _stateArgs.size() - 1)
 				stream <<  ",\n";
 			i++;
 		}
 		for (auto p: _stateArgs) {
 			stream << p.second << " " << p.first;
-			if (i < kernelArgs.size() + _stateArgs.size() - 1)
+			if (i < _kernelArgs.size() + _stateArgs.size() - 1)
 				stream <<  ",\n";
 			i++;
 		}
@@ -385,7 +385,7 @@ static std::string buf_idx( void* op)
 
 static std::string MakeKeysInStream(mlir::Operation* op, TupleStreamCode* stream, const mlir::ArrayAttr &keys, KernelType kernelType) {
 	// TODO(avinash, p1): add back make_keys function, once you implement it in runtime
-	std::string keyMakerString = ("int64_t " + KEY(op) + " =  (");
+	std::string keyMakerString = ("int64_t " + KEY(op) + " =  make_keys(");
 	for (auto i = 0ull; i<keys.size(); i++) {
 		tuples::ColumnRefAttr key = mlir::cast<tuples::ColumnRefAttr>(keys[i]);
 		std::string cudaIdentifierKey = LoadColumnIntoStream(stream, key, kernelType);
