@@ -11,6 +11,7 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 #include <iostream>
+#include <fstream>
 #include <map>
 #include <set>
 #include <vector>
@@ -22,10 +23,12 @@ enum class KernelType {
 };
 
 // TODO(avinash, p1): Check if StringColumn defined as char* is sufficient for direct comparisons, especially with null terminated c style strings within cuda device memory.
-void printAllTpchSchema() {
-	std::cout << "typedef char* StringColumn;";
-	std::cout << "extern int32_t* d_nation__n_nationkey; extern StringColumn* d_nation__n_name; extern int32_t* d_nation__n_regionkey; extern StringColumn* d_nation__n_comment; extern size_t nation_size; extern int32_t* d_supplier__s_suppkey; extern int32_t* d_supplier__s_nationkey; extern StringColumn* d_supplier__s_name; extern StringColumn* d_supplier__s_address; extern StringColumn* d_supplier__s_phone; extern double* d_supplier__s_acctbal; extern StringColumn* d_supplier__s_comment; extern size_t supplier_size; extern int32_t* d_partsupp__ps_suppkey; extern int32_t* d_partsupp__ps_partkey; extern int64_t* d_partsupp__ps_availqty; extern double* d_partsupp__ps_supplycost; extern StringColumn* d_partsupp__ps_comment; extern size_t partsupp_size; extern int32_t* d_part__p_partkey; extern StringColumn* d_part__p_name; extern StringColumn* d_part__p_mfgr; extern StringColumn* d_part__p_brand; extern StringColumn* d_part__p_type; extern int32_t* d_part__p_size; extern StringColumn* d_part__p_container; extern double* d_part__p_retailprice; extern StringColumn* d_part__p_comment; extern size_t part_size; extern int32_t* d_lineitem__l_orderkey; extern int32_t* d_lineitem__l_partkey; extern int32_t* d_lineitem__l_suppkey; extern int64_t* d_lineitem__l_linenumber; extern int64_t* d_lineitem__l_quantity; extern double* d_lineitem__l_extendedprice; extern double* d_lineitem__l_discount; extern double* d_lineitem__l_tax; extern StringColumn* d_lineitem__l_returnflag; extern StringColumn* d_lineitem__l_linestatus; extern int32_t* d_lineitem__l_shipdate; extern int32_t* d_lineitem__l_commitdate; extern int32_t* d_lineitem__l_receiptdate; extern StringColumn* d_lineitem__l_shipinstruct; extern StringColumn* d_lineitem__l_shipmode; extern StringColumn* d_lineitem__comments; extern size_t lineitem_size; extern int32_t* d_orders__o_orderkey; extern StringColumn* d_orders__o_orderstatus; extern int32_t* d_orders__o_custkey; extern double* d_orders__o_totalprice; extern int32_t* d_orders__o_orderdate; extern StringColumn* d_orders__o_orderpriority; extern StringColumn* d_orders__o_clerk; extern int32_t* d_orders__o_shippriority; extern StringColumn* d_orders__o_comment; extern size_t orders_size; extern int32_t* d_customer__c_custkey; extern StringColumn* d_customer__c_name; extern StringColumn* d_customer__c_address; extern int32_t* d_customer__c_nationkey; extern StringColumn* d_customer__c_phone; extern double* d_customer__c_acctbal; extern StringColumn* d_customer__c_mktsegment; extern StringColumn* d_customer__c_comment; extern size_t customer_size; extern int32_t* d_region__r_regionkey; extern StringColumn* d_region__r_name; extern StringColumn* d_region__r_comment; extern size_t region_size;";
-	std::cout << "\n";
+void printAllTpchSchema(std::ostream& stream) {
+	stream << "#include <cuco/static_map.cuh>\n";
+	stream << "#include \"cudautils.cuh\"\n";
+	stream << "typedef char* StringColumn;\n";
+	stream << "extern int32_t* d_nation__n_nationkey; extern StringColumn* d_nation__n_name; extern int32_t* d_nation__n_regionkey; extern StringColumn* d_nation__n_comment; extern size_t nation_size; extern int32_t* d_supplier__s_suppkey; extern int32_t* d_supplier__s_nationkey; extern StringColumn* d_supplier__s_name; extern StringColumn* d_supplier__s_address; extern StringColumn* d_supplier__s_phone; extern float* d_supplier__s_acctbal; extern StringColumn* d_supplier__s_comment; extern size_t supplier_size; extern int32_t* d_partsupp__ps_suppkey; extern int32_t* d_partsupp__ps_partkey; extern int64_t* d_partsupp__ps_availqty; extern float* d_partsupp__ps_supplycost; extern StringColumn* d_partsupp__ps_comment; extern size_t partsupp_size; extern int32_t* d_part__p_partkey; extern StringColumn* d_part__p_name; extern StringColumn* d_part__p_mfgr; extern StringColumn* d_part__p_brand; extern StringColumn* d_part__p_type; extern int32_t* d_part__p_size; extern StringColumn* d_part__p_container; extern float* d_part__p_retailprice; extern StringColumn* d_part__p_comment; extern size_t part_size; extern int32_t* d_lineitem__l_orderkey; extern int32_t* d_lineitem__l_partkey; extern int32_t* d_lineitem__l_suppkey; extern int64_t* d_lineitem__l_linenumber; extern int64_t* d_lineitem__l_quantity; extern float* d_lineitem__l_extendedprice; extern float* d_lineitem__l_discount; extern float* d_lineitem__l_tax; extern StringColumn* d_lineitem__l_returnflag; extern StringColumn* d_lineitem__l_linestatus; extern int32_t* d_lineitem__l_shipdate; extern int32_t* d_lineitem__l_commitdate; extern int32_t* d_lineitem__l_receiptdate; extern StringColumn* d_lineitem__l_shipinstruct; extern StringColumn* d_lineitem__l_shipmode; extern StringColumn* d_lineitem__comments; extern size_t lineitem_size; extern int32_t* d_orders__o_orderkey; extern StringColumn* d_orders__o_orderstatus; extern int32_t* d_orders__o_custkey; extern float* d_orders__o_totalprice; extern int32_t* d_orders__o_orderdate; extern StringColumn* d_orders__o_orderpriority; extern StringColumn* d_orders__o_clerk; extern int32_t* d_orders__o_shippriority; extern StringColumn* d_orders__o_comment; extern size_t orders_size; extern int32_t* d_customer__c_custkey; extern StringColumn* d_customer__c_name; extern StringColumn* d_customer__c_address; extern int32_t* d_customer__c_nationkey; extern StringColumn* d_customer__c_phone; extern float* d_customer__c_acctbal; extern StringColumn* d_customer__c_mktsegment; extern StringColumn* d_customer__c_comment; extern size_t customer_size; extern int32_t* d_region__r_regionkey; extern StringColumn* d_region__r_name; extern StringColumn* d_region__r_comment; extern size_t region_size;";
+	stream << "\n";
 }
 // for all the cudaidentifier that create a state for example join, aggregation, use the operation address
 // instead of the stream address, which ensures that uniqueness for the data structure used by the operation
@@ -42,7 +45,7 @@ typedef std::set<std::string> LOADEDCOLUMNS;
 static std::string getBaseCudaType(mlir::Type ty) {
 	if (mlir::isa<db::StringType>(ty)) return  "StringColumn";
 	else if (ty.isInteger(32)) return  "int32_t";
-	else if (mlir::isa<db::DecimalType>(ty)) return  "float";
+	else if (mlir::isa<db::DecimalType>(ty)) return  "float"; // TODO(avinash, p3): change appropriately to float or double based on decimal type's parameters
 	else if (mlir::isa<db::DateType>(ty)) return  "int32_t";
 	else if (ty.isInteger(64)) return "int64_t";
 	ty.dump();
@@ -75,7 +78,7 @@ struct TupleStreamCode {
 	std::map<std::string, mlir::Type> kernelCountArgs; // for storing database columns
 	std::map<std::string, std::string> stateCountArgs; // for storing out custom data structures
 	RIDMAP ridMap; // row identifier map. maps table to cuda identifier containing the RID of the table
-	LOADEDCOLUMNS loadedColumns;
+	LOADEDCOLUMNS loadedColumns; // loaded registers within the stream kernel 
 	LOADEDCOLUMNS loadedCountColumns;
 	TupleStreamCode() : kernelCode("") {}
 
@@ -92,25 +95,27 @@ struct TupleStreamCode {
 	void appendControl(std::string code) {
 		controlCode += code + "\n";
 	}
-	std::string launchKernel(KernelType ktype) {
-		std::string type;
-		if (ktype == KernelType::Main)
-			type = "main";
-		else 
-			type = "count";
-		std::string res = type + "_pipeline_" + convertToHex((void*)this);	
+	std::string launchKernel(KernelType ty) {
+		std::string kernelName;
+		std::map<std::string, std::string> _stateArgs;
+		std::map<std::string, mlir::Type> _kernelArgs;
+		if (ty == KernelType::Main) {
+			kernelName = "main";
+			_stateArgs = stateArgs;
+			_kernelArgs = kernelArgs;
+		}
+		else {
+			_stateArgs = stateCountArgs;
+			_kernelArgs = kernelCountArgs;
+			kernelName = "count";
+		} 
+		std::string res = kernelName + "_pipeline_" + convertToHex((void*)this);	
 		res += "<<<std::ceil((float)" + baseRelation[baseRelation.size()-1] + "_size/(float)" + std::to_string(threadBlockSize) + "), " + std::to_string(threadBlockSize) + ">>>(";
 		auto i=0ull;
-		if (ktype == KernelType::Main)
-		for (auto p: kernelArgs) {
+		for (auto p: _kernelArgs) {
 			res += "d_" + p.first + ", ";
 		}
-		else
-		for (auto p: kernelCountArgs) {
-			res += "d_" + p.first + ", ";
-		}
-		if (ktype == KernelType::Main)
-		for (auto p: stateArgs) {
+		for (auto p: _stateArgs) {
 			std::string arg = "";
 			if (p.second == "HASHTABLE_FIND") {
 				arg = p.first + ".ref(cuco::find)";
@@ -121,25 +126,7 @@ struct TupleStreamCode {
 			} else {
 				arg = "d_" + p.first;
 			}
-			if (i < stateArgs.size()-1)
-				res += arg + ", ";
-			else 
-				res += arg + ");";
-			i++;
-		}
-		else 
-		for (auto p: stateCountArgs) {
-			std::string arg = "";
-			if (p.second == "HASHTABLE_FIND") {
-				arg = p.first + ".ref(cuco::find)";
-			} else if (p.second == "HASHTABLE_INSERT") {
-				arg = p.first + ".ref(cuco::insert)";
-			} else if (p.second == "size_t") {
-				arg = p.first;
-			} else {
-				arg = "d_" + p.first;
-			}
-			if (i < stateCountArgs.size()-1)
+			if (i < _stateArgs.size()-1)
 				res += arg + ", ";
 			else 
 				res += arg + ");";
@@ -147,77 +134,61 @@ struct TupleStreamCode {
 		}
 		return res;
 	}
-	void printCountKernel() {
+	void printKernel(KernelType ty, std::ostream& stream) {
+		std::map<std::string, std::string> _stateArgs;
+		std::map<std::string, mlir::Type> _kernelArgs;
+		std::string _kernelName;
+		std::string _kernelCode;
+		if (ty == KernelType::Main) {
+			_stateArgs = stateArgs;
+			_kernelArgs = kernelArgs;
+			_kernelName = "main";
+			_kernelCode = kernelCode;
+		}
+		else {
+			_stateArgs = stateCountArgs;
+			_kernelArgs = kernelCountArgs;
+			_kernelName = "count";
+			_kernelCode = kernelCountCode;
+		}
+
 		std::set<std::string> hashTableTypes;
-		for (auto p: stateCountArgs) {
+		for (auto p: _stateArgs) {
 			if (p.second == "HASHTABLE_FIND" || p.second == "HASHTABLE_INSERT") hashTableTypes.insert(p.second);
 		}
 		if (hashTableTypes.size() > 0) {
-			std::cout << "template<";
+			stream << "template<";
 			auto i = 0ull;
 			for (auto ty: hashTableTypes) {
-				std::cout << "typename " << ty;
-				if (i == hashTableTypes.size()-1) std::cout << ">\n";
-				else std::cout << ", ";
+				stream << "typename " << ty;
+				if (i == hashTableTypes.size()-1) stream << ">\n";
+				else stream << ", ";
 				i++;
 			}
 		}
-		std::cout << "__global__ void count_pipeline_" + convertToHex((void*)this) + "(";	
-		auto i = 0ull;
-		for (auto p: kernelCountArgs) {
-			std::cout << mlirTypeToCudaType(p.second) << " ";
-			std::cout << p.first;
-			if (i < kernelCountArgs.size() + stateCountArgs.size() - 1)
-				std::cout <<  ",\n";
-			i++;
-		}
-		for (auto p: stateCountArgs) {
-			std::cout << p.second << " " << p.first;
-			if (i < kernelCountArgs.size() + stateCountArgs.size() - 1)
-				std::cout <<  ",\n";
-			i++;
-		}
-		std::cout << ") {" <<  std::endl;
-		std::cout << kernelCountCode << "}\n";
-	}
-	void printKernel() {
-		std::set<std::string> hashTableTypes;
-		for (auto p: stateArgs) {
-			if (p.second == "HASHTABLE_FIND" || p.second == "HASHTABLE_INSERT") hashTableTypes.insert(p.second);
-		}
-		if (hashTableTypes.size() > 0) {
-			std::cout << "template<";
-			auto i = 0ull;
-			for (auto ty: hashTableTypes) {
-				std::cout << "typename " << ty;
-				if (i == hashTableTypes.size()-1) std::cout << ">\n";
-				else std::cout << ", ";
-				i++;
-			}
-		}
-		std::cout << "__global__ void main_pipeline_" + convertToHex((void*)this) + "(";	
+		stream << "__global__ void " + _kernelName + "_pipeline_" + convertToHex((void*)this) + "(";	
 		auto i = 0ull;
 		for (auto p: kernelArgs) {
-			std::cout << mlirTypeToCudaType(p.second) << " ";
-			std::cout << p.first;
-			if (i < kernelArgs.size() + stateArgs.size() - 1)
-				std::cout <<  ",\n";
+			stream << mlirTypeToCudaType(p.second) << " ";
+			stream << p.first;
+			if (i < kernelArgs.size() + _stateArgs.size() - 1)
+				stream <<  ",\n";
 			i++;
 		}
-		for (auto p: stateArgs) {
-			std::cout << p.second << " " << p.first;
-			if (i < kernelArgs.size() + stateArgs.size() - 1)
-				std::cout <<  ",\n";
+		for (auto p: _stateArgs) {
+			stream << p.second << " " << p.first;
+			if (i < kernelArgs.size() + _stateArgs.size() - 1)
+				stream <<  ",\n";
 			i++;
 		}
-		std::cout << ") {" << std::endl;
-		std::cout << kernelCode << "}\n";
+		stream << ") {" << std::endl;
+		stream << _kernelCode << "}\n";
 	}
-	void printControl() {
-		std::cout << controlCode + "\n";
-	}
-	void printCountControl() {
-		std::cout << controlCountCode + "\n";
+	void printControl(KernelType ty, std::ostream& stream) {
+		if (ty == KernelType::Main)
+			stream << controlCode + "\n";
+		else 
+			stream << controlCountCode + "\n";
 	}
 };
 
@@ -244,7 +215,7 @@ struct ColumnDetail {
 	void print() {
 		std::clog << relation << "->" << name << " : ";
 		type.dump();
-		std::cout << std::endl;
+		std::clog << std::endl;
 	}
 
 	ColumnDetail(const tuples::ColumnRefAttr &colAttr) {
@@ -337,6 +308,7 @@ static std::string translateSelection(mlir::Region& predicate, TupleStreamCode *
 				}
 
 				auto cmp = compareOp.getPredicate();
+				// TODO(avinash, p2): Handle for strings differently. 
 				switch (cmp) {
 					case db::DBCmpPredicate::eq:
 						/* code */
@@ -498,13 +470,12 @@ class PythonCodeGen : public mlir::PassWrapper<PythonCodeGen, mlir::OperationPas
 				// TODO(avinash, p2): this is a hacky way, actually check if --use-db flag is enabled and query optimization is performed 
 				if (auto floatAttr = mlir::dyn_cast_or_null<mlir::FloatAttr>(op->getAttr("rows"))) {
 					if (std::floor(floatAttr.getValueAsDouble()) != 0)
-						ht_size = std::to_string(std::ceil(floatAttr.getValueAsDouble())); // TODO(avinash, p1): No decimals allowed for cuco::static_map size initialization
+						ht_size = std::to_string((size_t)std::ceil(floatAttr.getValueAsDouble())); // TODO(avinash, p1): No decimals allowed for cuco::static_map size initialization
 				} 
 				if (ht_size == "0") {
 					// take the base relation's size
 					ht_size = streamCode->baseRelation[streamCode->baseRelation.size()-1] + "_size";
 				}
-				std::clog << "Hash table aggregation size: " << ht_size << std::endl;
 
 				streamCode->appendCountControl("auto " + HT(op) + " = cuco::static_map{ " + ht_size + "* 2,cuco::empty_key{(int64_t)-1},cuco::empty_value{(int64_t)-1},thrust::equal_to<int64_t>{},cuco::linear_probing<1, cuco::default_hash_function<int64_t>>()};");
 				streamCode->appendCountControl(streamCode->launchKernel(KernelType::Count));
@@ -569,7 +540,6 @@ class PythonCodeGen : public mlir::PassWrapper<PythonCodeGen, mlir::OperationPas
 							}
 							break;
 							case relalg::AggrFunc::any : {
-								std::clog << "found any\n";
 								streamCode->appendKernel("aggregate_any(&" + slot + ", " + cudaRegIdentifier + ");"); 
 							}
 							break;
@@ -601,7 +571,7 @@ class PythonCodeGen : public mlir::PassWrapper<PythonCodeGen, mlir::OperationPas
 		}
 		else if (auto table_scan = llvm::dyn_cast<relalg::BaseTableOp>(op)) {
 				std::string tableIdentifier = table_scan.getTableIdentifier().data();
-				TupleStreamCode* streamCode = new TupleStreamCode();
+				TupleStreamCode* streamCode = new TupleStreamCode(); // TODO(avinash, p3): clean up all allocated streams after printing them
 
 				streamCode->stateCountArgs[tableIdentifier + "_size"] = "size_t";
 				streamCode->stateArgs[tableIdentifier + "_size"] = "size_t";
@@ -712,18 +682,22 @@ class PythonCodeGen : public mlir::PassWrapper<PythonCodeGen, mlir::OperationPas
 				streamCodeMap[op] = rightStreamCode;
 			}
 		});
-		printAllTpchSchema();
+
+		std::ofstream outputFile("output.cu");
+
+		printAllTpchSchema(outputFile);
 		for (auto code : kernelSchedule) {
-			code->printCountKernel();
-			code->printKernel();
+			code->printKernel(KernelType::Count, outputFile);
+			code->printKernel(KernelType::Main, outputFile);
 		}
 
-		std::cout << "void control() {\n";
+		outputFile << "void control() {\n";
 		for (auto code: kernelSchedule) {
-			code->printCountControl();
-			code->printControl();
+			code->printControl(KernelType::Count, outputFile);
+			code->printControl(KernelType::Main, outputFile);
 		}
-		std::cout << "}\n";
+		outputFile << "}\n";
+		outputFile.close();
 	}
 };
 
