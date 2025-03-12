@@ -21,6 +21,11 @@ enum class KernelType {
 	Count
 };
 
+void printAllTpchSchema() {
+	std::cout << "typedef char* StringColumn;";
+	std::cout << "extern int32_t* nation__n_nationkey; extern int8_t* nation__n_name; extern int32_t* nation__n_regionkey; extern StringColumn* nation__n_comment; extern size_t nation_size; extern int32_t* supplier__s_suppkey; extern int32_t* supplier__s_nationkey; extern StringColumn* supplier__s_name; extern StringColumn* supplier__s_address; extern StringColumn* supplier__s_phone; extern double* supplier__s_acctbal; extern StringColumn* supplier__s_comment; extern size_t supplier_size; extern int32_t* partsupp__ps_suppkey; extern int32_t* partsupp__ps_partkey; extern int64_t* partsupp__ps_availqty; extern double* partsupp__ps_supplycost; extern StringColumn* partsupp__ps_comment; extern size_t partsupp_size; extern int32_t* part__p_partkey; extern StringColumn* part__p_name; extern int8_t* part__p_mfgr; extern int8_t* part__p_brand; extern StringColumn* part__p_type; extern int32_t* part__p_size; extern int8_t* part__p_container; extern double* part__p_retailprice; extern StringColumn* part__p_comment; extern size_t part_size; extern int32_t* lineitem__l_orderkey; extern int32_t* lineitem__l_partkey; extern int32_t* lineitem__l_suppkey; extern int64_t* lineitem__l_linenumber; extern int64_t* lineitem__l_quantity; extern double* lineitem__l_extendedprice; extern double* lineitem__l_discount; extern double* lineitem__l_tax; extern int8_t* lineitem__l_returnflag; extern int8_t* lineitem__l_linestatus; extern int32_t* lineitem__l_shipdate; extern int32_t* lineitem__l_commitdate; extern int32_t* lineitem__l_receiptdate; extern int8_t* lineitem__l_shipinstruct; extern int8_t* lineitem__l_shipmode; extern StringColumn* lineitem__comments; extern size_t lineitem_size; extern int32_t* orders__o_orderkey; extern int8_t* orders__o_orderstatus; extern int32_t* orders__o_custkey; extern double* orders__o_totalprice; extern int32_t* orders__o_orderdate; extern int8_t* orders__o_orderpriority; extern StringColumn* orders__o_clerk; extern int32_t* orders__o_shippriority; extern StringColumn* orders__o_comment; extern size_t orders_size; extern int32_t* customer__c_custkey; extern StringColumn* customer__c_name; extern StringColumn* customer__c_address; extern int32_t* customer__c_nationkey; extern StringColumn* customer__c_phone; extern double* customer__c_acctbal; extern int8_t* customer__c_mktsegment; extern StringColumn* customer__c_comment; extern size_t customer_size; extern int32_t* region__r_regionkey; extern int8_t* region__r_name; extern StringColumn* region__r_comment; extern size_t region_size;";
+	std::cout << "\n";
+}
 // for all the cudaidentifier that create a state for example join, aggregation, use the operation address
 // instead of the stream address, which ensures that uniqueness for the data structure used by the operation
 // is maintained
@@ -33,19 +38,26 @@ std::string convertToHex(void* op)
 }
 typedef std::map<std::string, std::string> RIDMAP;
 typedef std::set<std::string> LOADEDCOLUMNS;
+static std::string getBaseCudaType(mlir::Type ty) {
+	if (mlir::isa<db::StringType>(ty)) return  "StringColumn";
+	else if (ty.isInteger(32)) return  "int32_t";
+	else if (mlir::isa<db::DecimalType>(ty)) return  "float";
+	else if (mlir::isa<db::DateType>(ty)) return  "int32_t";
+	else if (ty.isInteger(64)) return "int64_t";
+	ty.dump();
+	assert(false && "unhandled type");
+	return "";
+	
+}
 static std::string mlirTypeToCudaType(mlir::Type ty) {
-			if (mlir::isa<db::StringType>(ty))
-				return "char* ";
-			else if (ty.isInteger(32))
-				return  "int32_t* ";
-			else if (mlir::isa<db::DecimalType>(ty))
-				return  "float* ";
-			else if (mlir::isa<db::StringType>(ty))
-				return  "StringColumn* ";
-			else if (mlir::isa<db::DateType>(ty))
-				return  "int32_t* ";
-			assert(false && "unhandled type");
-			return "";
+	if (mlir::isa<db::StringType>(ty)) return  "StringColumn* ";
+	else if (ty.isInteger(32)) return  "int32_t* ";
+	else if (mlir::isa<db::DecimalType>(ty)) return  "float* ";
+	else if (mlir::isa<db::DateType>(ty)) return  "int32_t* ";
+	else if (ty.isInteger(64)) return "int64_t* ";
+	ty.dump();
+	assert(false && "unhandled type");
+	return "";
 }
 struct TupleStreamCode {
 	std::vector<std::string> baseRelation; // in data centric code gen, each stream will have exactly one base relation where it scans from
@@ -115,31 +127,42 @@ struct TupleStreamCode {
 		return res;
 	}
 	void printCountKernel() {
-
-		std::cout << "kernelCountArgs -> /\n";
+		std::cout << "__global__ void count_pipeline_" + convertToHex((void*)this) + "(";	
+		auto i = 0ull;
 		for (auto p: kernelCountArgs) {
-			std::cout << p.first << ": " ;
-			std::cout << mlirTypeToCudaType(p.second);
-			std::cout <<  ", ";
+			std::cout << mlirTypeToCudaType(p.second) << " ";
+			std::cout << p.first;
+			if (i < kernelCountArgs.size() + stateCountArgs.size() - 1)
+				std::cout <<  ",\n";
+			i++;
 		}
 		for (auto p: stateCountArgs) {
-			std::cout << p.second << " " << p.first << ", ";
+			std::cout << p.second << " " << p.first;
+			if (i < kernelCountArgs.size() + stateCountArgs.size() - 1)
+				std::cout <<  ",\n";
+			i++;
 		}
-		std::cout << std::endl;
-		std::cout << kernelCountCode << "\n";
+		std::cout << ") {" <<  std::endl;
+		std::cout << kernelCountCode << "}\n";
 	}
 	void printKernel() {
-		std::cout << "kernelArgs -> \n";
+		std::cout << "__global__ void main_pipeline_" + convertToHex((void*)this) + "(";	
+		auto i = 0ull;
 		for (auto p: kernelArgs) {
-			std::cout << p.first << ": " ;
-			std::cout << mlirTypeToCudaType(p.second);
-			std::cout <<  ", ";
+			std::cout << mlirTypeToCudaType(p.second) << " ";
+			std::cout << p.first;
+			if (i < kernelArgs.size() + stateArgs.size() - 1)
+				std::cout <<  ",\n";
+			i++;
 		}
 		for (auto p: stateArgs) {
-			std::cout << p.second << " " << p.first << ", ";
+			std::cout << p.second << " " << p.first;
+			if (i < kernelArgs.size() + stateArgs.size() - 1)
+				std::cout <<  ",\n";
+			i++;
 		}
-		std::cout << std::endl;
-		std::cout << kernelCode << "\n";
+		std::cout << ") {" << std::endl;
+		std::cout << kernelCode << "}\n";
 	}
 	void printControl() {
 		std::cout << controlCode + "\n";
@@ -417,30 +440,60 @@ class PythonCodeGen : public mlir::PassWrapper<PythonCodeGen, mlir::OperationPas
 				mlir::ArrayAttr computedCols = aggregation.getComputedCols(); // these are columndefs
 
 				// create hash table for the stream for this aggregation
-				streamCode->stateArgs[HT(op)] = "HASHTABLE_INSERT";
+				streamCode->stateCountArgs[HT(op)] = "HASHTABLE_INSERT";
 
 				// compute the keys
 				auto cudaIdentifierKey = MakeKeysInStream(op, streamCode, groupByKeys, KernelType::Main);
-				// just insert a dummy value with this key, which will later be handled in user space
-				// TODO(avinash): this is actually supposed to go into the count kernel
-				streamCode->appendKernel(HT(op) + ".insert(cuco::pair{" + cudaIdentifierKey + ", 1});");
 
-				streamCode->appendKernel("//After inserting appropriate indices into the hash table, we next take this index and do atomic aggregation on it");
+				streamCode->appendCountKernel(HT(op) + ".insert(cuco::pair{" + cudaIdentifierKey + ", 1});");
+				// end the count kernel
+				streamCode->appendCountKernel("return;");
+				// add algo 
+				// - to count the keys in HT, 
+				// - initialize buffers of size size(HT)*computedcols.size
+				// - create the host buffers and copy the data from gpu to cpu
+				// note: use the rows estimate for this operation for sizing the hashtable. 
+				// 
+				// TODO(avinash): make sure this estimate is an overestimate (it is complete, doesnt give less value is actually we have more)
+				// also check if use-db is enabled, otherwise all query optimization costs are wrong
+
+				std::string ht_size = "0";
+				// TODO(avinash): this is a hacky way, actually check if --use-db flag is enabled and query optimization is performed 
+				if (auto floatAttr = mlir::dyn_cast_or_null<mlir::FloatAttr>(op->getAttr("rows"))) {
+					if (std::floor(floatAttr.getValueAsDouble()) != 0)
+						ht_size = std::to_string(std::ceil(floatAttr.getValueAsDouble()));
+				} 
+				if (ht_size == "0") {
+					// take the base relation's size
+					ht_size = streamCode->baseRelation[streamCode->baseRelation.size()-1] + "_size";
+				}
+				std::clog << "Hash table aggregation size: " << ht_size << std::endl;
+
+				streamCode->appendCountControl("auto " + d_HT(op) + " = cuco::static_map{ " + ht_size + "* 2,cuco::empty_key{(int64_t)-1},cuco::empty_value{(int64_t)-1},thrust::equal_to<int64_t>{},cuco::linear_probing<1, cuco::default_hash_function<int64_t>>()};");
+				streamCode->appendCountControl(streamCode->launchKernel(KernelType::Count));
+				// TODO(avinash): add thrust code to assign unique identifier for each key slot
+					
+
 				
 				for (auto &col: computedCols) {
 					std::string colName = getColumnName<tuples::ColumnDefAttr>(mlir::cast<tuples::ColumnDefAttr>(col));
 					std::string tableName = getTableName<tuples::ColumnDefAttr>(mlir::cast<tuples::ColumnDefAttr>(col));
 					// create buffers of aggregation length obtained in the count kernel, and create new buffers in the control code
 					streamCode->kernelArgs[tableName + "__" + colName] = (mlir::cast<tuples::ColumnDefAttr>(col)).getColumn().type;
+					// create a new buffer in control side with size d_HT.size()
+					auto cudaType = mlirTypeToCudaType((mlir::cast<tuples::ColumnDefAttr>(col)).getColumn().type);
+					streamCode->appendControl(cudaType + " d_" + tableName + "__" + colName + ";");
+					// remove star from cudaType
+					auto baseCudaType = getBaseCudaType((mlir::cast<tuples::ColumnDefAttr>(col)).getColumn().type);
+					streamCode->appendControl("cudaMalloc(&d_" + tableName + "__" + colName + ", sizeof(" + baseCudaType + ") * " + ht_size + ");");
+					streamCode->appendControl("cudaMemset(d_" +  tableName + "__" + colName + ",0 , sizeof(" + baseCudaType + ") * "+ ht_size + ");");
 				}
+				streamCode->stateArgs[HT(op)] = "HASHTABLE_FIND";
 				streamCode->appendKernel(buf_idx(op) + " = " + HT(op) + ".find(" + cudaIdentifierKey + ");");
 				// walk through the region
 				auto& aggRgn = aggregation.getAggrFunc();
-				//TODO(avinash, p1): aggregation add to kernel, computed aggregate_fn(&buffer, computed_col[idx])
-
 				std::map<mlir::Operation*, std::string> newColumnMap;
 				if (auto returnOp = mlir::dyn_cast_or_null<tuples::ReturnOp>(aggRgn.front().getTerminator())) {
-
 					int i = 0;
 					for (mlir::Value col: returnOp.getResults()) {
 						// map each aggrfunc which is col.getDefiningOp to computedColName
@@ -468,7 +521,6 @@ class PythonCodeGen : public mlir::PassWrapper<PythonCodeGen, mlir::OperationPas
 
 						slot += "[" + buf_idx(op) + "]";
 
-						// how do you get the slot, that is which column corresponds to the computed column??
 						// the return values have one to one corr to computed cold
 						switch (fn) {
 							case relalg::AggrFunc::sum : {
@@ -504,6 +556,7 @@ class PythonCodeGen : public mlir::PassWrapper<PythonCodeGen, mlir::OperationPas
 				}
 
 				streamCode->appendKernel("return;");
+				streamCode->appendControl(streamCode->launchKernel(KernelType::Main));
 				kernelSchedule.push_back(streamCode);
 				// any upstream op should start a new kernel.
 				// for example the topk. 
@@ -512,12 +565,16 @@ class PythonCodeGen : public mlir::PassWrapper<PythonCodeGen, mlir::OperationPas
 		else if (auto table_scan = llvm::dyn_cast<relalg::BaseTableOp>(op)) {
 				std::string tableIdentifier = table_scan.getTableIdentifier().data();
 				TupleStreamCode* streamCode = new TupleStreamCode();
+
 				streamCode->stateCountArgs[tableIdentifier + "_size"] = "uint64_t";
 				streamCode->stateArgs[tableIdentifier + "_size"] = "uint64_t";
+
 				streamCode->baseRelation.push_back(tableIdentifier);
 				streamCode->ridMap[tableIdentifier] = "tid";
+
 				streamCode->appendKernel("size_t tid = blockIdx.x * blockDim.x + threadIdx.x;");
 				streamCode->appendKernel("if (tid >= " + tableIdentifier + "_size) return;");
+
 				streamCode->appendCountKernel("size_t tid = blockIdx.x * blockDim.x + threadIdx.x;");
 				streamCode->appendCountKernel("if (tid >= " + tableIdentifier + "_size) return;");
 				streamCodeMap[op] = streamCode;
@@ -618,15 +675,18 @@ class PythonCodeGen : public mlir::PassWrapper<PythonCodeGen, mlir::OperationPas
 				streamCodeMap[op] = rightStreamCode;
 			}
 		});
+		printAllTpchSchema();
 		for (auto code : kernelSchedule) {
 			code->printCountKernel();
 			code->printKernel();
 		}
 
+		std::cout << "control() {\n";
 		for (auto code: kernelSchedule) {
 			code->printCountControl();
 			code->printControl();
 		}
+		std::cout << "}\n";
 	}
 };
 
