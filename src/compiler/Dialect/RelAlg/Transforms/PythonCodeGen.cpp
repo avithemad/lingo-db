@@ -21,9 +21,10 @@ enum class KernelType {
 	Count
 };
 
+// TODO(avinash, p1): Check if StringColumn defined as char* is sufficient for direct comparisons, especially with null terminated c style strings within cuda device memory.
 void printAllTpchSchema() {
 	std::cout << "typedef char* StringColumn;";
-	std::cout << "extern int32_t* nation__n_nationkey; extern int8_t* nation__n_name; extern int32_t* nation__n_regionkey; extern StringColumn* nation__n_comment; extern size_t nation_size; extern int32_t* supplier__s_suppkey; extern int32_t* supplier__s_nationkey; extern StringColumn* supplier__s_name; extern StringColumn* supplier__s_address; extern StringColumn* supplier__s_phone; extern double* supplier__s_acctbal; extern StringColumn* supplier__s_comment; extern size_t supplier_size; extern int32_t* partsupp__ps_suppkey; extern int32_t* partsupp__ps_partkey; extern int64_t* partsupp__ps_availqty; extern double* partsupp__ps_supplycost; extern StringColumn* partsupp__ps_comment; extern size_t partsupp_size; extern int32_t* part__p_partkey; extern StringColumn* part__p_name; extern int8_t* part__p_mfgr; extern int8_t* part__p_brand; extern StringColumn* part__p_type; extern int32_t* part__p_size; extern int8_t* part__p_container; extern double* part__p_retailprice; extern StringColumn* part__p_comment; extern size_t part_size; extern int32_t* lineitem__l_orderkey; extern int32_t* lineitem__l_partkey; extern int32_t* lineitem__l_suppkey; extern int64_t* lineitem__l_linenumber; extern int64_t* lineitem__l_quantity; extern double* lineitem__l_extendedprice; extern double* lineitem__l_discount; extern double* lineitem__l_tax; extern int8_t* lineitem__l_returnflag; extern int8_t* lineitem__l_linestatus; extern int32_t* lineitem__l_shipdate; extern int32_t* lineitem__l_commitdate; extern int32_t* lineitem__l_receiptdate; extern int8_t* lineitem__l_shipinstruct; extern int8_t* lineitem__l_shipmode; extern StringColumn* lineitem__comments; extern size_t lineitem_size; extern int32_t* orders__o_orderkey; extern int8_t* orders__o_orderstatus; extern int32_t* orders__o_custkey; extern double* orders__o_totalprice; extern int32_t* orders__o_orderdate; extern int8_t* orders__o_orderpriority; extern StringColumn* orders__o_clerk; extern int32_t* orders__o_shippriority; extern StringColumn* orders__o_comment; extern size_t orders_size; extern int32_t* customer__c_custkey; extern StringColumn* customer__c_name; extern StringColumn* customer__c_address; extern int32_t* customer__c_nationkey; extern StringColumn* customer__c_phone; extern double* customer__c_acctbal; extern int8_t* customer__c_mktsegment; extern StringColumn* customer__c_comment; extern size_t customer_size; extern int32_t* region__r_regionkey; extern int8_t* region__r_name; extern StringColumn* region__r_comment; extern size_t region_size;";
+	std::cout << "extern int32_t* d_nation__n_nationkey; extern StringColumn* d_nation__n_name; extern int32_t* d_nation__n_regionkey; extern StringColumn* d_nation__n_comment; extern size_t nation_size; extern int32_t* d_supplier__s_suppkey; extern int32_t* d_supplier__s_nationkey; extern StringColumn* d_supplier__s_name; extern StringColumn* d_supplier__s_address; extern StringColumn* d_supplier__s_phone; extern double* d_supplier__s_acctbal; extern StringColumn* d_supplier__s_comment; extern size_t supplier_size; extern int32_t* d_partsupp__ps_suppkey; extern int32_t* d_partsupp__ps_partkey; extern int64_t* d_partsupp__ps_availqty; extern double* d_partsupp__ps_supplycost; extern StringColumn* d_partsupp__ps_comment; extern size_t partsupp_size; extern int32_t* d_part__p_partkey; extern StringColumn* d_part__p_name; extern StringColumn* d_part__p_mfgr; extern StringColumn* d_part__p_brand; extern StringColumn* d_part__p_type; extern int32_t* d_part__p_size; extern StringColumn* d_part__p_container; extern double* d_part__p_retailprice; extern StringColumn* d_part__p_comment; extern size_t part_size; extern int32_t* d_lineitem__l_orderkey; extern int32_t* d_lineitem__l_partkey; extern int32_t* d_lineitem__l_suppkey; extern int64_t* d_lineitem__l_linenumber; extern int64_t* d_lineitem__l_quantity; extern double* d_lineitem__l_extendedprice; extern double* d_lineitem__l_discount; extern double* d_lineitem__l_tax; extern StringColumn* d_lineitem__l_returnflag; extern StringColumn* d_lineitem__l_linestatus; extern int32_t* d_lineitem__l_shipdate; extern int32_t* d_lineitem__l_commitdate; extern int32_t* d_lineitem__l_receiptdate; extern StringColumn* d_lineitem__l_shipinstruct; extern StringColumn* d_lineitem__l_shipmode; extern StringColumn* d_lineitem__comments; extern size_t lineitem_size; extern int32_t* d_orders__o_orderkey; extern StringColumn* d_orders__o_orderstatus; extern int32_t* d_orders__o_custkey; extern double* d_orders__o_totalprice; extern int32_t* d_orders__o_orderdate; extern StringColumn* d_orders__o_orderpriority; extern StringColumn* d_orders__o_clerk; extern int32_t* d_orders__o_shippriority; extern StringColumn* d_orders__o_comment; extern size_t orders_size; extern int32_t* d_customer__c_custkey; extern StringColumn* d_customer__c_name; extern StringColumn* d_customer__c_address; extern int32_t* d_customer__c_nationkey; extern StringColumn* d_customer__c_phone; extern double* d_customer__c_acctbal; extern StringColumn* d_customer__c_mktsegment; extern StringColumn* d_customer__c_comment; extern size_t customer_size; extern int32_t* d_region__r_regionkey; extern StringColumn* d_region__r_name; extern StringColumn* d_region__r_comment; extern size_t region_size;";
 	std::cout << "\n";
 }
 // for all the cudaidentifier that create a state for example join, aggregation, use the operation address
@@ -110,23 +111,57 @@ struct TupleStreamCode {
 		}
 		if (ktype == KernelType::Main)
 		for (auto p: stateArgs) {
+			std::string arg = "";
+			if (p.second == "HASHTABLE_FIND") {
+				arg = p.first + ".ref(cuco::find)";
+			} else if (p.second == "HASHTABLE_INSERT") {
+				arg = p.first + ".ref(cuco::insert)";
+			} else if (p.second == "size_t") {
+				arg = p.first;
+			} else {
+				arg = "d_" + p.first;
+			}
 			if (i < stateArgs.size()-1)
-				res += "d_" + p.first + ", ";
+				res += arg + ", ";
 			else 
-				res += "d_" + p.first + ");";
+				res += arg + ");";
 			i++;
 		}
 		else 
-		for (auto p: stateArgs) {
-			if (i < stateArgs.size()-1)
-				res += "d_" + p.first + ", ";
+		for (auto p: stateCountArgs) {
+			std::string arg = "";
+			if (p.second == "HASHTABLE_FIND") {
+				arg = p.first + ".ref(cuco::find)";
+			} else if (p.second == "HASHTABLE_INSERT") {
+				arg = p.first + ".ref(cuco::insert)";
+			} else if (p.second == "size_t") {
+				arg = p.first;
+			} else {
+				arg = "d_" + p.first;
+			}
+			if (i < stateCountArgs.size()-1)
+				res += arg + ", ";
 			else 
-				res += "d_" + p.first + ");";
+				res += arg + ");";
 			i++;
 		}
 		return res;
 	}
 	void printCountKernel() {
+		std::set<std::string> hashTableTypes;
+		for (auto p: stateCountArgs) {
+			if (p.second == "HASHTABLE_FIND" || p.second == "HASHTABLE_INSERT") hashTableTypes.insert(p.second);
+		}
+		if (hashTableTypes.size() > 0) {
+			std::cout << "template<";
+			auto i = 0ull;
+			for (auto ty: hashTableTypes) {
+				std::cout << "typename " << ty;
+				if (i == hashTableTypes.size()-1) std::cout << ">\n";
+				else std::cout << ", ";
+				i++;
+			}
+		}
 		std::cout << "__global__ void count_pipeline_" + convertToHex((void*)this) + "(";	
 		auto i = 0ull;
 		for (auto p: kernelCountArgs) {
@@ -146,6 +181,20 @@ struct TupleStreamCode {
 		std::cout << kernelCountCode << "}\n";
 	}
 	void printKernel() {
+		std::set<std::string> hashTableTypes;
+		for (auto p: stateArgs) {
+			if (p.second == "HASHTABLE_FIND" || p.second == "HASHTABLE_INSERT") hashTableTypes.insert(p.second);
+		}
+		if (hashTableTypes.size() > 0) {
+			std::cout << "template<";
+			auto i = 0ull;
+			for (auto ty: hashTableTypes) {
+				std::cout << "typename " << ty;
+				if (i == hashTableTypes.size()-1) std::cout << ">\n";
+				else std::cout << ", ";
+				i++;
+			}
+		}
 		std::cout << "__global__ void main_pipeline_" + convertToHex((void*)this) + "(";	
 		auto i = 0ull;
 		for (auto p: kernelArgs) {
@@ -266,12 +315,9 @@ static std::string translateSelection(mlir::Region& predicate, TupleStreamCode *
 		if (auto returnOp = mlir::dyn_cast_or_null<tuples::ReturnOp>(predicateBlock.getTerminator())) {
 			mlir::Value matched = returnOp.getResults()[0];
 			std::vector<std::pair<int, mlir::Value>> conditions;
-			/**
-			 * TODO(avinash) : Handle other conditions
-			 */
 			// hoping that we always have a compare in selection
 			if (auto compareOp = mlir::dyn_cast_or_null<db::CmpOp>(matched.getDefiningOp())) {
-				// TODO(avinash): convert the string to py arrow date integer, if the typeof column is datetime (the other operand)
+				// TODO(avinash, p1): convert the string to py arrow date integer, if the typeof column is datetime (the other operand)
 				auto left = compareOp.getLeft();
 				std::string leftOperand; 
 				if (auto getColOp = mlir::dyn_cast_or_null<tuples::GetColumnOp>(left.getDefiningOp())) {
@@ -322,6 +368,7 @@ static std::string translateSelection(mlir::Region& predicate, TupleStreamCode *
 						break;
 				}
 			} else if (auto compareOp = mlir::dyn_cast_or_null<db::RuntimeCall>(matched.getDefiningOp())) { // or a like operation
+				// TODO(avinash, p1): handle runtime predicate like operator
 				std::clog << "TODO: handle runtime predicates\n";
 			}
 		} else {
@@ -331,10 +378,6 @@ static std::string translateSelection(mlir::Region& predicate, TupleStreamCode *
 	return "";
 }
 
-static std::string d_HT(void* op)
-{
-	return "d_HT_" + convertToHex(op);
-}
 static std::string HT(void* op)
 {
 	return "HT_" + convertToHex(op);
@@ -369,7 +412,8 @@ static std::string buf_idx( void* op)
 }
 
 static std::string MakeKeysInStream(mlir::Operation* op, TupleStreamCode* stream, const mlir::ArrayAttr &keys, KernelType kernelType) {
-	std::string keyMakerString = ("int64_t " + KEY(op) + " = make_keys(");
+	// TODO(avinash, p1): add back make_keys function, once you implement it in runtime
+	std::string keyMakerString = ("int64_t " + KEY(op) + " =  (");
 	for (auto i = 0ull; i<keys.size(); i++) {
 		tuples::ColumnRefAttr key = mlir::cast<tuples::ColumnRefAttr>(keys[i]);
 		std::string cudaIdentifierKey = LoadColumnIntoStream(stream, key, kernelType);
@@ -379,7 +423,7 @@ static std::string MakeKeysInStream(mlir::Operation* op, TupleStreamCode* stream
 			keyMakerString += ", ";
 		}
 		else {
-			keyMakerString += ")";
+			keyMakerString += ");";
 		}
 	}
 	if (kernelType == KernelType::Main)
@@ -417,18 +461,10 @@ class PythonCodeGen : public mlir::PassWrapper<PythonCodeGen, mlir::OperationPas
 				streamCode->appendKernel("if (!(" + condition + ")) return;");
 				streamCode->appendCountKernel("if (!(" + condition + ")) return;");
 				streamCodeMap[op] = streamCode;
-				/**
-					  * TODO(avinash): check if the implemented predicate in python is good
-					  *     after re-evaluating its design, handle the predicate by the region: getPredicate
-					  */
 
 				//this is basically produce code for the scan
 			}
 			else if (auto aggregation = llvm::dyn_cast<relalg::AggregationOp>(op)) {
-				// TODO(avinash): scheduled on 10th march
-				// this would be the consume method for the aggregation
-				// since it is a materializing operator, we need to
-				// end the kernel of the operand,
 				/**
 				* This is a materializing operation.
 				* Get the keys for aggregation and the tuplestream
@@ -443,7 +479,8 @@ class PythonCodeGen : public mlir::PassWrapper<PythonCodeGen, mlir::OperationPas
 				streamCode->stateCountArgs[HT(op)] = "HASHTABLE_INSERT";
 
 				// compute the keys
-				auto cudaIdentifierKey = MakeKeysInStream(op, streamCode, groupByKeys, KernelType::Main);
+				auto cudaIdentifierKey = MakeKeysInStream(op, streamCode, groupByKeys, KernelType::Count);
+				MakeKeysInStream(op, streamCode, groupByKeys, KernelType::Main); // make keys in main as well as count
 
 				streamCode->appendCountKernel(HT(op) + ".insert(cuco::pair{" + cudaIdentifierKey + ", 1});");
 				// end the count kernel
@@ -454,14 +491,14 @@ class PythonCodeGen : public mlir::PassWrapper<PythonCodeGen, mlir::OperationPas
 				// - create the host buffers and copy the data from gpu to cpu
 				// note: use the rows estimate for this operation for sizing the hashtable. 
 				// 
-				// TODO(avinash): make sure this estimate is an overestimate (it is complete, doesnt give less value is actually we have more)
+				// TODO(avinash, p2): make sure this estimate is an overestimate (it is complete, doesnt give less value is actually we have more)
 				// also check if use-db is enabled, otherwise all query optimization costs are wrong
 
 				std::string ht_size = "0";
-				// TODO(avinash): this is a hacky way, actually check if --use-db flag is enabled and query optimization is performed 
+				// TODO(avinash, p2): this is a hacky way, actually check if --use-db flag is enabled and query optimization is performed 
 				if (auto floatAttr = mlir::dyn_cast_or_null<mlir::FloatAttr>(op->getAttr("rows"))) {
 					if (std::floor(floatAttr.getValueAsDouble()) != 0)
-						ht_size = std::to_string(std::ceil(floatAttr.getValueAsDouble()));
+						ht_size = std::to_string(std::ceil(floatAttr.getValueAsDouble())); // TODO(avinash, p1): No decimals allowed for cuco::static_map size initialization
 				} 
 				if (ht_size == "0") {
 					// take the base relation's size
@@ -469,9 +506,9 @@ class PythonCodeGen : public mlir::PassWrapper<PythonCodeGen, mlir::OperationPas
 				}
 				std::clog << "Hash table aggregation size: " << ht_size << std::endl;
 
-				streamCode->appendCountControl("auto " + d_HT(op) + " = cuco::static_map{ " + ht_size + "* 2,cuco::empty_key{(int64_t)-1},cuco::empty_value{(int64_t)-1},thrust::equal_to<int64_t>{},cuco::linear_probing<1, cuco::default_hash_function<int64_t>>()};");
+				streamCode->appendCountControl("auto " + HT(op) + " = cuco::static_map{ " + ht_size + "* 2,cuco::empty_key{(int64_t)-1},cuco::empty_value{(int64_t)-1},thrust::equal_to<int64_t>{},cuco::linear_probing<1, cuco::default_hash_function<int64_t>>()};");
 				streamCode->appendCountControl(streamCode->launchKernel(KernelType::Count));
-				// TODO(avinash): add thrust code to assign unique identifier for each key slot
+				// TODO(avinash, p1): add thrust code to assign unique identifier for each key slot
 					
 
 				
@@ -489,7 +526,7 @@ class PythonCodeGen : public mlir::PassWrapper<PythonCodeGen, mlir::OperationPas
 					streamCode->appendControl("cudaMemset(d_" +  tableName + "__" + colName + ",0 , sizeof(" + baseCudaType + ") * "+ ht_size + ");");
 				}
 				streamCode->stateArgs[HT(op)] = "HASHTABLE_FIND";
-				streamCode->appendKernel(buf_idx(op) + " = " + HT(op) + ".find(" + cudaIdentifierKey + ");");
+				streamCode->appendKernel("auto " + buf_idx(op) + " = " + HT(op) + ".find(" + cudaIdentifierKey + ")->second;");
 				// walk through the region
 				auto& aggRgn = aggregation.getAggrFunc();
 				std::map<mlir::Operation*, std::string> newColumnMap;
@@ -566,8 +603,8 @@ class PythonCodeGen : public mlir::PassWrapper<PythonCodeGen, mlir::OperationPas
 				std::string tableIdentifier = table_scan.getTableIdentifier().data();
 				TupleStreamCode* streamCode = new TupleStreamCode();
 
-				streamCode->stateCountArgs[tableIdentifier + "_size"] = "uint64_t";
-				streamCode->stateArgs[tableIdentifier + "_size"] = "uint64_t";
+				streamCode->stateCountArgs[tableIdentifier + "_size"] = "size_t";
+				streamCode->stateArgs[tableIdentifier + "_size"] = "size_t";
 
 				streamCode->baseRelation.push_back(tableIdentifier);
 				streamCode->ridMap[tableIdentifier] = "tid";
@@ -580,7 +617,7 @@ class PythonCodeGen : public mlir::PassWrapper<PythonCodeGen, mlir::OperationPas
 				streamCodeMap[op] = streamCode;
 		}
 		else if (auto mapOp = llvm::dyn_cast<relalg::MapOp>(op)) {
-			// TODO(avinash): Scheduled on 9th march
+			// TODO(avinash): Scheduled on 13th march, do mapop topk and materialize to finish q3
 				mlir::Operation* stream = mapOp.getRelMutable().get().getDefiningOp();
 				TupleStreamCode* streamCode = streamCodeMap[stream];
 				// get the array attribute, that is computed cols
@@ -636,9 +673,9 @@ class PythonCodeGen : public mlir::PassWrapper<PythonCodeGen, mlir::OperationPas
 				// 4. launch kernel
 				
 				leftStreamCode->appendControl("int " + BUF_IDX(op) + ";");
-				leftStreamCode->appendControl("cudaMemcpy(" + BUF_IDX(op) + ", " + d_BUF_IDX(op) + ", sizeof(int), cudaMemcpyDeviceToHost);"); 
+				leftStreamCode->appendControl("cudaMemcpy(&" + BUF_IDX(op) + ", " + d_BUF_IDX(op) + ", sizeof(int), cudaMemcpyDeviceToHost);"); 
 				leftStreamCode->appendControl("cudaMemset(" + d_BUF_IDX(op) + ",0 , sizeof(int));");
-				leftStreamCode->appendControl("auto " + d_HT(op) + " = cuco::static_map{ " + BUF_IDX(op) + "* 2,cuco::empty_key{(int64_t)-1},cuco::empty_value{(int64_t)-1},thrust::equal_to<int64_t>{},cuco::linear_probing<1, cuco::default_hash_function<int64_t>>()};");
+				leftStreamCode->appendControl("auto " + HT(op) + " = cuco::static_map{ " + BUF_IDX(op) + "* 2,cuco::empty_key{(int64_t)-1},cuco::empty_value{(int64_t)-1},thrust::equal_to<int64_t>{},cuco::linear_probing<1, cuco::default_hash_function<int64_t>>()};");
 				leftStreamCode->appendControl("uint64_t *" + d_BUF(op) + ";"); 
 				leftStreamCode->appendControl("cudaMalloc(&" + d_BUF(op) + ", sizeof(uint64_t) * " + std::to_string(leftStreamCode->baseRelation.size()) + " * " + BUF_IDX(op) + ");");
 				leftStreamCode->appendControl("cudaMemset(" + d_BUF(op) + ",0 , sizeof(int));");
@@ -681,7 +718,7 @@ class PythonCodeGen : public mlir::PassWrapper<PythonCodeGen, mlir::OperationPas
 			code->printKernel();
 		}
 
-		std::cout << "control() {\n";
+		std::cout << "void control() {\n";
 		for (auto code: kernelSchedule) {
 			code->printCountControl();
 			code->printControl();
