@@ -35,9 +35,6 @@ std::string join(std::vector<std::string> &v, std::string separator) {
 // TODO(avinash, p1): Check if StringColumn defined as char* is sufficient for direct comparisons, especially with null terminated c style strings within cuda device memory.
 void printAllTpchSchema(std::ostream& stream) {
 	stream << "#include <cuco/static_map.cuh>\n";
-	stream << "#include \"cudautils.cuh\"\n";
-	stream << "typedef char* StringColumn;\n";
-	stream << "extern int32_t* d_nation__n_nationkey; extern StringColumn* d_nation__n_name; extern int32_t* d_nation__n_regionkey; extern StringColumn* d_nation__n_comment; extern size_t nation_size; extern int32_t* d_supplier__s_suppkey; extern int32_t* d_supplier__s_nationkey; extern StringColumn* d_supplier__s_name; extern StringColumn* d_supplier__s_address; extern StringColumn* d_supplier__s_phone; extern float* d_supplier__s_acctbal; extern StringColumn* d_supplier__s_comment; extern size_t supplier_size; extern int32_t* d_partsupp__ps_suppkey; extern int32_t* d_partsupp__ps_partkey; extern int64_t* d_partsupp__ps_availqty; extern float* d_partsupp__ps_supplycost; extern StringColumn* d_partsupp__ps_comment; extern size_t partsupp_size; extern int32_t* d_part__p_partkey; extern StringColumn* d_part__p_name; extern StringColumn* d_part__p_mfgr; extern StringColumn* d_part__p_brand; extern StringColumn* d_part__p_type; extern int32_t* d_part__p_size; extern StringColumn* d_part__p_container; extern float* d_part__p_retailprice; extern StringColumn* d_part__p_comment; extern size_t part_size; extern int32_t* d_lineitem__l_orderkey; extern int32_t* d_lineitem__l_partkey; extern int32_t* d_lineitem__l_suppkey; extern int64_t* d_lineitem__l_linenumber; extern int64_t* d_lineitem__l_quantity; extern float* d_lineitem__l_extendedprice; extern float* d_lineitem__l_discount; extern float* d_lineitem__l_tax; extern StringColumn* d_lineitem__l_returnflag; extern StringColumn* d_lineitem__l_linestatus; extern int32_t* d_lineitem__l_shipdate; extern int32_t* d_lineitem__l_commitdate; extern int32_t* d_lineitem__l_receiptdate; extern StringColumn* d_lineitem__l_shipinstruct; extern StringColumn* d_lineitem__l_shipmode; extern StringColumn* d_lineitem__comments; extern size_t lineitem_size; extern int32_t* d_orders__o_orderkey; extern StringColumn* d_orders__o_orderstatus; extern int32_t* d_orders__o_custkey; extern float* d_orders__o_totalprice; extern int32_t* d_orders__o_orderdate; extern StringColumn* d_orders__o_orderpriority; extern StringColumn* d_orders__o_clerk; extern int32_t* d_orders__o_shippriority; extern StringColumn* d_orders__o_comment; extern size_t orders_size; extern int32_t* d_customer__c_custkey; extern StringColumn* d_customer__c_name; extern StringColumn* d_customer__c_address; extern int32_t* d_customer__c_nationkey; extern StringColumn* d_customer__c_phone; extern float* d_customer__c_acctbal; extern StringColumn* d_customer__c_mktsegment; extern StringColumn* d_customer__c_comment; extern size_t customer_size; extern int32_t* d_region__r_regionkey; extern StringColumn* d_region__r_name; extern StringColumn* d_region__r_comment; extern size_t region_size;";
 	stream << "\n";
 }
 // for all the cudaidentifier that create a state for example join, aggregation, use the operation address
@@ -53,26 +50,16 @@ std::string convertToHex(void* op)
 typedef std::map<std::string, std::string> RIDMAP;
 typedef std::set<std::string> LOADEDCOLUMNS;
 static std::string getBaseCudaType(mlir::Type ty) {
-	if (mlir::isa<db::StringType>(ty)) return  "StringColumn";
-	else if (ty.isInteger(32)) return  "int32_t";
-	else if (mlir::isa<db::DecimalType>(ty)) return  "float"; // TODO(avinash, p3): change appropriately to float or double based on decimal type's parameters
-	else if (mlir::isa<db::DateType>(ty)) return  "int32_t";
-	else if (ty.isInteger(64)) return "int64_t";
+	if (mlir::isa<db::StringType>(ty)) return  "DBStringType";
+	else if (ty.isInteger(32)) return  "DBI32Type";
+	else if (ty.isInteger(64)) return "DBI64Type";
+	else if (mlir::isa<db::DecimalType>(ty)) return  "DBDecimalType"; // TODO(avinash, p3): change appropriately to float or double based on decimal type's parameters
+	else if (mlir::isa<db::DateType>(ty)) return  "DBDateType";
+	else if (mlir::isa<db::CharType>(ty)) return "DBCharType";
 	ty.dump();
 	assert(false && "unhandled type");
 	return "";
 	
-}
-static std::string mlirTypeToCudaType(mlir::Type ty) {
-	if (mlir::isa<db::StringType>(ty)) return  "StringColumn* ";
-	else if (ty.isInteger(32)) return  "int32_t* ";
-	else if (mlir::isa<db::DecimalType>(ty)) return  "float* ";
-	else if (mlir::isa<db::DateType>(ty)) return  "int32_t* ";
-	else if (ty.isInteger(64)) return "int64_t* ";
-	else if (mlir::isa<db::CharType>(ty)) return "char* ";
-	ty.dump();
-	assert(false && "unhandled type");
-	return "";
 }
 struct TupleStreamCode {
 	std::vector<std::string> baseRelation; // in data centric code gen, each stream will have exactly one base relation where it scans from
@@ -89,6 +76,9 @@ struct TupleStreamCode {
 	std::map<std::string, mlir::Type> kernelCountArgs; // for storing database columns
 	std::map<std::string, std::string> stateCountArgs; // for storing out custom data structures
 	RIDMAP ridMap; // row identifier map. maps table to cuda identifier containing the RID of the table
+
+	// enforce the invariant that code for each loaded column withing the belows sets are present in the kernel codes respectively.
+	// Right now this is mental model, but as the project grows this would be useful TODO(avinash)
 	LOADEDCOLUMNS loadedColumns; // loaded registers within the stream kernel 
 	LOADEDCOLUMNS loadedCountColumns;
 	TupleStreamCode() : kernelCode("") {}
@@ -176,7 +166,7 @@ struct TupleStreamCode {
 		stream << "__global__ void " + _kernelName + "_pipeline_" + convertToHex((void*)this) + "(";	
 
 		for (auto p: _kernelArgs) {
-			args.push_back(mlirTypeToCudaType(p.second) + " " + p.first);
+			args.push_back(getBaseCudaType(p.second) + " *" + p.first);
 		}
 		stream << join(args, ",\n"); 
 		args.clear();
@@ -234,25 +224,24 @@ struct ColumnDetail {
 std::string LoadColumnIntoStream(TupleStreamCode *streamCode, const tuples::ColumnRefAttr &colAttr, KernelType type ) {
 	// add to the kernel argument, get the name and type from colAttr
 	ColumnDetail detail(colAttr);
-	if (type == KernelType::Main)
-		streamCode->kernelArgs[detail.relation + "__" + detail.name] = detail.type; // add information to the arguments
-	else {
-		streamCode->kernelCountArgs[detail.relation + "__" + detail.name] = detail.type; // add information to the arguments
-	}
 	std::string cudaIdentifier = "reg__" + detail.relation + "__" + detail.name; 
 	if (type == KernelType::Main) {
 
 		if (streamCode->loadedColumns.find(cudaIdentifier) == streamCode->loadedColumns.end()) {
+			if (streamCode->ridMap.find(detail.relation) == streamCode->ridMap.end()) assert(false && "No record identifier for the table found");
 			// load the column into register 
 			streamCode->loadedColumns.insert(cudaIdentifier);
 			streamCode->appendKernel("auto reg__" + detail.relation + "__" + detail.name + " = " + detail.relation + "__" + detail.name + "[" + streamCode->ridMap[detail.relation] + "];");
+			streamCode->kernelArgs[detail.relation + "__" + detail.name] = detail.type; // add information to the arguments
 		}
 		assert(streamCode->loadedColumns.find(cudaIdentifier) != streamCode->loadedColumns.end());
 	}
 	else {
 		if (streamCode->loadedCountColumns.find(cudaIdentifier) == streamCode->loadedCountColumns.end()) {
+			if (streamCode->ridMap.find(detail.relation) == streamCode->ridMap.end()) assert(false && "No record identifier for the table found");
 			streamCode->loadedCountColumns.insert(cudaIdentifier);
 			streamCode->appendCountKernel("auto reg__" + detail.relation + "__" + detail.name + " = " + detail.relation + "__" + detail.name + "[" + streamCode->ridMap[detail.relation] + "];");
+			streamCode->kernelCountArgs[detail.relation + "__" + detail.name] = detail.type; // add information to the arguments
 		}
 		assert(streamCode->loadedCountColumns.find(cudaIdentifier) != streamCode->loadedCountColumns.end());
 	}
@@ -313,30 +302,27 @@ static std::string translateSelection(mlir::Region& predicate, TupleStreamCode *
 				}
 
 				auto cmp = compareOp.getPredicate();
-				// TODO(avinash, p2): Handle for strings differently. 
 				switch (cmp) {
 					case db::DBCmpPredicate::eq:
 						/* code */
 						{
-							return leftOperand + " == " + rightOperand;
+							return "evaluatePredicate(" + leftOperand + ", " + rightOperand + ", Predicate::eq)";
 						}
 						break;
 					case db::DBCmpPredicate::neq: {
-						return leftOperand + " != " + rightOperand;
+							return "evaluatePredicate(" + leftOperand + ", " + rightOperand + ", Predicate::neq)";
 					} break;
 					case db::DBCmpPredicate::lt: {
-						return leftOperand + " < " + rightOperand;
+							return "evaluatePredicate(" + leftOperand + ", " + rightOperand + ", Predicate::lt)";
 					} break;
 					case db::DBCmpPredicate::gt: {
-						return leftOperand + " > " + rightOperand;
-
+							return "evaluatePredicate(" + leftOperand + ", " + rightOperand + ", Predicate::gt)";
 					} break;
 					case db::DBCmpPredicate::lte: {
-						return leftOperand + " <= " + rightOperand;
+							return "evaluatePredicate(" + leftOperand + ", " + rightOperand + ", Predicate::lte)";
 					} break;
 					case db::DBCmpPredicate::gte: {
-						return leftOperand + " >= " + rightOperand;
-
+							return "evaluatePredicate(" + leftOperand + ", " + rightOperand + ", Predicate::gte)";
 					} break;
 					case db::DBCmpPredicate::isa: {
 						assert(false && "should not happen");
@@ -346,7 +332,7 @@ static std::string translateSelection(mlir::Region& predicate, TupleStreamCode *
 				}
 			} else if (auto compareOp = mlir::dyn_cast_or_null<db::RuntimeCall>(matched.getDefiningOp())) { // or a like operation
 				// TODO(avinash, p1): handle runtime predicate like operator
-				std::clog << "TODO: handle runtime predicates\n";
+				assert(false && "TODO: handle runtime predicates\n");
 			}
 		} else {
 			assert(false && "invalid");
@@ -389,24 +375,32 @@ static std::string buf_idx( void* op)
 }
 
 static std::string MakeKeysInStream(mlir::Operation* op, TupleStreamCode* stream, const mlir::ArrayAttr &keys, KernelType kernelType) {
-	// TODO(avinash, p1): add back make_keys function, once you implement it in runtime
-	std::string keyMakerString = ("int64_t " + KEY(op) + " = make_keys(");
+	//TODO(avinash, p3): figure a way out for double keys
+	std::string keyMaker = "int64_t " + KEY(op) + " = 0;\n";
+	std::map<std::string, int> allowedKeysToSize; 
+	allowedKeysToSize["DBCharType"] = 1;
+	allowedKeysToSize["DBI32Type"] = 4;
+	allowedKeysToSize["DBDateType"] = 4;
+	allowedKeysToSize["DBI64Type"] = 8;
+	int totalKeySize = 0;
 	for (auto i = 0ull; i<keys.size(); i++) {
 		tuples::ColumnRefAttr key = mlir::cast<tuples::ColumnRefAttr>(keys[i]);
-		std::string cudaIdentifierKey = LoadColumnIntoStream(stream, key, kernelType);
-		keyMakerString += cudaIdentifierKey;
-		if (i != keys.size() - 1)
-		{
-			keyMakerString += ", ";
+		auto baseType = getBaseCudaType(key.getColumn().type);
+		if (allowedKeysToSize.find(baseType) == allowedKeysToSize.end()) {
+			assert(false && "Type is not hashable");
 		}
-		else {
-			keyMakerString += ");";
+		std::string cudaIdentifierKey = LoadColumnIntoStream(stream, key, kernelType);
+		keyMaker += KEY(op) + " <<= " + std::to_string(allowedKeysToSize[baseType] * 8) + ";\n";
+		keyMaker += KEY(op) + "  |= " + cudaIdentifierKey + ";\n";
+		totalKeySize += allowedKeysToSize[baseType];
+		if (totalKeySize > 8) {
+			assert(false && "Total hash key exceeded 8 bytes");
 		}
 	}
 	if (kernelType == KernelType::Main)
-		stream->appendKernel(keyMakerString);
+		stream->appendKernel(keyMaker);
 	else 
-		stream->appendCountKernel(keyMakerString);
+		stream->appendCountKernel(keyMaker);
 	return KEY(op);
 }
 class PythonCodeGen : public mlir::PassWrapper<PythonCodeGen, mlir::OperationPass<mlir::func::FuncOp>> {
@@ -499,12 +493,12 @@ class PythonCodeGen : public mlir::PassWrapper<PythonCodeGen, mlir::OperationPas
 					// create buffers of aggregation length obtained in the count kernel, and create new buffers in the control code
 					streamCode->kernelArgs[tableName + "__" + colName] = (mlir::cast<tuples::ColumnDefAttr>(col)).getColumn().type;
 					// create a new buffer in control side with size d_HT.size()
-					auto cudaType = mlirTypeToCudaType((mlir::cast<tuples::ColumnDefAttr>(col)).getColumn().type);
+					auto cudaType = getBaseCudaType((mlir::cast<tuples::ColumnDefAttr>(col)).getColumn().type) + "* "; 
 					streamCode->appendControl(cudaType + " d_" + tableName + "__" + colName + ";");
 					// remove star from cudaType
 					auto baseCudaType = getBaseCudaType((mlir::cast<tuples::ColumnDefAttr>(col)).getColumn().type);
-					streamCode->appendControl("cudaMalloc(&d_" + tableName + "__" + colName + ", sizeof(" + baseCudaType + ") * " + ht_size + ");");
-					streamCode->appendControl("cudaMemset(d_" +  tableName + "__" + colName + ",0 , sizeof(" + baseCudaType + ") * "+ ht_size + ");");
+					streamCode->appendControl("cudaMalloc(&d_" + tableName + "__" + colName + ", sizeof(" + baseCudaType + ") * " + HT(op) + ".size());");
+					streamCode->appendControl("cudaMemset(d_" +  tableName + "__" + colName + ",0 , sizeof(" + baseCudaType + ") * "+ HT(op) + ".size());");
 				}
 				streamCode->stateArgs[HT(op)] = "HASHTABLE_FIND";
 				streamCode->appendKernel("auto " + buf_idx(op) + " = " + HT(op) + ".find(" + cudaIdentifierKey + ")->second;");
@@ -532,7 +526,9 @@ class PythonCodeGen : public mlir::PassWrapper<PythonCodeGen, mlir::OperationPas
 						auto tableName = getTableName<tuples::ColumnRefAttr>(col);
 
 						auto cudaRegIdentifier = LoadColumnIntoStream(streamCode, col, KernelType::Main);
-						assert(streamCode->kernelArgs.find(tableName + "__" + colName) != streamCode->kernelArgs.end() && "existing column (input to aggregation) not found in kernel args.");
+
+						// below assertions already handled in loadcolumninto stream no need of it here
+						// assert(streamCode->kernelArgs.find(tableName + "__" + colName) != streamCode->kernelArgs.end() && "existing column (input to aggregation) not found in kernel args.");
 						
 						auto slot = newColumnMap[&regionOp];
 						assert(streamCode->kernelArgs.find(slot) != streamCode->kernelArgs.end() && "the new column is not in the kernel args.");
@@ -603,7 +599,30 @@ class PythonCodeGen : public mlir::PassWrapper<PythonCodeGen, mlir::OperationPas
 				// get the array attribute, that is computed cols
 				// these will be the new definitions of the columns, and we need this information
 				// in the upstream tuple operation
-				auto computedCols = mapOp.getComputedCols(); // returns mlir::ArrayAttr
+				auto computedCols = mapOp.getComputedCols(); 
+				auto& predRegion = mapOp.getPredicate();
+				if (auto returnOp = mlir::dyn_cast_or_null<tuples::ReturnOp>(predRegion.front().getTerminator())) {
+
+					assert(returnOp.getResults().size() == computedCols.size() && "Computed cols size not equal to result size");
+					for (auto col: computedCols) {
+						auto colAttr = mlir::cast<tuples::ColumnDefAttr>(col);
+						auto table_name = getTableName<tuples::ColumnDefAttr>(colAttr);
+						auto column_name = getColumnName<tuples::ColumnDefAttr>(colAttr);
+
+
+	//					std::vector<mlir::Operation*> toMove;
+	//					for (auto& op: predRegion.front()) {
+	//						toMove.push_back(&op);
+	//					}
+
+						auto cudaIdentifier = "reg__" + table_name + "__" + column_name;
+						streamCode->loadedColumns.insert(cudaIdentifier);
+						streamCode->loadedCountColumns.insert(cudaIdentifier);
+					}
+				}
+				else  {
+					assert(false && "No return op found for the map operation region");
+				}
 				// each element here is a columndefattr, it is fairly easy to retrieve the table/column names
 				// the predicate region has the computation graph for the expression that we need to translate
 
@@ -639,7 +658,9 @@ class PythonCodeGen : public mlir::PassWrapper<PythonCodeGen, mlir::OperationPas
 
 				leftStreamCode->appendCountKernel("atomicAdd(" + BUF_IDX(op) + ", 1);");
 				leftStreamCode->appendCountKernel("return;");
+				//TODO(avinash): BUF_IDX ideally should be uint64_t, we are using int for atomic support for now
 				leftStreamCode->stateCountArgs[BUF_IDX(op)] = "int *";
+
 
 				// create the control code for count kernel
 				leftStreamCode->appendCountControl("int *" + d_BUF_IDX(op) + ";");
