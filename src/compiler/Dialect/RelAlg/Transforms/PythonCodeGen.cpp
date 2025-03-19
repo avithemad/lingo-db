@@ -39,7 +39,7 @@ std::string join(std::vector<std::string>& v, std::string separator) {
 }
 // TODO(avinash, p1): Check if StringColumn defined as char* is sufficient for direct comparisons, especially with null terminated c style strings within cuda device memory.
 void printAllTpchSchema(std::ostream& stream) {
-   stream << "#include <cuco/static_map.cuh>\n";
+   stream << "#include <cuco/static_map.cuh>\n#include <thrust/copy.h>\n#include <thrust/device_vector.h>\n#include <thrust/host_vector.h>";
    stream << "\n";
 }
 // for all the cudaidentifier that create a state for example join, aggregation, use the operation address
@@ -191,7 +191,7 @@ struct TupleStreamCode {
       }
       stream << join(args, ",\n");
       args.clear();
-      if (_stateArgs.size() > 0) stream << ",\n";
+      if (_kernelArgs.size() > 0) stream << ",\n";
       for (auto p : _stateArgs) {
          args.push_back(p.second + " " + p.first);
       }
@@ -237,7 +237,7 @@ struct ColumnDetail {
       name = getColumnName<tuples::ColumnRefAttr>(colAttr);
       type = colAttr.getColumn().type;
    }
-   
+
    std::string getMlirSymbol() {
       return relation + "__" + name;
    }
@@ -251,32 +251,49 @@ std::string LoadColumnIntoStream(TupleStreamCode* streamCode, const tuples::Colu
    std::string cudaSymbol = streamCode->scanSymbolMap[mlirSymbol];
    if (type == KernelType::Main) {
       if (streamCode->loadedColumns.find(cudaIdentifier) == streamCode->loadedColumns.end()) {
-         if (streamCode->tupleLoadExpression.find(mlirSymbol) == streamCode->tupleLoadExpression.end()) {
+         if (streamCode->tupleLoadExpression.find(mlirSymbol) != streamCode->tupleLoadExpression.end()) {
+            streamCode->loadedColumns.insert(cudaIdentifier);
+            streamCode->appendKernel("auto " + cudaIdentifier + " = " + streamCode->tupleLoadExpression[mlirSymbol] + ";");
+
+            // for map expressions we do not really need to add the arguments
+            if (streamCode->mappedColumns.find(mlirSymbol) == streamCode->mappedColumns.end())
+               streamCode->kernelArgs[mlirSymbol] = detail.type; // add information to the arguments
+         } else if (streamCode->ridMap.find(detail.relation) != streamCode->ridMap.end()) {
+            streamCode->loadedColumns.insert(cudaIdentifier);
+            streamCode->appendKernel("auto " + cudaIdentifier + " = " + mlirSymbol + "[" + streamCode->ridMap[detail.relation] + "]" + ";");
+
+            streamCode->kernelArgs[mlirSymbol] = detail.type; // add information to the arguments
+         } else {
             std::clog << mlirSymbol << std::endl;
-            assert(false && "No expression for loading this tuple found"); 
+            assert(false && "no loading for this column into kernel found");
          }
          // load the column into register
-         streamCode->loadedColumns.insert(cudaIdentifier);
-         streamCode->appendKernel("auto " + cudaIdentifier + " = " + streamCode->tupleLoadExpression[mlirSymbol] + ";");
-
-         // for map expressions we do not really need to add the arguments
-         if (streamCode->mappedColumns.find(mlirSymbol) == streamCode->mappedColumns.end())
-            streamCode->kernelArgs[mlirSymbol] = detail.type; // add information to the arguments
       }
       assert(streamCode->loadedColumns.find(cudaIdentifier) != streamCode->loadedColumns.end());
    } else {
       if (streamCode->loadedCountColumns.find(cudaIdentifier) == streamCode->loadedCountColumns.end()) {
-         if (streamCode->tupleLoadExpression.find(mlirSymbol) == streamCode->tupleLoadExpression.end()) assert(false && "No expression for loading this tuple found");
-         streamCode->loadedCountColumns.insert(cudaIdentifier);
-         streamCode->appendCountKernel("auto " + cudaIdentifier + " = " + streamCode->tupleLoadExpression[mlirSymbol] + ";");
+         if (streamCode->tupleLoadExpression.find(mlirSymbol) != streamCode->tupleLoadExpression.end()) {
+            streamCode->loadedCountColumns.insert(cudaIdentifier);
+            streamCode->appendCountKernel("auto " + cudaIdentifier + " = " + streamCode->tupleLoadExpression[mlirSymbol] + ";");
 
-         if (streamCode->mappedColumns.find(mlirSymbol) == streamCode->mappedColumns.end())
+            if (streamCode->mappedColumns.find(mlirSymbol) == streamCode->mappedColumns.end())
+               streamCode->kernelCountArgs[mlirSymbol] = detail.type; // add information to the arguments
+         } else if (streamCode->ridMap.find(detail.relation) != streamCode->ridMap.end()) {
+            streamCode->loadedCountColumns.insert(cudaIdentifier);
+            streamCode->appendCountKernel("auto " + cudaIdentifier + " = " + mlirSymbol + "[" + streamCode->ridMap[detail.relation] + "]" + ";");
+
             streamCode->kernelCountArgs[mlirSymbol] = detail.type; // add information to the arguments
+         } else {
+            std::clog << mlirSymbol << std::endl;
+            assert(false && "no loading for this column into kernel found");
+         }
       }
       assert(streamCode->loadedCountColumns.find(cudaIdentifier) != streamCode->loadedCountColumns.end());
    }
    return cudaIdentifier;
 }
+
+//TODO(avinash): this function is incorrect (given by chatgpt)
 int daysSinceEpoch(const std::string& dateStr) {
    std::tm t = {};
    std::istringstream ss(dateStr);
@@ -597,10 +614,11 @@ class PythonCodeGen : public mlir::PassWrapper<PythonCodeGen, mlir::OperationPas
             streamCode->appendCountControl(streamCode->launchKernel(KernelType::Count));
             // TODO(avinash, p1/now): add thrust code to assign unique identifier for each key slot
 
+            streamCode->appendControl("thrust::device_vector<int64_t> keys_" + convertToHex(op) + "(HT_" + convertToHex(op) + ".size()), vals_" + convertToHex(op) + "(HT_" + convertToHex(op) + ".size());\nHT_" + convertToHex(op) + ".retrieve_all(keys_" + convertToHex(op) + ".begin(), vals_" + convertToHex(op) + ".begin());\nthrust::host_vector<int64_t> h_keys_" + convertToHex(op) + "(HT_" + convertToHex(op) + ".size());\nthrust::copy(keys_" + convertToHex(op) + ".begin(), keys_" + convertToHex(op) + ".end(), h_keys_" + convertToHex(op) + ".begin());\nthrust::host_vector<cuco::pair<int64_t, int64_t>> actual_dict_" + convertToHex(op) + "(HT_" + convertToHex(op) + ".size());\nfor (int i=0; i < HT_" + convertToHex(op) + ".size(); i++) {{\nactual_dict_" + convertToHex(op) + "[i] = cuco::make_pair(h_keys_" + convertToHex(op) + "[i], i);\n}}\nHT_" + convertToHex(op) + ".clear();\nHT_" + convertToHex(op) + ".insert(actual_dict_" + convertToHex(op) + ".begin(), actual_dict_" + convertToHex(op) + ".end());");
+
             for (auto& col : computedCols) {
                std::string colName = getColumnName<tuples::ColumnDefAttr>(mlir::cast<tuples::ColumnDefAttr>(col));
                std::string tableName = getTableName<tuples::ColumnDefAttr>(mlir::cast<tuples::ColumnDefAttr>(col));
-               streamCode->baseRelation.push_back(tableName); // TODO(avinash): very bad fix it!!
                // create buffers of aggregation length obtained in the count kernel, and create new buffers in the control code
                streamCode->kernelArgs[tableName + "__" + colName] = (mlir::cast<tuples::ColumnDefAttr>(col)).getColumn().type;
                streamCode->resultSymbolMap[tableName + "__" + colName] = tableName + "__" + colName;
@@ -622,7 +640,6 @@ class PythonCodeGen : public mlir::PassWrapper<PythonCodeGen, mlir::OperationPas
             for (auto& col : groupByKeys) {
                std::string colName = getColumnName<tuples::ColumnRefAttr>(mlir::cast<tuples::ColumnRefAttr>(col));
                std::string tableName = getTableName<tuples::ColumnRefAttr>(mlir::cast<tuples::ColumnRefAttr>(col));
-               streamCode->baseRelation.push_back(tableName); // TODO(avinash): very bad fix it!!
                // create buffers of aggregation length obtained in the count kernel, and create new buffers in the control code
                streamCode->resultSymbolMap[KEY(op) + tableName + "__" + colName] = KEY(op) + tableName + "__" + colName;
                streamCode->kernelArgs[KEY(op) + tableName + "__" + colName] = (mlir::cast<tuples::ColumnRefAttr>(col)).getColumn().type;
@@ -644,55 +661,46 @@ class PythonCodeGen : public mlir::PassWrapper<PythonCodeGen, mlir::OperationPas
                   // map each aggrfunc which is col.getDefiningOp to computedColName
                   auto newcol = mlir::cast<tuples::ColumnDefAttr>(computedCols[i]);
                   auto newbuffername = getTableName<tuples::ColumnDefAttr>(newcol) + "__" + getColumnName<tuples::ColumnDefAttr>(newcol);
-                  newColumnMap[col.getDefiningOp()] = newbuffername;
+                  if (auto aggrFunc = llvm::dyn_cast<relalg::AggrFuncOp>(col.getDefiningOp())) {
+                     auto slot = newbuffername + "[" + buf_idx(op) + "]";
+                     auto fn = aggrFunc.getFn();
+                     auto cudaRegIdentifier = LoadColumnIntoStream(streamCode, mlir::cast<tuples::ColumnRefAttr>(aggrFunc.getAttr()), KernelType::Main);
+
+                     switch (fn) {
+                        case relalg::AggrFunc::sum: {
+                           streamCode->appendKernel("aggregate_sum(&" + slot + ", " + cudaRegIdentifier + ");");
+                        } break;
+                        case relalg::AggrFunc::count: {
+                           streamCode->appendKernel("aggregate_sum(&" + slot + ", 1);");
+                        } break;
+                        case relalg::AggrFunc::any: {
+                           streamCode->appendKernel("aggregate_any(&" + slot + ", " + cudaRegIdentifier + ");");
+                        } break;
+                        case relalg::AggrFunc::avg: {
+                           assert(false && "average should be split into sum and divide");
+                        } break;
+                        case relalg::AggrFunc::min: {
+                           streamCode->appendKernel("aggregate_min(&" + slot + ", " + cudaRegIdentifier + ");");
+                        } break;
+                        case relalg::AggrFunc::max: {
+                           streamCode->appendKernel("aggregate_max(&" + slot + ", " + cudaRegIdentifier + ");");
+                        } break;
+                        default:
+                           assert(false && "this aggregation is not handled");
+                           break;
+                     }
+                  } else if (auto countFunc = llvm::dyn_cast<relalg::CountRowsOp>(col.getDefiningOp())) {
+                     auto slot = newbuffername + "[" + buf_idx(op) + "]";
+                     streamCode->appendKernel("aggregate_sum(&" + slot + ", 1);");
+                  } else {
+                     col.dump();
+                     col.getDefiningOp()->dump();
+                     assert(false && "No aggregation function for the new column in aggregation");
+                  }
                   i++;
                }
             } else {
                assert(false && "nothing to aggregate!!");
-            }
-            for (auto& regionOp : aggRgn.front()) {
-               // now materialize all the computed columns here
-               if (auto aggrFunc = llvm::dyn_cast<relalg::AggrFuncOp>(regionOp)) {
-                  auto fn = aggrFunc.getFn();
-                  tuples::ColumnRefAttr col = aggrFunc.getAttr(); // we dont need the tuplestream that is getRel here for now.
-                  auto colName = getColumnName<tuples::ColumnRefAttr>(col);
-                  auto tableName = getTableName<tuples::ColumnRefAttr>(col);
-
-                  auto cudaRegIdentifier = LoadColumnIntoStream(streamCode, col, KernelType::Main);
-
-                  // below assertions already handled in loadcolumninto stream no need of it here
-                  // assert(streamCode->kernelArgs.find(tableName + "__" + colName) != streamCode->kernelArgs.end() && "existing column (input to aggregation) not found in kernel args.");
-
-                  auto slot = newColumnMap[&regionOp];
-                  assert(streamCode->kernelArgs.find(slot) != streamCode->kernelArgs.end() && "the new column is not in the kernel args.");
-
-                  slot += "[" + buf_idx(op) + "]";
-
-                  // the return values have one to one corr to computed cold
-                  switch (fn) {
-                     case relalg::AggrFunc::sum: {
-                        streamCode->appendKernel("aggregate_sum(&" + slot + ", " + cudaRegIdentifier + ");");
-                     } break;
-                     case relalg::AggrFunc::count: {
-                        streamCode->appendKernel("aggregate_count(&" + slot + ", " + cudaRegIdentifier + ");");
-                     } break;
-                     case relalg::AggrFunc::any: {
-                        streamCode->appendKernel("aggregate_any(&" + slot + ", " + cudaRegIdentifier + ");");
-                     } break;
-                     case relalg::AggrFunc::avg: {
-                        assert(false && "average should be split into sum and divide");
-                     } break;
-                     case relalg::AggrFunc::min: {
-                        streamCode->appendKernel("aggregate_min(&" + slot + ", " + cudaRegIdentifier + ");");
-                     } break;
-                     case relalg::AggrFunc::max: {
-                        streamCode->appendKernel("aggregate_max(&" + slot + ", " + cudaRegIdentifier + ");");
-                     } break;
-                     default:
-                        assert(false && "this aggregation is not handled");
-                        break;
-                  }
-               }
             }
 
             streamCode->appendKernel("return;");
@@ -710,7 +718,6 @@ class PythonCodeGen : public mlir::PassWrapper<PythonCodeGen, mlir::OperationPas
 
             streamCode->baseRelation.push_back(tableIdentifier);
             streamCode->ridMap[tableIdentifier] = "tid";
-
 
             streamCode->appendKernel("size_t tid = blockIdx.x * blockDim.x + threadIdx.x;");
             streamCode->appendKernel("if (tid >= " + tableIdentifier + "_size) return;");
@@ -755,10 +762,10 @@ class PythonCodeGen : public mlir::PassWrapper<PythonCodeGen, mlir::OperationPas
 
                // get the keys for the group by, and map it differently
                mlir::ArrayAttr parentGBKeys = parentAgg.getGroupByCols();
-               for (auto& key: parentGBKeys) {
+               for (auto& key : parentGBKeys) {
                   std::string colName = getColumnName<tuples::ColumnRefAttr>(mlir::cast<tuples::ColumnRefAttr>(key));
                   std::string tableName = getTableName<tuples::ColumnRefAttr>(mlir::cast<tuples::ColumnRefAttr>(key));
-                  std::string mlirSymbol =  tableName + "__" + colName;
+                  std::string mlirSymbol = tableName + "__" + colName;
                   newStreamCode->scanSymbolMap[mlirSymbol] = KEY(stream) + mlirSymbol;
                   newStreamCode->tupleLoadExpression[mlirSymbol] = mlirSymbol + "[tid]";
                }
@@ -810,6 +817,47 @@ class PythonCodeGen : public mlir::PassWrapper<PythonCodeGen, mlir::OperationPas
                   std::clog << "ascending\n";
                }
             }
+            mlir::Operation* stream = topKOp.getRelMutable().get().getDefiningOp();
+            TupleStreamCode* streamCode = streamCodeMap[stream];
+            if (!streamCode) assert(false && "No downstream operator found for topKOp");
+            if (auto parentAgg = mlir::dyn_cast_or_null<relalg::AggregationOp>(stream)) {
+               // start a new scan here
+               TupleStreamCode* newStreamCode = new TupleStreamCode();
+               std::string tableIdentifier = MAT(stream);
+
+               newStreamCode->stateCountArgs[tableIdentifier + "_size"] = "size_t";
+               newStreamCode->stateArgs[tableIdentifier + "_size"] = "size_t";
+
+               newStreamCode->baseRelation.push_back(tableIdentifier);
+               newStreamCode->ridMap[tableIdentifier] = "tid";
+
+               newStreamCode->appendKernel("size_t tid = blockIdx.x * blockDim.x + threadIdx.x;");
+               newStreamCode->appendKernel("if (tid >= " + tableIdentifier + "_size) return;");
+
+               newStreamCode->appendCountKernel("size_t tid = blockIdx.x * blockDim.x + threadIdx.x;");
+               newStreamCode->appendCountKernel("if (tid >= " + tableIdentifier + "_size) return;");
+
+               // get the keys for the group by, and map it differently
+               mlir::ArrayAttr parentGBKeys = parentAgg.getGroupByCols();
+               for (auto& key : parentGBKeys) {
+                  std::string colName = getColumnName<tuples::ColumnRefAttr>(mlir::cast<tuples::ColumnRefAttr>(key));
+                  std::string tableName = getTableName<tuples::ColumnRefAttr>(mlir::cast<tuples::ColumnRefAttr>(key));
+                  std::string mlirSymbol = tableName + "__" + colName;
+                  newStreamCode->scanSymbolMap[mlirSymbol] = KEY(stream) + mlirSymbol;
+                  newStreamCode->tupleLoadExpression[mlirSymbol] = mlirSymbol + "[tid]";
+               }
+
+               for (auto p : streamCode->resultSymbolMap) {
+                  newStreamCode->scanSymbolMap[p.first] = p.second;
+                  newStreamCode->tupleLoadExpression[p.first] = p.first + "[tid]";
+               }
+
+               streamCode = newStreamCode;
+
+               // get the columns from the previous tuple stream code that were materialized.
+            }
+            //TODO(avinash, p2): Implement topkop
+            streamCodeMap[op] = streamCode;
             // add thrust code to sort based on key and value, no kernel operations here
             // this is neither a pipeline starter or an ender, when to sort?, can we do a max
          } else if (auto sortOp = llvm::dyn_cast<relalg::SortOp>(op)) {
@@ -820,16 +868,16 @@ class PythonCodeGen : public mlir::PassWrapper<PythonCodeGen, mlir::OperationPas
             //TODO(avinash): add logic for sorting tuple stream
             streamCodeMap[op] = streamCode;
          } else if (auto materializeOp = llvm::dyn_cast<relalg::MaterializeOp>(op)) {
-            mlir::Operation* streamOp = materializeOp.getRelMutable().get().getDefiningOp();
-            TupleStreamCode* streamCode = streamCodeMap[streamOp];
-
+            mlir::Operation* stream = materializeOp.getRelMutable().get().getDefiningOp();
+            TupleStreamCode* streamCode = streamCodeMap[stream];
             if (!streamCode) assert(false && "No downstream operation for materialize operation found operation found");
+
             //TODO(avinash): add logic for materialization which is just printing for now
 
             // get the size of the base table, which can be got from kernel args
             // create buffers of the same size, then add store them to the buffer
             std::string bufferSizeSymbol;
-            for (auto p: streamCode->stateArgs) {
+            for (auto p : streamCode->stateArgs) {
                if (p.second == "size_t") {
                   bufferSizeSymbol = p.first;
                }
@@ -841,12 +889,12 @@ class PythonCodeGen : public mlir::PassWrapper<PythonCodeGen, mlir::OperationPas
                std::string colTy = getBaseCudaType(detail.type);
 
                // create host objects
-               streamCode->appendControl("auto " + MAT(op) + mlirSymbol + " = " + 
-                  "("+ colTy +"*)malloc(sizeof("+ colTy +") * " + bufferSizeSymbol +");");
+               streamCode->appendControl("auto " + MAT(op) + mlirSymbol + " = " +
+                                         "(" + colTy + "*)malloc(sizeof(" + colTy + ") * " + bufferSizeSymbol + ");");
                streamCode->appendControl(colTy + "* d_" + MAT(op) + mlirSymbol + ";");
-               streamCode->appendControl("cudaMalloc(&d_" + MAT(op) + mlirSymbol +", sizeof("+ colTy +") * " + bufferSizeSymbol +");");
+               streamCode->appendControl("cudaMalloc(&d_" + MAT(op) + mlirSymbol + ", sizeof(" + colTy + ") * " + bufferSizeSymbol + ");");
                streamCode->resultSymbolMap[MAT(op) + mlirSymbol] = MAT(op) + mlirSymbol;
-               
+
                streamCode->kernelArgs[MAT(op) + mlirSymbol] = detail.type;
                // global store symbol
                auto id = LoadColumnIntoStream(streamCode, columnAttr, KernelType::Main);
@@ -859,12 +907,11 @@ class PythonCodeGen : public mlir::PassWrapper<PythonCodeGen, mlir::OperationPas
                std::string mlirSymbol = detail.getMlirSymbol();
                std::string colTy = getBaseCudaType(detail.type);
 
-               streamCode->appendControl("cudaMemcpy(" + MAT(op) + mlirSymbol + ", " + "d_" + MAT(op) + mlirSymbol + ", " + "sizeof("+ colTy +") * "
-                + bufferSizeSymbol + ", cudaMemcpyDeviceToHost);" );
+               streamCode->appendControl("cudaMemcpy(" + MAT(op) + mlirSymbol + ", " + "d_" + MAT(op) + mlirSymbol + ", " + "sizeof(" + colTy + ") * " + bufferSizeSymbol + ", cudaMemcpyDeviceToHost);");
             }
             // add a for loop to print the results
 
-            streamCode->appendControl("for (auto i=0ull; i< " + bufferSizeSymbol+"; i++) {");
+            streamCode->appendControl("for (auto i=0ull; i< " + bufferSizeSymbol + "; i++) {");
             for (auto col : materializeOp.getCols()) {
                auto columnAttr = mlir::cast<tuples::ColumnRefAttr>(col);
                auto detail = ColumnDetail(columnAttr);
@@ -922,7 +969,7 @@ class PythonCodeGen : public mlir::PassWrapper<PythonCodeGen, mlir::OperationPas
             leftStreamCode->appendControl("auto " + HT(op) + " = cuco::static_map{ " + BUF_IDX(op) + "* 2,cuco::empty_key{(int64_t)-1},cuco::empty_value{(int64_t)-1},thrust::equal_to<int64_t>{},cuco::linear_probing<1, cuco::default_hash_function<int64_t>>()};");
             leftStreamCode->appendControl("uint64_t *" + d_BUF(op) + ";");
             leftStreamCode->appendControl("cudaMalloc(&" + d_BUF(op) + ", sizeof(uint64_t) * " + std::to_string(leftStreamCode->baseRelation.size()) + " * " + BUF_IDX(op) + ");");
-            leftStreamCode->appendControl("cudaMemset(" + d_BUF(op) + ",0 , sizeof(int));");
+            leftStreamCode->appendControl("cudaMemset(" + d_BUF(op) + ",0 , sizeof(uint64_t) * " + std::to_string(leftStreamCode->baseRelation.size()) + " * " + BUF_IDX(op) + ");");
             leftStreamCode->appendControl(leftStreamCode->launchKernel(KernelType::Main));
 
             kernelSchedule.push_back(leftStreamCode);
@@ -942,9 +989,14 @@ class PythonCodeGen : public mlir::PassWrapper<PythonCodeGen, mlir::OperationPas
             rightStreamCode->stateArgs[BUF(op)] = "uint64_t*";
             rightStreamCode->stateArgs[HT(op)] = "HASHTABLE_FIND";
             rightStreamCode->appendCountKernel("auto " + SLOT(op) + " = " + HT(op) + ".find(" + cudaIdentifierRightKey + ");");
+            rightStreamCode->appendCountKernel("if (" + SLOT(op) + " == " + HT(op) + ".end()) return;");
             rightStreamCode->appendCountKernel("auto " + buf_idx(op) + " = " + SLOT(op) + "->second;");
             rightStreamCode->appendKernel("auto " + SLOT(op) + " = " + HT(op) + ".find(" + cudaIdentifierRightKey + ");");
+            rightStreamCode->appendKernel("if (" + SLOT(op) + " == " + HT(op) + ".end()) return;");
             rightStreamCode->appendKernel("auto " + buf_idx(op) + " = " + SLOT(op) + "->second;");
+            for (auto p : leftStreamCode->scanSymbolMap) {
+               rightStreamCode->scanSymbolMap[p.first] = p.second;
+            }
             i = 0;
             // emplace
             for (auto br : leftStreamCode->baseRelation) {
@@ -953,6 +1005,8 @@ class PythonCodeGen : public mlir::PassWrapper<PythonCodeGen, mlir::OperationPas
                rightStreamCode->ridMap[br] = BUF(op) + "[" + buf_idx(op) + "*" + std::to_string(leftStreamCode->baseRelation.size()) + " + " + std::to_string(i) + "]";
                i++;
             }
+
+            // for tuple load expression, look at the left's tuple load expression and add them to the
 
             // upstream operator would use the probe side of the hashjoin
             streamCodeMap[op] = rightStreamCode;
