@@ -40,6 +40,7 @@ std::string join(std::vector<std::string>& v, std::string separator) {
 // TODO(avinash, p1): Check if StringColumn defined as char* is sufficient for direct comparisons, especially with null terminated c style strings within cuda device memory.
 void printAllTpchSchema(std::ostream& stream) {
    stream << "#include <cuco/static_map.cuh>\n#include <thrust/copy.h>\n#include <thrust/device_vector.h>\n#include <thrust/host_vector.h>";
+   stream << "\n#include \"cudautils.cuh\"\n#include \"db_types.h\"\n#include \"dbruntime.h\"";
    stream << "\n";
 }
 // for all the cudaidentifier that create a state for example join, aggregation, use the operation address
@@ -66,6 +67,8 @@ static std::string getBaseCudaType(mlir::Type ty) {
       return "DBDateType";
    else if (mlir::isa<db::CharType>(ty))
       return "DBCharType";
+   else if (mlir::isa<db::NullableType>(ty))
+      return getBaseCudaType(mlir::dyn_cast_or_null<db::NullableType>(ty).getType());
    ty.dump();
    assert(false && "unhandled type");
    return "";
@@ -238,6 +241,11 @@ struct ColumnDetail {
       type = colAttr.getColumn().type;
    }
 
+   ColumnDetail(const tuples::ColumnDefAttr& colAttr) {
+      relation = getTableName<tuples::ColumnDefAttr>(colAttr);
+      name = getColumnName<tuples::ColumnDefAttr>(colAttr);
+      type = colAttr.getColumn().type;
+   }
    std::string getMlirSymbol() {
       return relation + "__" + name;
    }
@@ -344,10 +352,94 @@ std::string translateConstantOp(mlir::Operation* operand) {
          return std::to_string(integerAttr.getInt());
       } else if (mlir::isa<db::CharType>(ty)) {
          // TODO(avinash): handle char types
+         auto strAttr = mlir::dyn_cast_or_null<mlir::StringAttr>(constantOp.getValue());
+         assert(strAttr != 0x0 && "Expected character constant attribute to be strattr");
+
+         return ("\"" + strAttr.str() + "\"");
       }
    }
    operand->dump();
    assert(false && "Unable to translate the operand");
+   return "";
+}
+
+std::string getExpression(mlir::Operation* op, TupleStreamCode* streamCode) {
+   if (auto getColOp = mlir::dyn_cast_or_null<tuples::GetColumnOp>(op)) {
+      LoadColumnIntoStream(streamCode, getColOp.getAttr(), KernelType::Count); // selection always needs to be done in count code as well
+      return LoadColumnIntoStream(streamCode, getColOp.getAttr(), KernelType::Main);
+   } else {
+      return translateConstantOp(op);
+   }
+}
+
+std::string selectionOpDfs(mlir::Operation* op, TupleStreamCode* streamCode) {
+   if (auto compareOp = mlir::dyn_cast_or_null<db::CmpOp>(op)) {
+      auto left = compareOp.getLeft();
+      std::string leftOperand = getExpression(left.getDefiningOp(), streamCode);
+
+      auto right = compareOp.getRight();
+      std::string rightOperand = getExpression(right.getDefiningOp(), streamCode);
+
+      auto cmp = compareOp.getPredicate();
+      switch (cmp) {
+         case db::DBCmpPredicate::eq:
+         /* code */
+         {
+            return "evaluatePredicate(" + leftOperand + ", " + rightOperand + ", Predicate::eq)";
+         }
+         break;
+         case db::DBCmpPredicate::neq: {
+            return "evaluatePredicate(" + leftOperand + ", " + rightOperand + ", Predicate::neq)";
+         } break;
+         case db::DBCmpPredicate::lt: {
+            return "evaluatePredicate(" + leftOperand + ", " + rightOperand + ", Predicate::lt)";
+         } break;
+         case db::DBCmpPredicate::gt: {
+            return "evaluatePredicate(" + leftOperand + ", " + rightOperand + ", Predicate::gt)";
+         } break;
+         case db::DBCmpPredicate::lte: {
+            return "evaluatePredicate(" + leftOperand + ", " + rightOperand + ", Predicate::lte)";
+         } break;
+         case db::DBCmpPredicate::gte: {
+            return "evaluatePredicate(" + leftOperand + ", " + rightOperand + ", Predicate::gte)";
+         } break;
+         case db::DBCmpPredicate::isa: {
+            assert(false && "should not happen");
+         }
+         default:
+            break;
+      }
+   } else if (auto compareOp = mlir::dyn_cast_or_null<db::RuntimeCall>(op)) { // or a like operation
+      // TODO(avinash, p1): handle runtime predicate like operator
+      assert(false && "TODO: handle runtime predicates\n");
+   } else if (auto betweenOp = mlir::dyn_cast_or_null<db::BetweenOp>(op)) {
+      std::string operand = getExpression(betweenOp.getVal().getDefiningOp(), streamCode);
+      std::string lower = getExpression(betweenOp.getLower().getDefiningOp(), streamCode);
+      std::string upper = getExpression(betweenOp.getUpper().getDefiningOp(), streamCode);
+
+      std::string lpred = betweenOp.getLowerInclusive() ? "Predicate::gte" : "Predicate::gt";
+      std::string rpred = betweenOp.getUpperInclusive() ? "Predicate::lte" : "Predicate::lt";
+      return "evaluatePredicate(" + operand + ", " + lower + ", " + lpred + ") && evaluatePredicate("
+         + operand + ", " + upper + ", " + rpred + ")";
+   } else if (auto andOp = mlir::dyn_cast_or_null<db::AndOp>(op)) {
+      for (auto v: andOp.getVals()) {
+         v.dump();
+      }
+      // return "true";
+   } else if (auto orOp = mlir::dyn_cast_or_null<db::OrOp>(op)) {
+      std::string res = "(";
+      std::string sep = "";
+      for (auto v: orOp.getVals()) {
+         res += sep + selectionOpDfs(v.getDefiningOp(), streamCode);
+         sep = " || (";
+         res += ")";
+      }
+      std::clog << "Predicate: " << res << std::endl; 
+      return res;
+      // return "true";
+   }
+   op->dump();
+   assert (false && "Selection predicate not handled");
    return "";
 }
 
@@ -357,64 +449,14 @@ static std::string translateSelection(mlir::Region& predicate, TupleStreamCode* 
       auto& predicateBlock = predicate.front();
       if (auto returnOp = mlir::dyn_cast_or_null<tuples::ReturnOp>(predicateBlock.getTerminator())) {
          mlir::Value matched = returnOp.getResults()[0];
-         std::vector<std::pair<int, mlir::Value>> conditions;
          // hoping that we always have a compare in selection
-         if (auto compareOp = mlir::dyn_cast_or_null<db::CmpOp>(matched.getDefiningOp())) {
-            auto left = compareOp.getLeft();
-            std::string leftOperand;
-            if (auto getColOp = mlir::dyn_cast_or_null<tuples::GetColumnOp>(left.getDefiningOp())) {
-               LoadColumnIntoStream(streamCode, getColOp.getAttr(), KernelType::Count); // selection always needs to be done in count code as well
-               leftOperand = LoadColumnIntoStream(streamCode, getColOp.getAttr(), KernelType::Main);
-            } else {
-               leftOperand = translateConstantOp(left.getDefiningOp());
-            }
-
-            auto right = compareOp.getRight();
-            std::string rightOperand;
-            if (auto getColOp = mlir::dyn_cast_or_null<tuples::GetColumnOp>(right.getDefiningOp())) {
-               LoadColumnIntoStream(streamCode, getColOp.getAttr(), KernelType::Count); // selection always needs to be done in count code as well
-               rightOperand = LoadColumnIntoStream(streamCode, getColOp.getAttr(), KernelType::Main);
-            } else {
-               rightOperand = translateConstantOp(right.getDefiningOp());
-            }
-
-            auto cmp = compareOp.getPredicate();
-            switch (cmp) {
-               case db::DBCmpPredicate::eq:
-                  /* code */
-                  {
-                     return "evaluatePredicate(" + leftOperand + ", " + rightOperand + ", Predicate::eq)";
-                  }
-                  break;
-               case db::DBCmpPredicate::neq: {
-                  return "evaluatePredicate(" + leftOperand + ", " + rightOperand + ", Predicate::neq)";
-               } break;
-               case db::DBCmpPredicate::lt: {
-                  return "evaluatePredicate(" + leftOperand + ", " + rightOperand + ", Predicate::lt)";
-               } break;
-               case db::DBCmpPredicate::gt: {
-                  return "evaluatePredicate(" + leftOperand + ", " + rightOperand + ", Predicate::gt)";
-               } break;
-               case db::DBCmpPredicate::lte: {
-                  return "evaluatePredicate(" + leftOperand + ", " + rightOperand + ", Predicate::lte)";
-               } break;
-               case db::DBCmpPredicate::gte: {
-                  return "evaluatePredicate(" + leftOperand + ", " + rightOperand + ", Predicate::gte)";
-               } break;
-               case db::DBCmpPredicate::isa: {
-                  assert(false && "should not happen");
-               }
-               default:
-                  break;
-            }
-         } else if (auto compareOp = mlir::dyn_cast_or_null<db::RuntimeCall>(matched.getDefiningOp())) { // or a like operation
-            // TODO(avinash, p1): handle runtime predicate like operator
-            assert(false && "TODO: handle runtime predicates\n");
-         }
+         return selectionOpDfs(matched.getDefiningOp(), streamCode);
       } else {
          assert(false && "invalid");
       }
    }
+   predicate.front().dump();
+   assert(false && "Predicate is not implemented");
    return "";
 }
 
@@ -459,6 +501,7 @@ static std::string MakeKeysInStream(mlir::Operation* op, TupleStreamCode* stream
       tuples::ColumnRefAttr key = mlir::cast<tuples::ColumnRefAttr>(keys[i]);
       auto baseType = getBaseCudaType(key.getColumn().type);
       if (allowedKeysToSize.find(baseType) == allowedKeysToSize.end()) {
+         keys.dump();
          assert(false && "Type is not hashable");
       }
       std::string cudaIdentifierKey = LoadColumnIntoStream(stream, key, kernelType);
@@ -525,6 +568,15 @@ void mapOpDfs(mlir::Operation* op, TupleStreamCode* streamCode, std::ostream& ex
    } else if (auto castOp = mlir::dyn_cast_or_null<db::CastOp>(op)) {
       expr << "(castOp)(";
       mapOpDfs(castOp.getVal().getDefiningOp(), streamCode, expr);
+      expr << ")";
+      return;
+   } else if (auto runtimeOp = mlir::dyn_cast_or_null<db::RuntimeCall>(op)) {
+      std::string function = runtimeOp.getFn().str();
+      expr << function << "("; std::string sep = "";
+      for (auto v: runtimeOp.getArgs()) {
+         expr << sep; mapOpDfs(v.getDefiningOp(), streamCode, expr);
+         sep = ", ";
+      }
       expr << ")";
       return;
    }
@@ -861,9 +913,45 @@ class PythonCodeGen : public mlir::PassWrapper<PythonCodeGen, mlir::OperationPas
             // add thrust code to sort based on key and value, no kernel operations here
             // this is neither a pipeline starter or an ender, when to sort?, can we do a max
          } else if (auto sortOp = llvm::dyn_cast<relalg::SortOp>(op)) {
-            mlir::Operation* streamOp = sortOp.getRelMutable().get().getDefiningOp();
-            TupleStreamCode* streamCode = streamCodeMap[streamOp];
+            mlir::Operation* stream = sortOp.getRelMutable().get().getDefiningOp();
+            TupleStreamCode* streamCode = streamCodeMap[stream];
             if (!streamCode) assert(false && "No downstream operation for sort operation found");
+            if (auto parentAgg = mlir::dyn_cast_or_null<relalg::AggregationOp>(stream)) {
+               // start a new scan here
+               TupleStreamCode* newStreamCode = new TupleStreamCode();
+               std::string tableIdentifier = MAT(stream);
+
+               newStreamCode->stateCountArgs[tableIdentifier + "_size"] = "size_t";
+               newStreamCode->stateArgs[tableIdentifier + "_size"] = "size_t";
+
+               newStreamCode->baseRelation.push_back(tableIdentifier);
+               newStreamCode->ridMap[tableIdentifier] = "tid";
+
+               newStreamCode->appendKernel("size_t tid = blockIdx.x * blockDim.x + threadIdx.x;");
+               newStreamCode->appendKernel("if (tid >= " + tableIdentifier + "_size) return;");
+
+               newStreamCode->appendCountKernel("size_t tid = blockIdx.x * blockDim.x + threadIdx.x;");
+               newStreamCode->appendCountKernel("if (tid >= " + tableIdentifier + "_size) return;");
+
+               // get the keys for the group by, and map it differently
+               mlir::ArrayAttr parentGBKeys = parentAgg.getGroupByCols();
+               for (auto& key : parentGBKeys) {
+                  std::string colName = getColumnName<tuples::ColumnRefAttr>(mlir::cast<tuples::ColumnRefAttr>(key));
+                  std::string tableName = getTableName<tuples::ColumnRefAttr>(mlir::cast<tuples::ColumnRefAttr>(key));
+                  std::string mlirSymbol = tableName + "__" + colName;
+                  newStreamCode->scanSymbolMap[mlirSymbol] = KEY(stream) + mlirSymbol;
+                  newStreamCode->tupleLoadExpression[mlirSymbol] = mlirSymbol + "[tid]";
+               }
+
+               for (auto p : streamCode->resultSymbolMap) {
+                  newStreamCode->scanSymbolMap[p.first] = p.second;
+                  newStreamCode->tupleLoadExpression[p.first] = p.first + "[tid]";
+               }
+
+               streamCode = newStreamCode;
+
+               // get the columns from the previous tuple stream code that were materialized.
+            }
 
             //TODO(avinash): add logic for sorting tuple stream
             streamCodeMap[op] = streamCode;
@@ -871,7 +959,42 @@ class PythonCodeGen : public mlir::PassWrapper<PythonCodeGen, mlir::OperationPas
             mlir::Operation* stream = materializeOp.getRelMutable().get().getDefiningOp();
             TupleStreamCode* streamCode = streamCodeMap[stream];
             if (!streamCode) assert(false && "No downstream operation for materialize operation found operation found");
+            if (auto parentAgg = mlir::dyn_cast_or_null<relalg::AggregationOp>(stream)) {
+               // start a new scan here
+               TupleStreamCode* newStreamCode = new TupleStreamCode();
+               std::string tableIdentifier = MAT(stream);
 
+               newStreamCode->stateCountArgs[tableIdentifier + "_size"] = "size_t";
+               newStreamCode->stateArgs[tableIdentifier + "_size"] = "size_t";
+
+               newStreamCode->baseRelation.push_back(tableIdentifier);
+               newStreamCode->ridMap[tableIdentifier] = "tid";
+
+               newStreamCode->appendKernel("size_t tid = blockIdx.x * blockDim.x + threadIdx.x;");
+               newStreamCode->appendKernel("if (tid >= " + tableIdentifier + "_size) return;");
+
+               newStreamCode->appendCountKernel("size_t tid = blockIdx.x * blockDim.x + threadIdx.x;");
+               newStreamCode->appendCountKernel("if (tid >= " + tableIdentifier + "_size) return;");
+
+               // get the keys for the group by, and map it differently
+               mlir::ArrayAttr parentGBKeys = parentAgg.getGroupByCols();
+               for (auto& key : parentGBKeys) {
+                  std::string colName = getColumnName<tuples::ColumnRefAttr>(mlir::cast<tuples::ColumnRefAttr>(key));
+                  std::string tableName = getTableName<tuples::ColumnRefAttr>(mlir::cast<tuples::ColumnRefAttr>(key));
+                  std::string mlirSymbol = tableName + "__" + colName;
+                  newStreamCode->scanSymbolMap[mlirSymbol] = KEY(stream) + mlirSymbol;
+                  newStreamCode->tupleLoadExpression[mlirSymbol] = mlirSymbol + "[tid]";
+               }
+
+               for (auto p : streamCode->resultSymbolMap) {
+                  newStreamCode->scanSymbolMap[p.first] = p.second;
+                  newStreamCode->tupleLoadExpression[p.first] = p.first + "[tid]";
+               }
+
+               streamCode = newStreamCode;
+
+               // get the columns from the previous tuple stream code that were materialized.
+            }
             //TODO(avinash): add logic for materialization which is just printing for now
 
             // get the size of the base table, which can be got from kernel args
@@ -1010,6 +1133,21 @@ class PythonCodeGen : public mlir::PassWrapper<PythonCodeGen, mlir::OperationPas
 
             // upstream operator would use the probe side of the hashjoin
             streamCodeMap[op] = rightStreamCode;
+         } else if (auto renamingOp = llvm::dyn_cast<relalg::RenamingOp>(op)) {
+            mlir::Operation* stream = renamingOp.getRelMutable().get().getDefiningOp();
+            TupleStreamCode* streamCode = streamCodeMap[stream];
+            if (!streamCode) assert(false && "No downstream operation for renaming operation found operation found");
+
+            for (mlir::Attribute attr: renamingOp.getColumns()) {
+               auto relationDefAttr = mlir::dyn_cast_or_null<tuples::ColumnDefAttr>(attr);
+               mlir::Attribute from = mlir::dyn_cast_or_null<mlir::ArrayAttr>(relationDefAttr.getFromExisting())[0];
+               auto relationRefAttr = mlir::dyn_cast_or_null<tuples::ColumnRefAttr>(from);
+               ColumnDetail detailRef(relationRefAttr), detailDef(relationDefAttr);
+               streamCode->tupleLoadExpression[detailDef.getMlirSymbol()] = 
+                  streamCode->tupleLoadExpression[detailRef.getMlirSymbol()];
+            }
+
+            streamCodeMap[op] = streamCode;
          }
       });
 
@@ -1022,7 +1160,7 @@ class PythonCodeGen : public mlir::PassWrapper<PythonCodeGen, mlir::OperationPas
       }
 
       // TODO(avinash, p1/now): add arguments to the control function for have the same api.
-      outputFile << "void control() {\n";
+      outputFile << "extern \"C\" void control( DBI32Type* d_nation__n_nationkey, DBStringType* d_nation__n_name, DBI32Type* d_nation__n_regionkey, DBStringType* d_nation__n_comment, size_t nation_size, DBI32Type* d_supplier__s_suppkey, DBI32Type* d_supplier__s_nationkey, DBStringType* d_supplier__s_name, DBStringType* d_supplier__s_address, DBStringType* d_supplier__s_phone, DBDecimalType* d_supplier__s_acctbal, DBStringType* d_supplier__s_comment, size_t supplier_size, DBI32Type* d_partsupp__ps_suppkey, DBI32Type* d_partsupp__ps_partkey, DBI32Type* d_partsupp__ps_availqty, DBDecimalType* d_partsupp__ps_supplycost, DBStringType* d_partsupp__ps_comment, size_t partsupp_size, DBI32Type* d_part__p_partkey, DBStringType* d_part__p_name, DBStringType* d_part__p_mfgr, DBStringType* d_part__p_brand, DBStringType* d_part__p_type, DBI32Type* d_part__p_size, DBStringType* d_part__p_container, DBDecimalType* d_part__p_retailprice, DBStringType* d_part__p_comment, size_t part_size, DBI32Type* d_lineitem__l_orderkey, DBI32Type* d_lineitem__l_partkey, DBI32Type* d_lineitem__l_suppkey, DBI64Type* d_lineitem__l_linenumber, DBDecimalType* d_lineitem__l_quantity, DBDecimalType* d_lineitem__l_extendedprice, DBDecimalType* d_lineitem__l_discount, DBDecimalType* d_lineitem__l_tax, DBCharType* d_lineitem__l_returnflag, DBCharType* d_lineitem__l_linestatus, DBI32Type* d_lineitem__l_shipdate, DBI32Type* d_lineitem__l_commitdate, DBI32Type* d_lineitem__l_receiptdate, DBStringType* d_lineitem__l_shipinstruct, DBStringType* d_lineitem__l_shipmode, DBStringType* d_lineitem__comments, size_t lineitem_size, DBI32Type* d_orders__o_orderkey, DBCharType* d_orders__o_orderstatus, DBI32Type* d_orders__o_custkey, DBDecimalType* d_orders__o_totalprice, DBI32Type* d_orders__o_orderdate, DBStringType* d_orders__o_orderpriority, DBStringType* d_orders__o_clerk, DBI32Type* d_orders__o_shippriority, DBStringType* d_orders__o_comment, size_t orders_size, DBI32Type* d_customer__c_custkey, DBStringType* d_customer__c_name, DBStringType* d_customer__c_address, DBI32Type* d_customer__c_nationkey, DBStringType* d_customer__c_phone, DBDecimalType* d_customer__c_acctbal, DBStringType* d_customer__c_mktsegment, DBStringType* d_customer__c_comment, size_t customer_size, DBI32Type* d_region__r_regionkey, DBStringType* d_region__r_name, DBStringType* d_region__r_comment, size_t region_size) {\n";
       for (auto code : kernelSchedule) {
          code->printControl(KernelType::Count, outputFile);
          code->printControl(KernelType::Main, outputFile);
