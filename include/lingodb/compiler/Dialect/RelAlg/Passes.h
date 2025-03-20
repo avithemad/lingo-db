@@ -31,7 +31,7 @@ std::unique_ptr<mlir::Pass> createSimplifyAggregationsPass();
 std::unique_ptr<mlir::Pass> createAttachMetaDataPass(runtime::Catalog& db);
 std::unique_ptr<mlir::Pass> createDetachMetaDataPass();
 
-std::unique_ptr<mlir::Pass> createPythonCodeGenPass();
+std::unique_ptr<mlir::Pass> createCudaCodeGenPass();
 
 std::unique_ptr<mlir::Pass> createTrackTuplesPass();
 
