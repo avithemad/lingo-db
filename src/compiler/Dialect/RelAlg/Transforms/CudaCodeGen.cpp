@@ -32,6 +32,34 @@ enum class ColumnType {
    Direct,
    Mapped
 };
+std::string ToHex(void* op) {
+   std::stringstream sstream;
+   sstream << std::hex << (unsigned long long) (void*) op;
+   std::string result = sstream.str();
+   return result;
+}
+
+static std::string HT(void* op) {
+   return "HT_" + ToHex(op);
+}
+static std::string KEY(void* op) {
+   return "KEY_" + ToHex(op);
+}
+static std::string SLOT(void* op) {
+   return "SLOT_" + ToHex(op);
+}
+static std::string BUF(void* op) {
+   return "BUF_" + ToHex(op);
+}
+static std::string BUF_IDX(void* op) {
+   return "BUF_IDX_" + ToHex(op);
+}
+static std::string buf_idx(void* op) {
+   return "buf_idx_" + ToHex(op);
+}
+static std::string COUNT(void* op) {
+   return "COUNT" + ToHex(op);
+}
 
 template <typename ColumnAttrTy>
 std::string getColumnName(const ColumnAttrTy& colAttr) {
@@ -46,12 +74,13 @@ template <typename ColumnAttrTy>
 static std::string getTableName(const ColumnAttrTy& colAttr) {
    return colAttr.getName().getRootReference().str();
 }
-
 struct ColumnMetadata {
-   int joinOrder;
    std::string loadExpression;
    ColumnType type;
-   std::vector<tuples::ColumnRefAttr> dependencies;
+   std::string rid; // valid if type is mapped
+   std::vector<tuples::ColumnRefAttr> dependencies; // valid if type is Mapped
+   int streamId;
+   ColumnMetadata(const std::string& le, ColumnType ty, int streamId) : loadExpression(le), type(ty), streamId(streamId) {}
 };
 struct ColumnDetail {
    std::string column;
@@ -156,15 +185,16 @@ class TupleStreamCode {
    std::vector<std::string> mainCode;
    std::vector<std::string> countCode;
    std::vector<std::string> controlCode;
+   std::vector<TupleStreamCode*> joinedStreams;
 
-   std::map<std::string, ColumnMetadata> columnData;
+   std::map<std::string, ColumnMetadata*> columnData;
    std::set<std::string> loadedColumns;
 
    std::map<std::string, std::string> mlirToGlobalSymbol; // used when launching the kernel.
 
    std::map<std::string, std::string> mainArgs;
    std::map<std::string, std::string> countArgs;
-
+   int id;
    void appendKernel(std::string stmt, KernelType ty) {
       if (ty == KernelType::Main)
          mainCode.push_back(stmt);
@@ -172,8 +202,61 @@ class TupleStreamCode {
          countCode.push_back(stmt);
    }
 
+   void appendControl(std::string stmt) {
+      controlCode.push_back(stmt);
+   }
+
+   std::string launchKernel(KernelType ty) {
+      std::string _kernelName;
+      std::map<std::string, std::string> _args;
+      if (ty == KernelType::Main) {
+         _kernelName = "main";
+         _args = mainArgs;
+      } else {
+         _kernelName = "count";
+         _args = countArgs;
+      }
+      std::string size = "";
+      for (auto p : _args)
+         if (p.second == "size_t") size = p.first;
+      if (size == "") assert(false && "No size argument for this kernel");
+      std::string args = "", sep = "";
+      for (auto p : _args) {
+         args += fmt::format("{1}d_{0}", p.first, sep);
+         sep = ", ";
+      }
+      return fmt::format("{0}_{1}<<<std::ceil((float){2}/32.), 32>>>({3})", _kernelName, ToHex((void*) this), size, args);
+   }
+
    public:
-   TupleStreamCode() {}
+   TupleStreamCode(relalg::BaseTableOp baseTableOp) {
+      static int StreamId = 0;
+      std::string tableName = baseTableOp.getTableIdentifier().data();
+      std::string tableSize = tableName + "_size";
+      mainArgs[tableSize] = "size_t";
+      countArgs[tableSize] = "size_t"; // make sure this type is reserved for kernel size only
+
+      appendKernel("size_t tid = blockIdx.x * blockDim.x + threadIdx.x;", KernelType::Main);
+      appendKernel(fmt::format("if (tid >= {}) return;", tableSize), KernelType::Main);
+      appendKernel("size_t tid = blockIdx.x * blockDim.x + threadIdx.x;", KernelType::Count);
+      appendKernel(fmt::format("if (tid >= {}) return;", tableSize), KernelType::Count);
+      for (auto namedAttr : baseTableOp.getColumns().getValue()) {
+         auto columnName = namedAttr.getName().str();
+         ColumnDetail detail(mlir::cast<tuples::ColumnDefAttr>(namedAttr.getValue()));
+         auto globalSymbol = fmt::format("{0}__{1}", tableName, columnName);
+         auto mlirSymbol = detail.getMlirSymbol();
+         mlirToGlobalSymbol[mlirSymbol] = globalSymbol;
+         ColumnMetadata* metadata = new ColumnMetadata(fmt::format("{0}", mlirSymbol), ColumnType::Direct, StreamId);
+         metadata->rid = "tid";
+         columnData[mlirSymbol] = metadata;
+      }
+      id = StreamId;
+      StreamId++;
+      return;
+   }
+   ~TupleStreamCode() {
+      for (auto p : columnData) delete p.second;
+   }
    std::string LoadColumn(const tuples::ColumnRefAttr& attr, KernelType ty) {
       ColumnDetail detail(attr);
       auto mlirSymbol = detail.getMlirSymbol();
@@ -185,12 +268,12 @@ class TupleStreamCode {
       if (loadedColumns.find(mlirSymbol) == loadedColumns.end()) {
          loadedColumns.insert(mlirSymbol);
          auto colData = columnData[mlirSymbol];
-         if (colData.type == ColumnType::Mapped) {
-            for (auto dep : colData.dependencies) {
+         if (colData->type == ColumnType::Mapped) {
+            for (auto dep : colData->dependencies) {
                LoadColumn(dep, ty);
             }
          }
-         appendKernel(fmt::format("auto {1} = {0};", colData.loadExpression, cudaId), ty);
+         appendKernel(fmt::format("auto {1} = {0};", colData->loadExpression + (colData->type == ColumnType::Direct ? "[" + colData->rid + "]" : ""), cudaId), ty);
       }
       if (ty == KernelType::Main) {
          mainArgs[mlirSymbol] = mlirTypeToCudaType(detail.type) + "*"; // columns are always a 1d array
@@ -199,7 +282,7 @@ class TupleStreamCode {
       }
       return cudaId;
    }
-   std::string selectionOpDfs(mlir::Operation* op) {
+   std::string SelectionOpDfs(mlir::Operation* op) {
       if (auto getColOp = mlir::dyn_cast_or_null<tuples::GetColumnOp>(op)) {
          LoadColumn(getColOp.getAttr(), KernelType::Count);
          return LoadColumn(getColOp.getAttr(), KernelType::Main);
@@ -207,10 +290,10 @@ class TupleStreamCode {
          return translateConstantOp(constOp);
       } else if (auto compareOp = mlir::dyn_cast_or_null<db::CmpOp>(op)) {
          auto left = compareOp.getLeft();
-         std::string leftOperand = selectionOpDfs(left.getDefiningOp());
+         std::string leftOperand = SelectionOpDfs(left.getDefiningOp());
 
          auto right = compareOp.getRight();
-         std::string rightOperand = selectionOpDfs(right.getDefiningOp());
+         std::string rightOperand = SelectionOpDfs(right.getDefiningOp());
 
          auto cmp = compareOp.getPredicate();
          std::string predicate = "";
@@ -242,9 +325,9 @@ class TupleStreamCode {
          // TODO(avinash, p1): handle runtime predicate like operator
          assert(false && "TODO: handle runtime predicates\n");
       } else if (auto betweenOp = mlir::dyn_cast_or_null<db::BetweenOp>(op)) {
-         std::string operand = selectionOpDfs(betweenOp.getVal().getDefiningOp());
-         std::string lower = selectionOpDfs(betweenOp.getLower().getDefiningOp());
-         std::string upper = selectionOpDfs(betweenOp.getUpper().getDefiningOp());
+         std::string operand = SelectionOpDfs(betweenOp.getVal().getDefiningOp());
+         std::string lower = SelectionOpDfs(betweenOp.getLower().getDefiningOp());
+         std::string upper = SelectionOpDfs(betweenOp.getUpper().getDefiningOp());
 
          std::string lpred = betweenOp.getLowerInclusive() ? "Predicate::gte" : "Predicate::gt";
          std::string rpred = betweenOp.getUpperInclusive() ? "Predicate::lte" : "Predicate::lt";
@@ -254,7 +337,7 @@ class TupleStreamCode {
          std::string res = "(";
          std::string sep = "";
          for (auto v : andOp.getVals()) {
-            res += sep + selectionOpDfs(v.getDefiningOp());
+            res += sep + SelectionOpDfs(v.getDefiningOp());
             sep = " && (";
             res += ")";
          }
@@ -264,7 +347,7 @@ class TupleStreamCode {
          std::string res = "(";
          std::string sep = "";
          for (auto v : orOp.getVals()) {
-            res += sep + selectionOpDfs(v.getDefiningOp());
+            res += sep + SelectionOpDfs(v.getDefiningOp());
             sep = " || (";
             res += ")";
          }
@@ -274,13 +357,13 @@ class TupleStreamCode {
       assert(false && "Selection predicate not handled");
       return "";
    }
-   void addSelectionPredicate(mlir::Region& predicate) {
+   void AddSelectionPredicate(mlir::Region& predicate) {
       auto terminator = mlir::cast<tuples::ReturnOp>(predicate.front().getTerminator());
       if (!terminator.getResults().empty()) {
          auto& predicateBlock = predicate.front();
          if (auto returnOp = mlir::dyn_cast_or_null<tuples::ReturnOp>(predicateBlock.getTerminator())) {
             mlir::Value matched = returnOp.getResults()[0];
-            std::string condition = selectionOpDfs(matched.getDefiningOp());
+            std::string condition = SelectionOpDfs(matched.getDefiningOp());
             appendKernel(fmt::format("if (!({0})) return;", condition), KernelType::Count);
             appendKernel(fmt::format("if (!({0})) return;", condition), KernelType::Main);
             return;
@@ -291,6 +374,123 @@ class TupleStreamCode {
       predicate.front().dump();
       assert(false && "Predicate is not implemented");
       return;
+   }
+   void MaterializeCount(mlir::Operation* op) {
+      countArgs[COUNT(op)] = "uint64_t*";
+      appendKernel(fmt::format("atomicAdd({0}, 1);", COUNT(op)), KernelType::Count);
+
+      appendControl(fmt::format("uint64_t* d_{0};", COUNT(op)));
+      appendControl(fmt::format("cudaMalloc(&d_{0}, sizeof(uint64_t));", COUNT(op)));
+      appendControl(fmt::format("cudaMemset(d_{0}, 0, sizeof(uint64_t));", COUNT(op)));
+      appendControl(launchKernel(KernelType::Count));
+      appendControl(fmt::format("uint64_t {0};", COUNT(op)));
+      appendControl(fmt::format("cudaMemcpy(&{0}, d_{0}, sizeof(uint64_t), cudaMemcpyDeviceToHost)", COUNT(op)));
+      appendControl(fmt::format("cudaFree(d_{0});", COUNT(op)));
+   }
+   std::string MakeKeys(mlir::Operation* op, const mlir::ArrayAttr& keys, KernelType kernelType) {
+      //TODO(avinash, p3): figure a way out for double keys
+      appendKernel(fmt::format("uint64_t {0} = 0;", KEY(op)), kernelType);
+      std::map<std::string, int> allowedKeysToSize;
+      allowedKeysToSize["DBCharType"] = 1;
+      allowedKeysToSize["DBI32Type"] = 4;
+      allowedKeysToSize["DBDateType"] = 4;
+      allowedKeysToSize["DBI64Type"] = 8;
+      int totalKeySize = 0;
+      for (auto i = 0ull; i < keys.size(); i++) {
+         tuples::ColumnRefAttr key = mlir::cast<tuples::ColumnRefAttr>(keys[i]);
+         auto baseType = mlirTypeToCudaType(key.getColumn().type);
+         if (allowedKeysToSize.find(baseType) == allowedKeysToSize.end()) {
+            keys.dump();
+            assert(false && "Type is not hashable");
+         }
+         std::string cudaIdentifierKey = LoadColumn(key, kernelType);
+         appendKernel(fmt::format("{0} <<= {1};\n", KEY(op), std::to_string(allowedKeysToSize[baseType] * 8)), kernelType);
+         appendKernel(fmt::format("{0} |= {1};\n", KEY(op), cudaIdentifierKey), kernelType);
+         totalKeySize += allowedKeysToSize[baseType];
+         if (totalKeySize > 8) {
+            assert(false && "Total hash key exceeded 8 bytes");
+         }
+      }
+      return KEY(op);
+   }
+
+   std::vector<std::pair<int, std::string>> getBaseRelations(const std::map<std::string, ColumnMetadata*>& columnData) {
+      std::set<std::pair<int, std::string>> temp;
+      for (auto p : columnData) {
+         auto metadata = p.second;
+         if (metadata->type == ColumnType::Direct)
+            temp.insert(std::make_pair(metadata->streamId, metadata->rid));
+      }
+      std::vector<std::pair<int, std::string>> baseRelations(temp.begin(), temp.end());
+      std::sort(baseRelations.begin(), baseRelations.end());
+      return baseRelations;
+   }
+   std::map<std::string, ColumnMetadata*> InsertHashTable(mlir::Operation* op) {
+      auto joinOp = mlir::dyn_cast_or_null<relalg::InnerJoinOp>(op);
+      if (!joinOp) assert(false && "Insert hash table accepts only inner join operation.");
+      auto keys = joinOp->getAttrOfType<mlir::ArrayAttr>("leftHash");
+      auto key = MakeKeys(op, keys, KernelType::Main);
+      appendKernel(fmt::format("auto {0} = atomicAdd({1}, 1);", buf_idx(op), BUF_IDX(op)), KernelType::Main);
+      appendKernel(fmt::format("{0}.insert(cuco::pair{{{1}, {2}}});", HT(op), key, buf_idx(op)), KernelType::Main);
+      auto baseRelations = getBaseRelations(columnData);
+      int i = 0;
+      for (auto br : baseRelations) {
+         appendKernel(fmt::format("{0}[{1} * {2} + {3}] = {4};",
+                                  BUF(op),
+                                  buf_idx(op),
+                                  std::to_string(baseRelations.size()),
+                                  i++,
+                                  br.second),
+                      KernelType::Main);
+      }
+
+      mainArgs[BUF_IDX(op)] = "uint64_t*";
+      mainArgs[HT(op)] = "HASHTABLE_INSERT";
+      mainArgs[BUF(op)] = "uint64_t*";
+      appendControl(fmt::format("uint64_t* d_{0};", BUF_IDX(op)));
+      appendControl(fmt::format("cudaMalloc(&d_{0}, sizeof(uint64_t));", BUF_IDX(op)));
+      appendControl(fmt::format("cudaMemset(d_{0}, 0, sizeof(uint64_t));", BUF_IDX(op)));
+      appendControl(fmt::format("uint64_t* d_{0}", BUF(op)));
+      appendControl(fmt::format("cudaMalloc(&d_{0}, sizeof(uint64_t) * {1} * {2});", BUF(op), COUNT(op), baseRelations.size()));
+      appendControl(fmt::format("auto d_{0} = cuco::static_map{{ {1}*2, cuco::empty_key{{(int64_t)-1}},cuco::empty_value{{(int64_t)-1}},thrust::equal_to<int64_t>{{}},cuco::linear_probing<1, cuco::default_hash_function<int64_t>>() }};",
+                                HT(op), COUNT(op)));
+      appendControl(launchKernel(KernelType::Main));
+      appendControl(fmt::format("cudaFree(d_{0});", BUF_IDX(op)));
+      return columnData;
+   }
+   void ProbeHashTable(mlir::Operation* op, const std::map<std::string, ColumnMetadata*>& leftColumnData) {
+      auto joinOp = mlir::dyn_cast_or_null<relalg::InnerJoinOp>(op);
+      if (!joinOp) assert(false && "Probe hash table accepts only inner join operation.");
+      auto keys = joinOp->getAttrOfType<mlir::ArrayAttr>("rightHash");
+      MakeKeys(op, keys, KernelType::Count);
+      auto key = MakeKeys(op, keys, KernelType::Main);
+      appendKernel(fmt::format("auto {0} = {1}.find({2});", SLOT(op), HT(op), key), KernelType::Main);
+      appendKernel(fmt::format("auto {0} = {1}.find({2});", SLOT(op), HT(op), key), KernelType::Count);
+      appendKernel(fmt::format("if ({0} == {1}.end()) return;", SLOT(op), HT(op)), KernelType::Main);
+      appendKernel(fmt::format("if ({0} == {1}.end()) return;", SLOT(op), HT(op)), KernelType::Count);
+
+      // add all leftColumn data to this data
+      auto baseRelations = getBaseRelations(leftColumnData);
+      std::map<int, int> streamIdToBufId;
+      int i = 0;
+      for (auto br : baseRelations) {
+         streamIdToBufId[br.first] = i;
+         i++;
+      }
+      for (auto colData : leftColumnData) {
+         colData.second->streamId = id;
+         if (colData.second->type == ColumnType::Direct) {
+            colData.second->rid = fmt::format("{3}[{0}->second * {1} + {2}]",
+                                             SLOT(op),
+                                             std::to_string(baseRelations.size()),
+                                             streamIdToBufId[colData.second->streamId],
+                                             BUF(op));
+            columnData[colData.first] = colData.second;
+         }
+         columnData[colData.first] = colData.second;
+      }
+      mainArgs[HT(op)] = "HASHTABLE_FIND";
+      mainArgs[BUF(op)] = "uint64_t*";
    }
 };
 
@@ -311,18 +511,32 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
             if (!streamCode) assert(false && "No downstream operation found for selection.");
 
             mlir::Region& predicate = selection.getPredicate();
-            streamCode->addSelectionPredicate(predicate);
+            streamCode->AddSelectionPredicate(predicate);
             streamCodeMap[op] = streamCode;
          } else if (auto joinOp = llvm::dyn_cast<relalg::InnerJoinOp>(op)) {
+            auto leftStream = joinOp.getLeftMutable().get().getDefiningOp();
+            auto rightStream = joinOp.getRightMutable().get().getDefiningOp();
+            auto leftStreamCode = streamCodeMap[leftStream];
+            auto rightStreamCode = streamCodeMap[rightStream];
+            if (!leftStreamCode) assert(false && "No downstream operation build side of hash join found");
+
+            leftStreamCode->MaterializeCount(op);
+            auto leftCols = leftStreamCode->InsertHashTable(op);
+            rightStreamCode->ProbeHashTable(op, leftCols);
+
+            streamCodeMap[op] = rightStreamCode;
          } else if (auto aggregationOp = llvm::dyn_cast<relalg::AggregationOp>(op)) {
          } else if (auto scanOp = llvm::dyn_cast<relalg::BaseTableOp>(op)) {
+            std::string tableName = scanOp.getTableIdentifier().data();
+            TupleStreamCode* streamCode = new TupleStreamCode(scanOp);
+
+            streamCodeMap[op] = streamCode;
          } else if (auto sortOp = llvm::dyn_cast<relalg::SortOp>(op)) {
          } else if (auto materializeOp = llvm::dyn_cast<relalg::MaterializeOp>(op)) {
          }
       });
    }
 };
-
 }
 
 std::unique_ptr<mlir::Pass> relalg::createCudaCodeGenPass() { return std::make_unique<CudaCodeGen>(); }
