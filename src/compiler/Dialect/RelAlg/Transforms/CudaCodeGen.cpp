@@ -189,6 +189,7 @@ class TupleStreamCode {
 
    std::map<std::string, ColumnMetadata*> columnData;
    std::set<std::string> loadedColumns;
+   std::set<std::string> loadedCountColumns;
 
    std::map<std::string, std::string> mlirToGlobalSymbol; // used when launching the kernel.
 
@@ -265,16 +266,18 @@ class TupleStreamCode {
          assert(false && "Column ref not in tuple stream");
       }
       auto cudaId = fmt::format("reg_{0}", mlirSymbol);
-      if (loadedColumns.find(mlirSymbol) == loadedColumns.end()) {
+      if (ty == KernelType::Main && loadedColumns.find(mlirSymbol) == loadedColumns.end()) {
          loadedColumns.insert(mlirSymbol);
-         auto colData = columnData[mlirSymbol];
-         if (colData->type == ColumnType::Mapped) {
-            for (auto dep : colData->dependencies) {
-               LoadColumn(dep, ty);
-            }
-         }
-         appendKernel(fmt::format("auto {1} = {0};", colData->loadExpression + (colData->type == ColumnType::Direct ? "[" + colData->rid + "]" : ""), cudaId), ty);
+      } else if (ty == KernelType::Count && loadedCountColumns.find(mlirSymbol) == loadedCountColumns.end()) {
+         loadedCountColumns.insert(mlirSymbol);
       }
+      auto colData = columnData[mlirSymbol];
+      if (colData->type == ColumnType::Mapped) {
+         for (auto dep : colData->dependencies) {
+            LoadColumn(dep, ty);
+         }
+      }
+      appendKernel(fmt::format("auto {1} = {0};", colData->loadExpression + (colData->type == ColumnType::Direct ? "[" + colData->rid + "]" : ""), cudaId), ty);
       if (ty == KernelType::Main) {
          mainArgs[mlirSymbol] = mlirTypeToCudaType(detail.type) + "*"; // columns are always a 1d array
       } else {
@@ -481,10 +484,10 @@ class TupleStreamCode {
          colData.second->streamId = id;
          if (colData.second->type == ColumnType::Direct) {
             colData.second->rid = fmt::format("{3}[{0}->second * {1} + {2}]",
-                                             SLOT(op),
-                                             std::to_string(baseRelations.size()),
-                                             streamIdToBufId[colData.second->streamId],
-                                             BUF(op));
+                                              SLOT(op),
+                                              std::to_string(baseRelations.size()),
+                                              streamIdToBufId[colData.second->streamId],
+                                              BUF(op));
             columnData[colData.first] = colData.second;
          }
          columnData[colData.first] = colData.second;
@@ -539,4 +542,5 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
 };
 }
 
-std::unique_ptr<mlir::Pass> relalg::createCudaCodeGenPass() { return std::make_unique<CudaCodeGen>(); }
+std::unique_ptr<mlir::Pass>
+relalg::createCudaCodeGenPass() { return std::make_unique<CudaCodeGen>(); }
