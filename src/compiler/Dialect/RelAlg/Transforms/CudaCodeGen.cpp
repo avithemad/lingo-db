@@ -81,11 +81,12 @@ struct ColumnMetadata {
    std::string loadExpression;
    ColumnType type;
    std::string rid; // valid if type is mapped
-   std::vector<tuples::ColumnRefAttr> dependencies; // valid if type is Mapped
    int streamId;
+   std::vector<tuples::ColumnRefAttr> dependencies; // valid if type is Mapped
    std::string globalId;
-   ColumnMetadata(const std::string& le, ColumnType ty, int streamId, const std::string& globalId) : 
-   loadExpression(le), type(ty), streamId(streamId), globalId(globalId) {}
+   ColumnMetadata(const std::string& le, ColumnType ty, int streamId, const std::string& globalId) : loadExpression(le), type(ty), streamId(streamId), globalId(globalId) {}
+   ColumnMetadata(const std::string& le, ColumnType ty, int streamId, const std::vector<tuples::ColumnRefAttr>& dep)
+      : loadExpression(le), type(ty), streamId(streamId), dependencies(dep) {}
 };
 struct ColumnDetail {
    std::string column;
@@ -235,7 +236,7 @@ class TupleStreamCode {
    }
 
    public:
-   TupleStreamCode(relalg::BaseTableOp &baseTableOp) {
+   TupleStreamCode(relalg::BaseTableOp& baseTableOp) {
       std::string tableName = baseTableOp.getTableIdentifier().data();
       std::string tableSize = tableName + "_size";
       mlirToGlobalSymbol[tableSize] = tableSize;
@@ -263,8 +264,8 @@ class TupleStreamCode {
    TupleStreamCode(mlir::Operation* op) {
       auto aggOp = mlir::dyn_cast_or_null<relalg::AggregationOp>(op);
       if (!aggOp) assert(false && "Expected aggregation operation");
-      std::string tableSize = COUNT(op); 
-      
+      std::string tableSize = COUNT(op);
+
       mlirToGlobalSymbol[tableSize] = tableSize;
       mainArgs[tableSize] = "size_t";
       countArgs[tableSize] = "size_t"; // make sure this type is reserved for kernel size only
@@ -276,7 +277,7 @@ class TupleStreamCode {
 
       auto groupByKeys = aggOp.getGroupByCols();
       auto computedCols = aggOp.getComputedCols();
-      for (auto &col: groupByKeys) {
+      for (auto& col : groupByKeys) {
          ColumnDetail detail(mlir::cast<tuples::ColumnRefAttr>(col));
          auto mlirSymbol = detail.getMlirSymbol();
          auto globalSymbol = fmt::format("d_{0}", KEY(op) + mlirSymbol);
@@ -285,7 +286,7 @@ class TupleStreamCode {
          metadata->rid = "tid";
          columnData[mlirSymbol] = metadata;
       }
-      for (auto &col: computedCols) {
+      for (auto& col : computedCols) {
          ColumnDetail detail(mlir::cast<tuples::ColumnDefAttr>(col));
          auto mlirSymbol = detail.getMlirSymbol();
          auto globalSymbol = fmt::format("d_{0}", mlirSymbol);
@@ -314,9 +315,9 @@ class TupleStreamCode {
       } else if (ty == KernelType::Count && loadedCountColumns.find(mlirSymbol) != loadedCountColumns.end()) {
          return cudaId;
       }
-      if (ty == KernelType::Main) 
+      if (ty == KernelType::Main)
          loadedColumns.insert(mlirSymbol);
-      else 
+      else
          loadedCountColumns.insert(mlirSymbol);
       auto colData = columnData[mlirSymbol];
       if (colData->type == ColumnType::Mapped) {
@@ -325,10 +326,12 @@ class TupleStreamCode {
          }
       }
       appendKernel(fmt::format("auto {1} = {0};", colData->loadExpression + (colData->type == ColumnType::Direct ? "[" + colData->rid + "]" : ""), cudaId), ty);
-      if (ty == KernelType::Main) {
-         mainArgs[mlirSymbol] = mlirTypeToCudaType(detail.type) + "*"; // columns are always a 1d array
-      } else {
-         countArgs[mlirSymbol] = mlirTypeToCudaType(detail.type) + "*";
+      if (colData->type == ColumnType::Direct) {
+         if (ty == KernelType::Main) {
+            mainArgs[mlirSymbol] = mlirTypeToCudaType(detail.type) + "*"; // columns are always a 1d array
+         } else {
+            countArgs[mlirSymbol] = mlirTypeToCudaType(detail.type) + "*";
+         }
       }
       return cudaId;
    }
@@ -618,7 +621,7 @@ d_{1}.insert(actual_dict_{0}.begin(), actual_dict_{0}.end());",
             // map each aggrfunc which is col.getDefiningOp to computedColName
             auto newcol = mlir::cast<tuples::ColumnDefAttr>(computedCols[i]);
             ColumnDetail detail(newcol);
-            auto newbuffername = detail.getMlirSymbol(); 
+            auto newbuffername = detail.getMlirSymbol();
             auto bufferColType = mlirTypeToCudaType(detail.type);
             mainArgs[newbuffername] = bufferColType + "*";
             mlirToGlobalSymbol[newbuffername] = fmt::format("d_{}", newbuffername);
@@ -667,7 +670,7 @@ d_{1}.insert(actual_dict_{0}.begin(), actual_dict_{0}.end());",
       }
 
       // append control to allocate column defs
-      for (auto &col: groupByKeys) {
+      for (auto& col : groupByKeys) {
          ColumnDetail detail(mlir::cast<tuples::ColumnRefAttr>(col));
          std::string mlirSymbol = detail.getMlirSymbol();
          std::string keyColumnName = KEY(op) + mlirSymbol;
@@ -685,13 +688,13 @@ d_{1}.insert(actual_dict_{0}.begin(), actual_dict_{0}.end());",
    void MaterializeBuffers(mlir::Operation* op) {
       auto materializeOp = mlir::dyn_cast_or_null<relalg::MaterializeOp>(op);
       if (!materializeOp) assert(false && "Materialize buffer needs materialize op as argument.");
-      
+
       appendControl("//Materialize buffers");
       appendKernel("//Materialize buffers", KernelType::Main);
-      for (auto col: materializeOp.getCols()) {
+      for (auto col : materializeOp.getCols()) {
          auto columnAttr = mlir::cast<tuples::ColumnRefAttr>(col);
          auto detail = ColumnDetail(columnAttr);
-         
+
          std::string mlirSymbol = detail.getMlirSymbol();
          std::string type = mlirTypeToCudaType(detail.type);
 
@@ -706,22 +709,81 @@ d_{1}.insert(actual_dict_{0}.begin(), actual_dict_{0}.end());",
       }
       appendControl(launchKernel(KernelType::Main));
       std::string printStmts;
-      for (auto col: materializeOp.getCols()) {
+      for (auto col : materializeOp.getCols()) {
          auto columnAttr = mlir::cast<tuples::ColumnRefAttr>(col);
          auto detail = ColumnDetail(columnAttr);
-         
+
          std::string mlirSymbol = detail.getMlirSymbol();
          std::string type = mlirTypeToCudaType(detail.type);
          std::string newBuffer = MAT(op) + mlirSymbol;
 
          appendControl(fmt::format("cudaMemcpy({0}, d_{0}, sizeof({1}) * {2}, cudaMemcpyDeviceToHost);",
-            newBuffer, type, COUNT(op)));
+                                   newBuffer, type, COUNT(op)));
          printStmts += fmt::format("std::cout << {0}[i] << \"\\t\";\n", newBuffer);
       }
-      appendControl(fmt::format("for (auto i=0ull; i < {0}; i++) {{ {1}std::cout << std::endl; }}", 
-         COUNT(op), printStmts));
+      appendControl(fmt::format("for (auto i=0ull; i < {0}; i++) {{ {1}std::cout << std::endl; }}",
+                                COUNT(op), printStmts));
    }
-   
+
+   std::string mapOpDfs(mlir::Operation* op, std::vector<tuples::ColumnRefAttr>& dep) {
+      // leaf condition
+      if (auto constOp = mlir::dyn_cast_or_null<db::ConstantOp>(op)) {
+         return translateConstantOp(constOp);
+      }
+      if (auto getColOp = mlir::dyn_cast_or_null<tuples::GetColumnOp>(op)) {
+         dep.push_back(getColOp.getAttr());
+         ColumnDetail detail(getColOp.getAttr());
+         return fmt::format("reg_{}", detail.getMlirSymbol());
+      }
+      if (auto binaryOp = mlir::dyn_cast_or_null<db::MulOp>(op)) {
+         return fmt::format("({0}) * ({1})", mapOpDfs(binaryOp.getLeft().getDefiningOp(), dep),
+                            mapOpDfs(binaryOp.getRight().getDefiningOp(), dep));
+      } else if (auto binaryOp = mlir::dyn_cast_or_null<db::AddOp>(op)) {
+         return fmt::format("({0}) + ({1})", mapOpDfs(binaryOp.getLeft().getDefiningOp(), dep),
+                            mapOpDfs(binaryOp.getRight().getDefiningOp(), dep));
+      } else if (auto binaryOp = mlir::dyn_cast_or_null<db::SubOp>(op)) {
+         return fmt::format("({0}) - ({1})", mapOpDfs(binaryOp.getLeft().getDefiningOp(), dep),
+                            mapOpDfs(binaryOp.getRight().getDefiningOp(), dep));
+      } else if (auto binaryOp = mlir::dyn_cast_or_null<db::DivOp>(op)) {
+         return fmt::format("({0}) / ({1})", mapOpDfs(binaryOp.getLeft().getDefiningOp(), dep),
+                            mapOpDfs(binaryOp.getRight().getDefiningOp(), dep));
+      } else if (auto castOp = mlir::dyn_cast_or_null<db::CastOp>(op)) {
+         return fmt::format("(cast)({0})", mapOpDfs(castOp.getVal().getDefiningOp(), dep));
+      } else if (auto runtimeOp = mlir::dyn_cast_or_null<db::RuntimeCall>(op)) {
+         std::string function = runtimeOp.getFn().str();
+         std::string args = "";
+         std::string sep = "";
+         for (auto v : runtimeOp.getArgs()) {
+            args += sep + mapOpDfs(v.getDefiningOp(), dep);
+            sep = ", ";
+         }
+         return fmt::format("{0}({1})", function, args);
+      }
+      op->dump();
+      assert(false && "Unexpected compute graph");
+   }
+
+   void TranslateMapOp(mlir::Operation* op) {
+      auto mapOp = mlir::dyn_cast_or_null<relalg::MapOp>(op);
+      if (!mapOp) assert(false && "Translate map op expects a map operation");
+      auto computedCols = mapOp.getComputedCols();
+      auto& predRegion = mapOp.getPredicate();
+      if (auto returnOp = mlir::dyn_cast_or_null<tuples::ReturnOp>(predRegion.front().getTerminator())) {
+         assert(returnOp.getResults().size() == computedCols.size() && "Computed cols size not equal to result size");
+         auto i = 0ull;
+         for (auto col : computedCols) {
+            auto colAttr = mlir::cast<tuples::ColumnDefAttr>(col);
+            ColumnDetail detail(colAttr);
+            std::string mlirSymbol = detail.getMlirSymbol();
+            std::vector<tuples::ColumnRefAttr> dep;
+            std::string expr = mapOpDfs(returnOp.getResults()[i].getDefiningOp(), dep);
+            columnData[mlirSymbol] = new ColumnMetadata(expr, ColumnType::Mapped, StreamId, dep);
+            i++;
+         }
+      } else {
+         assert(false && "No return op found for the map operation region");
+      }
+   }
    void printKernel(KernelType ty, std::ostream& stream) {
       std::map<std::string, std::string> _args;
       std::string _kernelName;
@@ -733,32 +795,42 @@ d_{1}.insert(actual_dict_{0}.begin(), actual_dict_{0}.end());",
          _kernelName = "count";
       }
       bool hasHash = false;
-      for (auto p: _args) hasHash |= (p.second == "HASHTABLE_FIND" || p.second == "HASHTABLE_INSERT"); 
+      for (auto p : _args) hasHash |= (p.second == "HASHTABLE_FIND" || p.second == "HASHTABLE_INSERT");
       if (hasHash) {
-         stream << "template<"; bool find = false, insert = false; std::string sep = "";
-         for (auto p: _args) {
+         stream << "template<";
+         bool find = false, insert = false;
+         std::string sep = "";
+         for (auto p : _args) {
             if (p.second == "HASHTABLE_FIND" && !find) {
-               find = true; stream << sep + "typename " + p.second; sep = ", ";
+               find = true;
+               stream << sep + "typename " + p.second;
+               sep = ", ";
             } else if (p.second == "HASHTABLE_INSERT" && !insert) {
-               insert = true; stream << sep + "typename " + p.second; sep = ", ";
+               insert = true;
+               stream << sep + "typename " + p.second;
+               sep = ", ";
             }
          }
          stream << ">\n";
       }
       stream << fmt::format("__global__ void {0}_{1}(", _kernelName, ToHex((void*) this));
       std::string sep = "";
-      for (auto p: _args) {
-         stream << fmt::format("{0}{1} {2}", sep, p.second, p.first); sep = ", ";
+      for (auto p : _args) {
+         stream << fmt::format("{0}{1} {2}", sep, p.second, p.first);
+         sep = ", ";
       }
       stream << ") {\n";
-      if (KernelType::Main == ty) { for (auto line: mainCode) { stream << line << std::endl; }
-      } else { for (auto line: countCode) { stream << line << std::endl; }
+      if (KernelType::Main == ty) {
+         for (auto line : mainCode) { stream << line << std::endl; }
+      } else {
+         for (auto line : countCode) { stream << line << std::endl; }
       }
       stream << "}\n";
    }
    void printControl(std::ostream& stream) {
-      for (auto line: controlCode) {
-         stream << line << std::endl; }
+      for (auto line : controlCode) {
+         stream << line << std::endl;
+      }
    }
 };
 
@@ -803,22 +875,32 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
             streamCode->AggregateInHashTable(op); // main part
             kernelSchedule.push_back(streamCode);
 
-            auto newStreamCode = new TupleStreamCode(op); 
+            auto newStreamCode = new TupleStreamCode(op);
             streamCodeMap[op] = newStreamCode;
          } else if (auto scanOp = llvm::dyn_cast<relalg::BaseTableOp>(op)) {
             std::string tableName = scanOp.getTableIdentifier().data();
             TupleStreamCode* streamCode = new TupleStreamCode(scanOp);
 
             streamCodeMap[op] = streamCode;
-         } else if (auto sortOp = llvm::dyn_cast<relalg::SortOp>(op)) {
+         } else if (auto mapOp = llvm::dyn_cast<relalg::MapOp>(op)) {
+            auto stream = mapOp.getRelMutable().get().getDefiningOp();
+            auto streamCode = streamCodeMap[stream];
+            if (!streamCode) assert(false && "No downstream operation for map op found");
+
+            streamCode->TranslateMapOp(op);
+            streamCodeMap[op] = streamCode;
          } else if (auto materializeOp = llvm::dyn_cast<relalg::MaterializeOp>(op)) {
             auto stream = materializeOp.getRelMutable().get().getDefiningOp();
             auto streamCode = streamCodeMap[stream];
             if (!streamCode) assert(false && "No downstream operation for materialize found");
-            
+
             streamCode->MaterializeCount(op);
             streamCode->MaterializeBuffers(op);
-            kernelSchedule.push_back(streamCode); 
+            kernelSchedule.push_back(streamCode);
+         } else if (auto sortOp = llvm::dyn_cast<relalg::SortOp>(op)) {
+            std::clog << "WARNING: This operator has not been implemented, bypassing it.\n";
+            op->dump();
+            streamCodeMap[op] = streamCodeMap[sortOp.getRelMutable().get().getDefiningOp()];
          }
       });
       std::ofstream outputFile("output.cu");
@@ -834,7 +916,7 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
          code->printKernel(KernelType::Main, outputFile);
       }
       outputFile << "extern \"C\" void control( DBI32Type* d_nation__n_nationkey, DBStringType* d_nation__n_name, DBI32Type* d_nation__n_regionkey, DBStringType* d_nation__n_comment, size_t nation_size, DBI32Type* d_supplier__s_suppkey, DBI32Type* d_supplier__s_nationkey, DBStringType* d_supplier__s_name, DBStringType* d_supplier__s_address, DBStringType* d_supplier__s_phone, DBDecimalType* d_supplier__s_acctbal, DBStringType* d_supplier__s_comment, size_t supplier_size, DBI32Type* d_partsupp__ps_suppkey, DBI32Type* d_partsupp__ps_partkey, DBI32Type* d_partsupp__ps_availqty, DBDecimalType* d_partsupp__ps_supplycost, DBStringType* d_partsupp__ps_comment, size_t partsupp_size, DBI32Type* d_part__p_partkey, DBStringType* d_part__p_name, DBStringType* d_part__p_mfgr, DBStringType* d_part__p_brand, DBStringType* d_part__p_type, DBI32Type* d_part__p_size, DBStringType* d_part__p_container, DBDecimalType* d_part__p_retailprice, DBStringType* d_part__p_comment, size_t part_size, DBI32Type* d_lineitem__l_orderkey, DBI32Type* d_lineitem__l_partkey, DBI32Type* d_lineitem__l_suppkey, DBI64Type* d_lineitem__l_linenumber, DBDecimalType* d_lineitem__l_quantity, DBDecimalType* d_lineitem__l_extendedprice, DBDecimalType* d_lineitem__l_discount, DBDecimalType* d_lineitem__l_tax, DBCharType* d_lineitem__l_returnflag, DBCharType* d_lineitem__l_linestatus, DBDateType* d_lineitem__l_shipdate, DBDateType* d_lineitem__l_commitdate, DBDateType* d_lineitem__l_receiptdate, DBStringType* d_lineitem__l_shipinstruct, DBStringType* d_lineitem__l_shipmode, DBStringType* d_lineitem__comments, size_t lineitem_size, DBI32Type* d_orders__o_orderkey, DBCharType* d_orders__o_orderstatus, DBI32Type* d_orders__o_custkey, DBDecimalType* d_orders__o_totalprice, DBDateType* d_orders__o_orderdate, DBStringType* d_orders__o_orderpriority, DBStringType* d_orders__o_clerk, DBI32Type* d_orders__o_shippriority, DBStringType* d_orders__o_comment, size_t orders_size, DBI32Type* d_customer__c_custkey, DBStringType* d_customer__c_name, DBStringType* d_customer__c_address, DBI32Type* d_customer__c_nationkey, DBStringType* d_customer__c_phone, DBDecimalType* d_customer__c_acctbal, DBStringType* d_customer__c_mktsegment, DBStringType* d_customer__c_comment, size_t customer_size, DBI32Type* d_region__r_regionkey, DBStringType* d_region__r_name, DBStringType* d_region__r_comment, size_t region_size) {\n";
-      for (auto code: kernelSchedule) {
+      for (auto code : kernelSchedule) {
          code->printControl(outputFile);
       }
       outputFile << "}";
