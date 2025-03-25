@@ -903,7 +903,10 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
          if (auto selection = llvm::dyn_cast<relalg::SelectionOp>(op)) {
             mlir::Operation* stream = selection.getRelMutable().get().getDefiningOp();
             TupleStreamCode* streamCode = streamCodeMap[stream];
-            if (!streamCode) assert(false && "No downstream operation found for selection.");
+            if (!streamCode) {
+               stream->dump();
+               assert(false && "No downstream operation found for selection.");
+            }
 
             mlir::Region& predicate = selection.getPredicate();
             streamCode->AddSelectionPredicate(predicate);
@@ -913,8 +916,15 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
             auto rightStream = joinOp.getRightMutable().get().getDefiningOp();
             auto leftStreamCode = streamCodeMap[leftStream];
             auto rightStreamCode = streamCodeMap[rightStream];
-            if (!leftStreamCode) assert(false && "No downstream operation build side of hash join found");
-
+            if (!leftStreamCode) {
+               leftStream->dump();
+               assert(false && "No downstream operation build side of hash join found");
+            }
+            if (!rightStreamCode) {
+               rightStream->dump();
+               assert(false && "No downstream operation probe side of hash join found");
+            }
+            op->dump();
             leftStreamCode->MaterializeCount(op); // count of left
             auto leftCols = leftStreamCode->InsertHashTable(op); // main of left
             kernelSchedule.push_back(leftStreamCode);
@@ -927,7 +937,7 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
             mlir::Operation* stream = aggregationOp.getRelMutable().get().getDefiningOp();
             TupleStreamCode* streamCode = streamCodeMap[stream];
             if (!streamCode) {
-               op->dump();
+               stream->dump();
                assert(false && "No downstream operation for aggregation found");
             }
 
@@ -945,14 +955,20 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
          } else if (auto mapOp = llvm::dyn_cast<relalg::MapOp>(op)) {
             auto stream = mapOp.getRelMutable().get().getDefiningOp();
             auto streamCode = streamCodeMap[stream];
-            if (!streamCode) assert(false && "No downstream operation for map op found");
+            if (!streamCode) {
+               stream->dump();
+               assert(false && "No downstream operation for map op found");
+            }
 
             streamCode->TranslateMapOp(op);
             streamCodeMap[op] = streamCode;
          } else if (auto materializeOp = llvm::dyn_cast<relalg::MaterializeOp>(op)) {
             auto stream = materializeOp.getRelMutable().get().getDefiningOp();
             auto streamCode = streamCodeMap[stream];
-            if (!streamCode) assert(false && "No downstream operation for materialize found");
+            if (!streamCode) {
+               stream->dump();
+               assert(false && "No downstream operation for materialize found");
+            }
 
             streamCode->MaterializeCount(op);
             streamCode->MaterializeBuffers(op);
@@ -964,7 +980,11 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
          } else if (auto renamingOp = llvm::dyn_cast<relalg::RenamingOp>(op)) {
             mlir::Operation* stream = renamingOp.getRelMutable().get().getDefiningOp();
             TupleStreamCode* streamCode = streamCodeMap[stream];
-            if (!streamCode) assert(false && "No downstream operation for renaming operation found operation found");
+            if (!streamCode)
+            {
+               stream->dump();
+               assert(false && "No downstream operation for renaming operation found");
+            }
 
             streamCode->RenamingOp(renamingOp);
             streamCodeMap[op] = streamCode;
