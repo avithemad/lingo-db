@@ -924,7 +924,6 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
                rightStream->dump();
                assert(false && "No downstream operation probe side of hash join found");
             }
-            op->dump();
             leftStreamCode->MaterializeCount(op); // count of left
             auto leftCols = leftStreamCode->InsertHashTable(op); // main of left
             kernelSchedule.push_back(leftStreamCode);
