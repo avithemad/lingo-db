@@ -7,6 +7,7 @@
 #include "lingodb/compiler/Dialect/RelAlg/Passes.h"
 #include "lingodb/compiler/Dialect/TupleStream/TupleStreamOps.h"
 
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
@@ -63,6 +64,18 @@ static std::string COUNT(const void* op) {
 static std::string MAT(const void* op) {
    return "MAT" + ToHex(op);
 }
+static std::string MAT_IDX(const void* op) {
+   return "MAT_IDX" + ToHex(op);
+}
+static std::string mat_idx(const void* op) {
+   return "mat_idx" + ToHex(op);
+}
+static std::string slot_first(const void* op) {
+   return "slot_first" + ToHex(op);
+}
+static std::string slot_second(const void* op) {
+   return "slot_second" + ToHex(op);
+}
 
 template <typename ColumnAttrTy>
 std::string getColumnName(const ColumnAttrTy& colAttr) {
@@ -87,6 +100,13 @@ struct ColumnMetadata {
    ColumnMetadata(const std::string& le, ColumnType ty, int streamId, const std::string& globalId) : loadExpression(le), type(ty), streamId(streamId), globalId(globalId) {}
    ColumnMetadata(const std::string& le, ColumnType ty, int streamId, const std::vector<tuples::ColumnRefAttr>& dep)
       : loadExpression(le), type(ty), streamId(streamId), dependencies(dep) {}
+   ColumnMetadata(ColumnMetadata* metadata) :
+      loadExpression(metadata->loadExpression),
+      type(metadata->type),
+      rid(metadata->rid),
+      streamId(metadata->streamId),
+      dependencies(metadata->dependencies),
+      globalId(metadata->globalId) {}
 };
 struct ColumnDetail {
    std::string column;
@@ -192,7 +212,7 @@ class TupleStreamCode {
    std::vector<std::string> mainCode;
    std::vector<std::string> countCode;
    std::vector<std::string> controlCode;
-
+   int forEachScopes = 0;
    std::map<std::string, ColumnMetadata*> columnData;
    std::set<std::string> loadedColumns;
    std::set<std::string> loadedCountColumns;
@@ -302,6 +322,16 @@ class TupleStreamCode {
    ~TupleStreamCode() {
       for (auto p : columnData) delete p.second;
    }
+   void RenamingOp(relalg::RenamingOp renamingOp) {
+      for (mlir::Attribute attr: renamingOp.getColumns()) {
+         auto relationDefAttr = mlir::dyn_cast_or_null<tuples::ColumnDefAttr>(attr);
+         mlir::Attribute from = mlir::dyn_cast_or_null<mlir::ArrayAttr>(relationDefAttr.getFromExisting())[0];
+         auto relationRefAttr = mlir::dyn_cast_or_null<tuples::ColumnRefAttr>(from);
+         ColumnDetail detailRef(relationRefAttr), detailDef(relationDefAttr);
+         columnData[detailDef.getMlirSymbol()] = 
+            new ColumnMetadata(columnData[detailRef.getMlirSymbol()]);
+      }
+   }
    std::string LoadColumn(const tuples::ColumnRefAttr& attr, KernelType ty) {
       ColumnDetail detail(attr);
       auto mlirSymbol = detail.getMlirSymbol();
@@ -405,7 +435,12 @@ class TupleStreamCode {
             res += ")";
          }
          return res;
-      }
+      } else if (auto constantOp = mlir::dyn_cast_or_null<mlir::arith::ConstantOp>(op)) {
+         if (auto c = mlir::cast<mlir::BoolAttr>(constantOp.getValue())) {
+            bool value = c.getValue();
+            return value ? "true" : "false";
+         }
+      } 
       op->dump();
       assert(false && "Selection predicate not handled");
       return "";
@@ -451,6 +486,7 @@ class TupleStreamCode {
       allowedKeysToSize["DBI32Type"] = 4;
       allowedKeysToSize["DBDateType"] = 4;
       allowedKeysToSize["DBI64Type"] = 8;
+      std::string sep = "";
       int totalKeySize = 0;
       for (auto i = 0ull; i < keys.size(); i++) {
          tuples::ColumnRefAttr key = mlir::cast<tuples::ColumnRefAttr>(keys[i]);
@@ -460,8 +496,9 @@ class TupleStreamCode {
             assert(false && "Type is not hashable");
          }
          std::string cudaIdentifierKey = LoadColumn(key, kernelType);
-         appendKernel(fmt::format("{0} <<= {1};", KEY(op), std::to_string(allowedKeysToSize[baseType] * 8)), kernelType);
+         appendKernel(sep, kernelType);
          appendKernel(fmt::format("{0} |= {1};", KEY(op), cudaIdentifierKey), kernelType);
+         sep = fmt::format("{0} <<= {1};", KEY(op), std::to_string(allowedKeysToSize[baseType] * 8));
          totalKeySize += allowedKeysToSize[baseType];
          if (totalKeySize > 8) {
             assert(false && "Total hash key exceeded 8 bytes");
@@ -513,7 +550,7 @@ class TupleStreamCode {
       appendControl(fmt::format("cudaMemset(d_{0}, 0, sizeof(uint64_t));", BUF_IDX(op)));
       appendControl(fmt::format("uint64_t* d_{0};", BUF(op)));
       appendControl(fmt::format("cudaMalloc(&d_{0}, sizeof(uint64_t) * {1} * {2});", BUF(op), COUNT(op), baseRelations.size()));
-      appendControl(fmt::format("auto d_{0} = cuco::static_map{{ (int){1}*2, cuco::empty_key{{(int64_t)-1}},cuco::empty_value{{(int64_t)-1}},thrust::equal_to<int64_t>{{}},cuco::linear_probing<1, cuco::default_hash_function<int64_t>>() }};",
+      appendControl(fmt::format("auto d_{0} = cuco::experimental::static_multimap{{ (int){1}*2, cuco::empty_key{{(int64_t)-1}},cuco::empty_value{{(int64_t)-1}},thrust::equal_to<int64_t>{{}},cuco::linear_probing<1, cuco::default_hash_function<int64_t>>() }};",
                                 HT(op), COUNT(op)));
       appendControl(launchKernel(KernelType::Main));
       appendControl(fmt::format("cudaFree(d_{0});", BUF_IDX(op)));
@@ -527,37 +564,39 @@ class TupleStreamCode {
       auto key = MakeKeys(op, keys, KernelType::Main);
       appendKernel("//Probe Hash table", KernelType::Main);
       appendKernel("//Probe Hash table", KernelType::Count);
-      appendKernel(fmt::format("auto {0} = {1}.find({2});", SLOT(op), HT(op), key), KernelType::Main);
-      appendKernel(fmt::format("auto {0} = {1}.find({2});", SLOT(op), HT(op), key), KernelType::Count);
-      appendKernel(fmt::format("if ({0} == {1}.end()) return;", SLOT(op), HT(op)), KernelType::Main);
-      appendKernel(fmt::format("if ({0} == {1}.end()) return;", SLOT(op), HT(op)), KernelType::Count);
+      appendKernel(fmt::format("{0}.for_each({1}, [&] __device__ (auto const {2}) {{", HT(op), key, SLOT(op)), KernelType::Main);
+      appendKernel(fmt::format("auto const [{0}, {1}] = {2};", slot_first(op), slot_second(op), SLOT(op)), KernelType::Main);
+      appendKernel(fmt::format("{0}.for_each({1}, [&] __device__ (auto const {2}) {{\n", HT(op), key, SLOT(op)), KernelType::Count);
+      appendKernel(fmt::format("auto const [{0}, {1}] = {2};", slot_first(op), slot_second(op), SLOT(op)), KernelType::Count);
+      forEachScopes++;
 
       // add all leftColumn data to this data
       auto baseRelations = getBaseRelations(leftColumnData);
       std::map<int, int> streamIdToBufId;
       int i = 0;
+      // TODO(avinash): Check this logic, there is a bug in this refer q9.
       for (auto br : baseRelations) {
          streamIdToBufId[br.first] = i;
          i++;
       }
       for (auto colData : leftColumnData) {
-         colData.second->streamId = id;
          if (colData.second->type == ColumnType::Direct) {
-            colData.second->rid = fmt::format("{3}[{0}->second * {1} + {2}]",
-                                              SLOT(op),
+            colData.second->rid = fmt::format("{3}[{0} * {1} + {2}]",
+                                              slot_second(op),
                                               std::to_string(baseRelations.size()),
                                               streamIdToBufId[colData.second->streamId],
                                               BUF(op));
+            // colData.second->streamId = id;
             columnData[colData.first] = colData.second;
             mlirToGlobalSymbol[colData.second->loadExpression] = colData.second->globalId;
          }
          columnData[colData.first] = colData.second;
       }
-      mainArgs[HT(op)] = "HASHTABLE_FIND";
+      mainArgs[HT(op)] = "HASHTABLE_PROBE";
       mainArgs[BUF(op)] = "uint64_t*";
-      countArgs[HT(op)] = "HASHTABLE_FIND";
+      countArgs[HT(op)] = "HASHTABLE_PROBE";
       countArgs[BUF(op)] = "uint64_t*";
-      mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::find)", HT(op));
+      mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::for_each)", HT(op));
       mlirToGlobalSymbol[BUF(op)] = fmt::format("d_{}", BUF(op));
    }
    void CreateAggregationHashTable(mlir::Operation* op) {
@@ -690,7 +729,13 @@ d_{1}.insert(actual_dict_{0}.begin(), actual_dict_{0}.end());",
       if (!materializeOp) assert(false && "Materialize buffer needs materialize op as argument.");
 
       appendControl("//Materialize buffers");
+      appendControl(fmt::format("uint64_t* d_{0};", MAT_IDX(op)));
+      appendControl(fmt::format("cudaMalloc(&d_{0}, sizeof(uint64_t));", MAT_IDX(op)));
+      appendControl(fmt::format("cudaMemset(d_{0}, 0, sizeof(uint64_t));", MAT_IDX(op)));
+      mainArgs[MAT_IDX(op)] = "uint64_t*";
+      mlirToGlobalSymbol[MAT_IDX(op)] = "d_" + MAT_IDX(op);
       appendKernel("//Materialize buffers", KernelType::Main);
+      appendKernel(fmt::format("auto {0} = atomicAdd((int*){1}, 1);", mat_idx(op), MAT_IDX(op)), KernelType::Main);
       for (auto col : materializeOp.getCols()) {
          auto columnAttr = mlir::cast<tuples::ColumnRefAttr>(col);
          auto detail = ColumnDetail(columnAttr);
@@ -705,9 +750,10 @@ d_{1}.insert(actual_dict_{0}.begin(), actual_dict_{0}.end());",
          mainArgs[newBuffer] = type + "*";
          mlirToGlobalSymbol[newBuffer] = "d_" + newBuffer;
          auto key = LoadColumn(columnAttr, KernelType::Main);
-         appendKernel(fmt::format("{0}[tid] = {1};", newBuffer, key), KernelType::Main);
+         appendKernel(fmt::format("{0}[{2}] = {1};", newBuffer, key, mat_idx(op)), KernelType::Main);
       }
       appendControl(launchKernel(KernelType::Main));
+      appendControl(fmt::format("cudaFree(d_{0});", MAT_IDX(op)));
       std::string printStmts;
       for (auto col : materializeOp.getCols()) {
          auto columnAttr = mlir::cast<tuples::ColumnRefAttr>(col);
@@ -748,7 +794,9 @@ d_{1}.insert(actual_dict_{0}.begin(), actual_dict_{0}.end());",
          return fmt::format("({0}) / ({1})", mapOpDfs(binaryOp.getLeft().getDefiningOp(), dep),
                             mapOpDfs(binaryOp.getRight().getDefiningOp(), dep));
       } else if (auto castOp = mlir::dyn_cast_or_null<db::CastOp>(op)) {
-         return fmt::format("(cast)({0})", mapOpDfs(castOp.getVal().getDefiningOp(), dep));
+         mlir::Type ty = castOp.getRes().getType();
+         std::string cudaType = mlirTypeToCudaType(ty);
+         return fmt::format("({1})({0})", mapOpDfs(castOp.getVal().getDefiningOp(), dep), cudaType);
       } else if (auto runtimeOp = mlir::dyn_cast_or_null<db::RuntimeCall>(op)) {
          std::string function = runtimeOp.getFn().str();
          std::string args = "";
@@ -795,10 +843,10 @@ d_{1}.insert(actual_dict_{0}.begin(), actual_dict_{0}.end());",
          _kernelName = "count";
       }
       bool hasHash = false;
-      for (auto p : _args) hasHash |= (p.second == "HASHTABLE_FIND" || p.second == "HASHTABLE_INSERT");
+      for (auto p : _args) hasHash |= (p.second == "HASHTABLE_FIND" || p.second == "HASHTABLE_INSERT" || p.second == "HASHTABLE_PROBE");
       if (hasHash) {
          stream << "template<";
-         bool find = false, insert = false;
+         bool find = false, insert = false, probe = false;
          std::string sep = "";
          for (auto p : _args) {
             if (p.second == "HASHTABLE_FIND" && !find) {
@@ -807,6 +855,10 @@ d_{1}.insert(actual_dict_{0}.begin(), actual_dict_{0}.end());",
                sep = ", ";
             } else if (p.second == "HASHTABLE_INSERT" && !insert) {
                insert = true;
+               stream << sep + "typename " + p.second;
+               sep = ", ";
+            } else if (p.second == "HASHTABLE_PROBE" && !probe) {
+               probe = true;
                stream << sep + "typename " + p.second;
                sep = ", ";
             }
@@ -824,6 +876,9 @@ d_{1}.insert(actual_dict_{0}.begin(), actual_dict_{0}.end());",
          for (auto line : mainCode) { stream << line << std::endl; }
       } else {
          for (auto line : countCode) { stream << line << std::endl; }
+      }
+      for (int i=0; i<forEachScopes; i++) {
+         stream << "});\n";
       }
       stream << "}\n";
    }
@@ -864,12 +919,17 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
             auto leftCols = leftStreamCode->InsertHashTable(op); // main of left
             kernelSchedule.push_back(leftStreamCode);
             rightStreamCode->ProbeHashTable(op, leftCols);
+            mlir::Region& predicate = joinOp.getPredicate();
+            rightStreamCode->AddSelectionPredicate(predicate);
 
             streamCodeMap[op] = rightStreamCode;
          } else if (auto aggregationOp = llvm::dyn_cast<relalg::AggregationOp>(op)) {
             mlir::Operation* stream = aggregationOp.getRelMutable().get().getDefiningOp();
             TupleStreamCode* streamCode = streamCodeMap[stream];
-            if (!streamCode) assert(false && "No downstream operation for aggregation found");
+            if (!streamCode) {
+               op->dump();
+               assert(false && "No downstream operation for aggregation found");
+            }
 
             streamCode->CreateAggregationHashTable(op); // count part
             streamCode->AggregateInHashTable(op); // main part
@@ -901,10 +961,18 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
             std::clog << "WARNING: This operator has not been implemented, bypassing it.\n";
             op->dump();
             streamCodeMap[op] = streamCodeMap[sortOp.getRelMutable().get().getDefiningOp()];
+         } else if (auto renamingOp = llvm::dyn_cast<relalg::RenamingOp>(op)) {
+            mlir::Operation* stream = renamingOp.getRelMutable().get().getDefiningOp();
+            TupleStreamCode* streamCode = streamCodeMap[stream];
+            if (!streamCode) assert(false && "No downstream operation for renaming operation found operation found");
+
+            streamCode->RenamingOp(renamingOp);
+            streamCodeMap[op] = streamCode;
          }
       });
       std::ofstream outputFile("output.cu");
       outputFile << "#include <cuco/static_map.cuh>\n\
+#include <cuco/static_multimap.cuh>\n\
 #include <thrust/copy.h>\n\
 #include <thrust/device_vector.h>\n\
 #include <thrust/host_vector.h>\n";
