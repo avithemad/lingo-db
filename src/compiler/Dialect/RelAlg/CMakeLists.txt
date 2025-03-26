@@ -3,7 +3,7 @@ add_mlir_dialect_library(MLIRRelAlg
         RelAlgOps.cpp
         RelAlgOpsEnums.cpp
         OperatorInterfaceImpl.cpp
-        Transforms/PythonCodeGen.cpp
+        Transforms/CudaCodeGen.cpp
         Transforms/MetaData.cpp
         Transforms/InferNotNullConditions.cpp
         Transforms/ColumnFolding.cpp
@@ -34,6 +34,6 @@ add_mlir_dialect_library(MLIRRelAlg
         MLIRDSAOpsIncGen
         MLIRUtilOpsIncGen
         MLIRTupleStreamOpsIncGen
-        LINK_LIBS mlir-support PUBLIC
+        LINK_LIBS mlir-support fmt PUBLIC
         MLIRIR
 )

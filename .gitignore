@@ -22,3 +22,4 @@ operations.parquet
 .vscode
 mlir_venv
 venv
+output.cu

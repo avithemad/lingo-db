@@ -633,13 +633,9 @@ cuco::linear_probing<1, cuco::default_hash_function<int64_t>>() }};",
       // TODO(avinash): deallocate the old hash table and create a new one to save space in gpu when estimations are way off
       appendControl(fmt::format("thrust::device_vector<int64_t> keys_{0}({2}), vals_{0}({2});\n\
 d_{1}.retrieve_all(keys_{0}.begin(), vals_{0}.begin());\n\
-thrust::host_vector<int64_t> h_keys_{0}({2});\n\
-thrust::copy(keys_{0}.begin(), keys_{0}.end(), h_keys_{0}.begin());\n\
-thrust::host_vector<cuco::pair<int64_t, int64_t>> actual_dict_{0}({2});\n\
-for (int i=0; i < {2}; i++)\n\
-{{actual_dict_{0}[i] = cuco::make_pair(h_keys_{0}[i], i);}}\n\
 d_{1}.clear();\n\
-d_{1}.insert(actual_dict_{0}.begin(), actual_dict_{0}.end());",
+int64_t* raw_keys{0} = thrust::raw_pointer_cast(keys_{0}.data());\n\
+insertKeys<<<std::ceil((float){2}/32.), 32>>>(raw_keys{0}, d_{1}.ref(cuco::insert), {2});",
                                 ToHex(op), HT(op), COUNT(op)));
    }
    void AggregateInHashTable(mlir::Operation* op) {
