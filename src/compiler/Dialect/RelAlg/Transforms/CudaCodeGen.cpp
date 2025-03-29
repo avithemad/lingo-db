@@ -148,6 +148,8 @@ static int daysSinceEpoch(const std::string& dateStr) {
    return (duration.count() / 24) + 1; // Convert hours to days
 }
 
+
+
 static std::string mlirTypeToCudaType(const mlir::Type& ty) {
    if (mlir::isa<db::StringType>(ty))
       return "DBStringType";
@@ -216,6 +218,8 @@ class TupleStreamCode {
    std::map<std::string, ColumnMetadata*> columnData;
    std::set<std::string> loadedColumns;
    std::set<std::string> loadedCountColumns;
+   std::set<std::string> deviceFrees;
+   std::set<std::string> hostFrees;
 
    std::map<std::string, std::string> mlirToGlobalSymbol; // used when launching the kernel.
 
@@ -472,11 +476,12 @@ class TupleStreamCode {
       appendControl("//Materialize count");
       appendControl(fmt::format("uint64_t* d_{0};", COUNT(op)));
       appendControl(fmt::format("cudaMalloc(&d_{0}, sizeof(uint64_t));", COUNT(op)));
+      deviceFrees.insert(fmt::format("d_{0}", COUNT(op)));
       appendControl(fmt::format("cudaMemset(d_{0}, 0, sizeof(uint64_t));", COUNT(op)));
       appendControl(launchKernel(KernelType::Count));
       appendControl(fmt::format("uint64_t {0};", COUNT(op)));
       appendControl(fmt::format("cudaMemcpy(&{0}, d_{0}, sizeof(uint64_t), cudaMemcpyDeviceToHost);", COUNT(op)));
-      appendControl(fmt::format("cudaFree(d_{0});", COUNT(op)));
+      // appendControl(fmt::format("cudaFree(d_{0});", COUNT(op)));
    }
    std::string MakeKeys(mlir::Operation* op, const mlir::ArrayAttr& keys, KernelType kernelType) {
       //TODO(avinash, p3): figure a way out for double keys
@@ -547,13 +552,15 @@ class TupleStreamCode {
       appendControl("// Insert hash table control;");
       appendControl(fmt::format("uint64_t* d_{0};", BUF_IDX(op)));
       appendControl(fmt::format("cudaMalloc(&d_{0}, sizeof(uint64_t));", BUF_IDX(op)));
+      deviceFrees.insert(fmt::format("d_{0}", BUF_IDX(op)));
       appendControl(fmt::format("cudaMemset(d_{0}, 0, sizeof(uint64_t));", BUF_IDX(op)));
       appendControl(fmt::format("uint64_t* d_{0};", BUF(op)));
       appendControl(fmt::format("cudaMalloc(&d_{0}, sizeof(uint64_t) * {1} * {2});", BUF(op), COUNT(op), baseRelations.size()));
+      deviceFrees.insert(fmt::format("d_{0}", BUF(op)));
       appendControl(fmt::format("auto d_{0} = cuco::experimental::static_multimap{{ (int){1}*2, cuco::empty_key{{(int64_t)-1}},cuco::empty_value{{(int64_t)-1}},thrust::equal_to<int64_t>{{}},cuco::linear_probing<1, cuco::default_hash_function<int64_t>>() }};",
                                 HT(op), COUNT(op)));
       appendControl(launchKernel(KernelType::Main));
-      appendControl(fmt::format("cudaFree(d_{0});", BUF_IDX(op)));
+      // appendControl(fmt::format("cudaFree(d_{0});", BUF_IDX(op)));
       return columnData;
    }
    void ProbeHashTable(mlir::Operation* op, const std::map<std::string, ColumnMetadata*>& leftColumnData) {
@@ -662,6 +669,7 @@ insertKeys<<<std::ceil((float){2}/32.), 32>>>(raw_keys{0}, d_{1}.ref(cuco::inser
             mlirToGlobalSymbol[newbuffername] = fmt::format("d_{}", newbuffername);
             appendControl(fmt::format("{0}* d_{1};", bufferColType, newbuffername));
             appendControl(fmt::format("cudaMalloc(&d_{0}, sizeof({1}) * {2});", newbuffername, bufferColType, COUNT(op)));
+            deviceFrees.insert(fmt::format("d_{0}", newbuffername));
             appendControl(fmt::format("cudaMemset(d_{0}, 0, sizeof({1}) * {2});", newbuffername, bufferColType, COUNT(op)));
             if (auto aggrFunc = llvm::dyn_cast<relalg::AggrFuncOp>(col.getDefiningOp())) {
                auto slot = fmt::format("{0}[{1}]", newbuffername, buf_idx(op));
@@ -714,6 +722,7 @@ insertKeys<<<std::ceil((float){2}/32.), 32>>>(raw_keys{0}, d_{1}.ref(cuco::inser
          mlirToGlobalSymbol[keyColumnName] = fmt::format("d_{}", keyColumnName);
          appendControl(fmt::format("{0}* d_{1};", keyColumnType, keyColumnName));
          appendControl(fmt::format("cudaMalloc(&d_{0}, sizeof({1}) * {2});", keyColumnName, keyColumnType, COUNT(op)));
+         deviceFrees.insert(fmt::format("d_{0}", keyColumnName));
          appendControl(fmt::format("cudaMemset(d_{0}, 0, sizeof({1}) * {2});", keyColumnName, keyColumnType, COUNT(op)));
          auto key = LoadColumn(mlir::cast<tuples::ColumnRefAttr>(col), KernelType::Main);
          appendKernel(fmt::format("{0}[{1}] = {2};", keyColumnName, buf_idx(op), key), KernelType::Main);
@@ -727,6 +736,7 @@ insertKeys<<<std::ceil((float){2}/32.), 32>>>(raw_keys{0}, d_{1}.ref(cuco::inser
       appendControl("//Materialize buffers");
       appendControl(fmt::format("uint64_t* d_{0};", MAT_IDX(op)));
       appendControl(fmt::format("cudaMalloc(&d_{0}, sizeof(uint64_t));", MAT_IDX(op)));
+      deviceFrees.insert(fmt::format("d_{0}", MAT_IDX(op)));
       appendControl(fmt::format("cudaMemset(d_{0}, 0, sizeof(uint64_t));", MAT_IDX(op)));
       mainArgs[MAT_IDX(op)] = "uint64_t*";
       mlirToGlobalSymbol[MAT_IDX(op)] = "d_" + MAT_IDX(op);
@@ -741,15 +751,17 @@ insertKeys<<<std::ceil((float){2}/32.), 32>>>(raw_keys{0}, d_{1}.ref(cuco::inser
 
          std::string newBuffer = MAT(op) + mlirSymbol;
          appendControl(fmt::format("auto {0} = ({1}*)malloc(sizeof({1}) * {2});", newBuffer, type, COUNT(op)));
+         hostFrees.insert(newBuffer);
          appendControl(fmt::format("{1}* d_{0};", newBuffer, type));
          appendControl(fmt::format("cudaMalloc(&d_{0}, sizeof({1}) * {2});", newBuffer, type, COUNT(op)));
+         deviceFrees.insert(fmt::format("d_{0}", newBuffer));
          mainArgs[newBuffer] = type + "*";
          mlirToGlobalSymbol[newBuffer] = "d_" + newBuffer;
          auto key = LoadColumn(columnAttr, KernelType::Main);
          appendKernel(fmt::format("{0}[{2}] = {1};", newBuffer, key, mat_idx(op)), KernelType::Main);
       }
       appendControl(launchKernel(KernelType::Main));
-      appendControl(fmt::format("cudaFree(d_{0});", MAT_IDX(op)));
+      // appendControl(fmt::format("cudaFree(d_{0});", MAT_IDX(op)));
       std::string printStmts;
       for (auto col : materializeOp.getCols()) {
          auto columnAttr = mlir::cast<tuples::ColumnRefAttr>(col);
@@ -883,6 +895,14 @@ insertKeys<<<std::ceil((float){2}/32.), 32>>>(raw_keys{0}, d_{1}.ref(cuco::inser
          stream << line << std::endl;
       }
    }
+   void printFrees(std::ostream& stream) {
+      for (auto df: deviceFrees) {
+         stream << fmt::format("cudaFree({});\n", df);
+      }
+      for (auto hf: hostFrees) {
+         stream << fmt::format("free({});\n", hf);
+      }
+   }
 };
 
 class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<mlir::func::FuncOp>> {
@@ -1001,6 +1021,9 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
       outputFile << "extern \"C\" void control( DBI32Type* d_nation__n_nationkey, DBStringType* d_nation__n_name, DBI32Type* d_nation__n_regionkey, DBStringType* d_nation__n_comment, size_t nation_size, DBI32Type* d_supplier__s_suppkey, DBI32Type* d_supplier__s_nationkey, DBStringType* d_supplier__s_name, DBStringType* d_supplier__s_address, DBStringType* d_supplier__s_phone, DBDecimalType* d_supplier__s_acctbal, DBStringType* d_supplier__s_comment, size_t supplier_size, DBI32Type* d_partsupp__ps_suppkey, DBI32Type* d_partsupp__ps_partkey, DBI32Type* d_partsupp__ps_availqty, DBDecimalType* d_partsupp__ps_supplycost, DBStringType* d_partsupp__ps_comment, size_t partsupp_size, DBI32Type* d_part__p_partkey, DBStringType* d_part__p_name, DBStringType* d_part__p_mfgr, DBStringType* d_part__p_brand, DBStringType* d_part__p_type, DBI32Type* d_part__p_size, DBStringType* d_part__p_container, DBDecimalType* d_part__p_retailprice, DBStringType* d_part__p_comment, size_t part_size, DBI32Type* d_lineitem__l_orderkey, DBI32Type* d_lineitem__l_partkey, DBI32Type* d_lineitem__l_suppkey, DBI64Type* d_lineitem__l_linenumber, DBDecimalType* d_lineitem__l_quantity, DBDecimalType* d_lineitem__l_extendedprice, DBDecimalType* d_lineitem__l_discount, DBDecimalType* d_lineitem__l_tax, DBCharType* d_lineitem__l_returnflag, DBCharType* d_lineitem__l_linestatus, DBDateType* d_lineitem__l_shipdate, DBDateType* d_lineitem__l_commitdate, DBDateType* d_lineitem__l_receiptdate, DBStringType* d_lineitem__l_shipinstruct, DBStringType* d_lineitem__l_shipmode, DBStringType* d_lineitem__comments, size_t lineitem_size, DBI32Type* d_orders__o_orderkey, DBCharType* d_orders__o_orderstatus, DBI32Type* d_orders__o_custkey, DBDecimalType* d_orders__o_totalprice, DBDateType* d_orders__o_orderdate, DBStringType* d_orders__o_orderpriority, DBStringType* d_orders__o_clerk, DBI32Type* d_orders__o_shippriority, DBStringType* d_orders__o_comment, size_t orders_size, DBI32Type* d_customer__c_custkey, DBStringType* d_customer__c_name, DBStringType* d_customer__c_address, DBI32Type* d_customer__c_nationkey, DBStringType* d_customer__c_phone, DBDecimalType* d_customer__c_acctbal, DBStringType* d_customer__c_mktsegment, DBStringType* d_customer__c_comment, size_t customer_size, DBI32Type* d_region__r_regionkey, DBStringType* d_region__r_name, DBStringType* d_region__r_comment, size_t region_size) {\n";
       for (auto code : kernelSchedule) {
          code->printControl(outputFile);
+      }
+      for (auto code: kernelSchedule) {
+         code->printFrees(outputFile);
       }
       outputFile << "}";
       outputFile.close();
