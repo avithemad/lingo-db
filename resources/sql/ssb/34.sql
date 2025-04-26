@@ -10,4 +10,4 @@ and (s_city='UNITED KI1'
    or s_city='UNITED KI5')
 and d_yearmonth = 'Dec1997'
 group by c_city, s_city, d_year
-order by d_year asc, revenue desc;
+order by d_year asc, revenue desc

@@ -8,4 +8,4 @@ and c_region = 'ASIA'
 and s_region = 'ASIA'
 and d_year >= 1992 and d_year <= 1997
 group by c_nation, s_nation, d_year
-order by d_year asc, revenue desc;
+order by d_year asc, revenue desc

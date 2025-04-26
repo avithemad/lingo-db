@@ -6,4 +6,4 @@ and lo_suppkey = s_suppkey
 and p_brand1= 'MFGR#2239'
 and s_region = 'EUROPE'
 group by d_year, p_brand1
-order by d_year, p_brand1;
+order by d_year, p_brand1
