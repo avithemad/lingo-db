@@ -6,7 +6,8 @@ do
     build/lingodb-debug/mlir-db-opt --use-db resources/data/tpch-1 --relalg-query-opt intermediate_mlir/tpch_q$i.mlir  > intermediate_mlir/tpch_q$i.optimized.new.mlir
     if [ $? -eq 0 ]; then 
         echo "Copying..."
-        cp output.cu ../sql-plan-compiler/gpu-db/tpch_auto_gen_v2/q$i.codegen.cu 
+        cp output.cu ../sql-plan-compiler/gpu-db/tpch/q$i.codegen.cu 
+        echo "" > output.cu
     else 
         rm intermediate_mlir/tpch_q$i.optimized.new.mlir
     fi
