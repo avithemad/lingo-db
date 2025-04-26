@@ -20,7 +20,7 @@ where
         and r_name = 'ASIA'
         and o_orderdate >= date '1994-01-01'
         and o_orderdate < date '1995-01-01'
-group by
-        n_name
+group by n_name
 order by
+        n_name,
         revenue desc
