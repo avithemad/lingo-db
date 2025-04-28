@@ -1,6 +1,8 @@
 -- TPC-H Query 7
 
 select
+        supp_nation,
+        cust_nation,
         l_year,
         sum(volume) as revenue
 from
@@ -30,6 +32,10 @@ from
                         and l_shipdate between date '1995-01-01' and date '1996-12-31'
         ) as shipping
 group by
+        supp_nation,
+        cust_nation,
         l_year
 order by
+        supp_nation,
+        cust_nation,
         l_year
