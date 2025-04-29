@@ -19,7 +19,7 @@ int main(int argc, char** argv) {
    }
    std::string inputFileName = std::string(argv[1]);
    std::string directory = std::string(argv[2]);
-   std::cout << "Loading Database from: " << directory << '\n';
+   std::cerr << "Loading Database from: " << directory << '\n';
    auto session = runtime::Session::createSession(directory, eagerLoading.getValue());
 
    lingodb::compiler::support::eval::init();
@@ -27,7 +27,7 @@ int main(int argc, char** argv) {
    auto queryExecutionConfig = execution::createQueryExecutionConfig(runMode, true);
    if (const char* numRuns = std::getenv("QUERY_RUNS")) {
       queryExecutionConfig->executionBackend->setNumRepetitions(std::atoi(numRuns));
-      std::cout << "using " << queryExecutionConfig->executionBackend->getNumRepetitions() << " runs" << std::endl;
+      std::cerr << "using " << queryExecutionConfig->executionBackend->getNumRepetitions() << " runs" << std::endl;
    }
    unsetenv("PERF_BUILDID_DIR");
    queryExecutionConfig->timingProcessor = std::make_unique<execution::TimingPrinter>(inputFileName);

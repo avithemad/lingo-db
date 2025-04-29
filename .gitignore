@@ -23,3 +23,4 @@ operations.parquet
 mlir_venv
 venv
 output.cu
+build*/

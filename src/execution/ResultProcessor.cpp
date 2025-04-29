@@ -4,6 +4,12 @@
 #include <arrow/pretty_print.h>
 #include <arrow/table.h>
 
+#include <arrow/api.h> // Core Arrow
+#include <arrow/csv/api.h> // For CSV API
+#include <arrow/csv/writer.h> // For CSV Writer
+#include <arrow/io/stdio.h> // For StdoutStream
+#include <arrow/result.h> // For arrow::Result
+
 #include "lingodb/execution/ResultProcessing.h"
 #include "lingodb/runtime/ArrowTable.h"
 #include <functional>
@@ -115,12 +121,34 @@ void printTable(const std::shared_ptr<arrow::Table>& table) {
    }
 }
 
+void printTableToCSV(const std::shared_ptr<arrow::Table>& table) {
+   // Do not output anything for insert or copy statements
+   if (table->columns().empty()) {
+      std::cout << "Statement executed successfully." << std::endl;
+      return;
+   }
+   // 2. Get an output stream for stdout
+   arrow::io::StdoutStream output_stream;
+
+   // 3. Configure CSV writing options (using defaults here)
+   //    Default includes header, uses comma delimiter, empty string for nulls
+   auto write_options = arrow::csv::WriteOptions::Defaults();
+   // Example customization: write_options.include_header = false;
+   // Example customization: write_options.delimiter = ';';
+   // Example customization: write_options.null_string = "NA";
+
+   if (!(WriteCSV(*table, write_options, &output_stream).ok())) {
+      std::cerr << "Failed to write table to CSV";
+   }
+}
+
 class TablePrinter : public lingodb::execution::ResultProcessor {
    void process(lingodb::runtime::ExecutionContext* executionContext) override {
       auto resultTable = executionContext->getResultOfType<lingodb::runtime::ArrowTable>(0);
       if (!resultTable) return;
       auto table = resultTable.value()->get();
-      printTable(table);
+      // printTable(table);
+      printTableToCSV(table);
    }
 };
 class BatchedTablePrinter : public lingodb::execution::ResultProcessor {
