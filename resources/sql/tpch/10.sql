@@ -2,13 +2,8 @@
 
 select
         c_custkey,
-        c_name,
         sum(l_extendedprice * (1 - l_discount)) as revenue,
-        c_acctbal,
-        n_name,
-        c_address,
-        c_phone,
-        c_comment
+        c_acctbal
 from
         customer,
         orders,
@@ -23,11 +18,6 @@ where
         and c_nationkey = n_nationkey
 group by
         c_custkey,
-        c_name,
-        c_acctbal,
-        c_phone,
-        n_name,
-        c_address,
-        c_comment
+        c_acctbal
 order by
         revenue desc
