@@ -35,19 +35,19 @@ class TimingPrinter : public TimingProcessor {
       }
       timing["total"] = total;
       std::vector<std::string> printOrder = {"QOpt", "lowerRelAlg", "lowerSubOp", "lowerDB", "lowerDSA", "lowerToLLVM", "toLLVMIR", "llvmOptimize", "llvmCodeGen", "executionTime", "total"};
-      std::cout << std::endl
+      std::cerr << std::endl
                 << std::endl;
-      std::cout << std::setw(10) << "name";
+      std::cerr << std::setw(10) << "name";
       for (auto n : printOrder) {
-         std::cout << std::setw(15) << n;
+         std::cerr << std::setw(15) << n;
       }
-      std::cout << std::endl;
-      std::cout << std::setw(10) << queryName;
+      std::cerr << std::endl;
+      std::cerr << std::setw(10) << queryName;
       for (auto n : printOrder) {
          if (timing.contains(n)) {
-            std::cout << std::setw(15) << timing[n];
+            std::cerr << std::setw(15) << timing[n];
          } else {
-            std::cout << std::setw(15) << "";
+            std::cerr << std::setw(15) << "";
          }
       }
    }

@@ -24,3 +24,4 @@ mlir_venv
 venv
 output.cu
 intermediate_mlir
+build*/
