@@ -33,48 +33,65 @@ enum class ColumnType {
    Direct,
    Mapped
 };
-std::string ToHex(const void* op) {
-   std::stringstream sstream;
-   sstream << std::hex << (unsigned long long) (const void*) op;
-   std::string result = sstream.str();
+
+template <typename ObjType>
+class IdGenerator {
+   std::map<ObjType, std::string> m_objectIds;
+   int32_t m_id = 0;
+
+   public:
+   IdGenerator() {}
+
+   std::string getId(ObjType obj) {
+      if (m_objectIds.find(obj) == m_objectIds.end()) {
+         m_objectIds[obj] = std::to_string(m_id);
+         m_id++;
+      }
+      return m_objectIds[obj];
+   }
+};
+
+std::string GetId(const void* op) {
+   static IdGenerator<const void*> idGen;
+   std::string result = idGen.getId(op);
    return result;
 }
 
 static std::string HT(const void* op) {
-   return "HT_" + ToHex(op);
+   return "HT_" + GetId(op);
 }
 static std::string KEY(const void* op) {
-   return "KEY_" + ToHex(op);
+   return "KEY_" + GetId(op);
 }
 static std::string SLOT(const void* op) {
-   return "SLOT_" + ToHex(op);
+   return "SLOT_" + GetId(op);
 }
 static std::string BUF(const void* op) {
-   return "BUF_" + ToHex(op);
+   return "BUF_" + GetId(op);
 }
 static std::string BUF_IDX(const void* op) {
-   return "BUF_IDX_" + ToHex(op);
+   return "BUF_IDX_" + GetId(op);
 }
 static std::string buf_idx(const void* op) {
-   return "buf_idx_" + ToHex(op);
+   return "buf_idx_" + GetId(op);
 }
 static std::string COUNT(const void* op) {
-   return "COUNT" + ToHex(op);
+   return "COUNT" + GetId(op);
 }
 static std::string MAT(const void* op) {
-   return "MAT" + ToHex(op);
+   return "MAT" + GetId(op);
 }
 static std::string MAT_IDX(const void* op) {
-   return "MAT_IDX" + ToHex(op);
+   return "MAT_IDX" + GetId(op);
 }
 static std::string mat_idx(const void* op) {
-   return "mat_idx" + ToHex(op);
+   return "mat_idx" + GetId(op);
 }
 static std::string slot_first(const void* op) {
-   return "slot_first" + ToHex(op);
+   return "slot_first" + GetId(op);
 }
 static std::string slot_second(const void* op) {
-   return "slot_second" + ToHex(op);
+   return "slot_second" + GetId(op);
 }
 
 template <typename ColumnAttrTy>
@@ -162,8 +179,7 @@ static std::string mlirTypeToCudaType(const mlir::Type& ty) {
       auto charTy = mlir::dyn_cast_or_null<db::CharType>(ty);
       if (charTy.getBytes() > 1) return "DBStringType";
       return "DBCharType";
-   }
-   else if (mlir::isa<db::NullableType>(ty))
+   } else if (mlir::isa<db::NullableType>(ty))
       return mlirTypeToCudaType(mlir::dyn_cast_or_null<db::NullableType>(ty).getType());
    ty.dump();
    assert(false && "unhandled type");
@@ -256,7 +272,7 @@ class TupleStreamCode {
          args += fmt::format("{1}{0}", mlirToGlobalSymbol[p.first], sep);
          sep = ", ";
       }
-      return fmt::format("{0}_{1}<<<std::ceil((float){2}/32.), 32>>>({3});", _kernelName, ToHex((void*) this), size, args);
+      return fmt::format("{0}_{1}<<<std::ceil((float){2}/32.), 32>>>({3});", _kernelName, GetId((void*) this), size, args);
    }
 
    public:
@@ -487,7 +503,7 @@ class TupleStreamCode {
          res += ")";
          return res;
       } else if (auto isNullOp = mlir::dyn_cast_or_null<db::IsNullOp>(op)) {
-         // TODO(avinash): 
+         // TODO(avinash):
          // nullable datatypes not handled for now
          return "false";
       } else if (auto asNullableOp = mlir::dyn_cast_or_null<db::AsNullableOp>(op)) {
@@ -558,7 +574,7 @@ class TupleStreamCode {
          }
          appendKernel(sep, kernelType);
          if (i < keys.size() - 1) {
-            tuples::ColumnRefAttr next_key = mlir::cast<tuples::ColumnRefAttr>(keys[i+1]);
+            tuples::ColumnRefAttr next_key = mlir::cast<tuples::ColumnRefAttr>(keys[i + 1]);
             auto next_base_type = mlirTypeToCudaType(next_key.getColumn().type);
 
             sep = fmt::format("{0} <<= {1};", KEY(op), std::to_string(allowedKeysToSize[next_base_type] * 8));
@@ -711,7 +727,7 @@ d_{1}.retrieve_all(keys_{0}.begin(), vals_{0}.begin());\n\
 d_{1}.clear();\n\
 int64_t* raw_keys{0} = thrust::raw_pointer_cast(keys_{0}.data());\n\
 insertKeys<<<std::ceil((float){2}/32.), 32>>>(raw_keys{0}, d_{1}.ref(cuco::insert), {2});",
-                                ToHex(op), HT(op), COUNT(op)));
+                                GetId(op), HT(op), COUNT(op)));
    }
    void AggregateInHashTable(mlir::Operation* op) {
       auto aggOp = mlir::dyn_cast_or_null<relalg::AggregationOp>(op);
@@ -977,7 +993,7 @@ insertKeys<<<std::ceil((float){2}/32.), 32>>>(raw_keys{0}, d_{1}.ref(cuco::inser
          }
          stream << ">\n";
       }
-      stream << fmt::format("__global__ void {0}_{1}(", _kernelName, ToHex((void*) this));
+      stream << fmt::format("__global__ void {0}_{1}(", _kernelName, GetId((void*) this));
       std::string sep = "";
       for (auto p : _args) {
          stream << fmt::format("{0}{1} {2}", sep, p.second, p.first);
@@ -1124,10 +1140,10 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
 // --enable this line for tpch
 #ifdef TPCH
       outputFile << "extern \"C\" void control (DBI32Type * d_nation__n_nationkey, DBStringType * d_nation__n_name, DBI32Type * d_nation__n_regionkey, DBStringType * d_nation__n_comment, size_t nation_size, DBI32Type * d_supplier__s_suppkey, DBI32Type * d_supplier__s_nationkey, DBStringType * d_supplier__s_name, DBStringType * d_supplier__s_address, DBStringType * d_supplier__s_phone, DBDecimalType * d_supplier__s_acctbal, DBStringType * d_supplier__s_comment, size_t supplier_size, DBI32Type * d_partsupp__ps_suppkey, DBI32Type * d_partsupp__ps_partkey, DBI32Type * d_partsupp__ps_availqty, DBDecimalType * d_partsupp__ps_supplycost, DBStringType * d_partsupp__ps_comment, size_t partsupp_size, DBI32Type * d_part__p_partkey, DBStringType * d_part__p_name, DBStringType * d_part__p_mfgr, DBStringType * d_part__p_brand, DBStringType * d_part__p_type, DBI32Type * d_part__p_size, DBStringType * d_part__p_container, DBDecimalType * d_part__p_retailprice, DBStringType * d_part__p_comment, size_t part_size, DBI32Type * d_lineitem__l_orderkey, DBI32Type * d_lineitem__l_partkey, DBI32Type * d_lineitem__l_suppkey, DBI64Type * d_lineitem__l_linenumber, DBDecimalType * d_lineitem__l_quantity, DBDecimalType * d_lineitem__l_extendedprice, DBDecimalType * d_lineitem__l_discount, DBDecimalType * d_lineitem__l_tax, DBCharType * d_lineitem__l_returnflag, DBCharType * d_lineitem__l_linestatus, DBI32Type * d_lineitem__l_shipdate, DBI32Type * d_lineitem__l_commitdate, DBI32Type * d_lineitem__l_receiptdate, DBStringType * d_lineitem__l_shipinstruct, DBStringType * d_lineitem__l_shipmode, DBStringType * d_lineitem__comments, size_t lineitem_size, DBI32Type * d_orders__o_orderkey, DBCharType * d_orders__o_orderstatus, DBI32Type * d_orders__o_custkey, DBDecimalType * d_orders__o_totalprice, DBI32Type * d_orders__o_orderdate, DBStringType * d_orders__o_orderpriority, DBStringType * d_orders__o_clerk, DBI32Type * d_orders__o_shippriority, DBStringType * d_orders__o_comment, size_t orders_size, DBI32Type * d_customer__c_custkey, DBStringType * d_customer__c_name, DBStringType * d_customer__c_address, DBI32Type * d_customer__c_nationkey, DBStringType * d_customer__c_phone, DBDecimalType * d_customer__c_acctbal, DBStringType * d_customer__c_mktsegment, DBStringType * d_customer__c_comment, size_t customer_size, DBI32Type * d_region__r_regionkey, DBStringType * d_region__r_name, DBStringType * d_region__r_comment, size_t region_size, DBI16Type* d_nation__n_name_encoded, std::unordered_map<DBI16Type, DBStringType> &nation__n_name_map, std::unordered_map<DBI16Type, DBStringType> &n1___n_name_map, std::unordered_map<DBI16Type, DBStringType> &n2___n_name_map) {\n";
-#endif 
+#endif
 #ifdef SSB
       outputFile << "extern \"C\" void control (DBI32Type* d_supplier__s_suppkey, DBStringType* d_supplier__s_name, DBStringType* d_supplier__s_address, DBStringType* d_supplier__s_city, DBStringType* d_supplier__s_nation, DBStringType* d_supplier__s_region, DBStringType* d_supplier__s_phone, size_t supplier_size, DBI32Type* d_part__p_partkey, DBStringType* d_part__p_name, DBStringType* d_part__p_mfgr, DBStringType* d_part__p_category, DBStringType* d_part__p_brand1, DBStringType* d_part__p_color, DBStringType* d_part__p_type, DBI32Type* d_part__p_size, DBStringType* d_part__p_container, size_t part_size, DBI32Type* d_lineorder__lo_orderkey, DBI32Type* d_lineorder__lo_linenumber, DBI32Type* d_lineorder__lo_custkey, DBI32Type* d_lineorder__lo_partkey, DBI32Type* d_lineorder__lo_suppkey, DBDateType* d_lineorder__lo_orderdate, DBDateType* d_lineorder__lo_commitdate, DBStringType* d_lineorder__lo_orderpriority, DBCharType* d_lineorder__lo_shippriority, DBI32Type* d_lineorder__lo_quantity, DBDecimalType* d_lineorder__lo_extendedprice, DBDecimalType* d_lineorder__lo_ordtotalprice, DBDecimalType* d_lineorder__lo_revenue, DBDecimalType* d_lineorder__lo_supplycost, DBI32Type* d_lineorder__lo_discount, DBI32Type* d_lineorder__lo_tax, DBStringType* d_lineorder__lo_shipmode, size_t lineorder_size, DBI32Type* d_date__d_datekey, DBStringType* d_date__d_date, DBStringType* d_date__d_dayofweek, DBStringType* d_date__d_month, DBI32Type* d_date__d_year, DBI32Type* d_date__d_yearmonthnum, DBStringType* d_date__d_yearmonth, DBI32Type* d_date__d_daynuminweek, DBI32Type* d_date__d_daynuminmonth, DBI32Type* d_date__d_daynuminyear, DBI32Type* d_date__d_monthnuminyear, DBI32Type* d_date__d_weeknuminyear, DBStringType* d_date__d_sellingseason, DBI32Type* d_date__d_lastdayinweekfl, DBI32Type* d_date__d_lastdayinmonthfl, DBI32Type* d_date__d_holidayfl, DBI32Type* d_date__d_weekdayfl, size_t date_size, DBI32Type* d_customer__c_custkey, DBStringType* d_customer__c_name, DBStringType* d_customer__c_address, DBStringType* d_customer__c_city, DBStringType* d_customer__c_nation, DBStringType* d_customer__c_region, DBStringType* d_customer__c_phone, DBStringType* d_customer__c_mktsegment, size_t customer_size, DBI32Type* d_region__r_regionkey, DBStringType* d_region__r_name, DBStringType* d_region__r_comment, size_t region_size, DBI16Type* d_part__p_brand1_encoded, DBI16Type* d_supplier__s_nation_encoded, DBI16Type* d_customer__c_city_encoded, DBI16Type* d_supplier__s_city_encoded, DBI16Type* d_customer__c_nation_encoded, DBI16Type* d_part__p_category_encoded, std::unordered_map<DBI16Type, std::string>& part__p_brand1_map, std::unordered_map<DBI16Type, std::string>& supplier__s_nation_map, std::unordered_map<DBI16Type, std::string>& customer__c_city_map, std::unordered_map<DBI16Type, std::string>& supplier__s_city_map, std::unordered_map<DBI16Type, std::string>& customer__c_nation_map, std::unordered_map<DBI16Type, std::string>& part__p_category_map) {\n";
-#endif 
+#endif
 
       for (auto code : kernelSchedule) {
          code->printControl(outputFile);
