@@ -205,7 +205,9 @@ def compare_csv_files_fuzzy(file1_path, file2_path, float_tolerance=1e-5, percen
         # 2a. Compare Integer-Like Numeric Columns Exactly
         if len(integer_like_cols) > 0:
             df1_int_like = df1_sorted[integer_like_cols]
+            df1_int_like = df1_int_like.astype('Int64') # Use 'Int64' for nullable integers
             df2_int_like = df2_sorted[integer_like_cols]
+            df2_int_like = df2_int_like.astype('Int64') # Use 'Int64' for nullable integers
             if not df1_int_like.equals(df2_int_like):
                 print("Info: Difference found in integer-like numeric columns.")
                 # Find the first difference (using similar logic as non-numeric)
