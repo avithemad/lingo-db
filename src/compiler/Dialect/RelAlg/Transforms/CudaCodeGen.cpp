@@ -8,8 +8,9 @@
 #include "lingodb/compiler/Dialect/TupleStream/TupleStreamOps.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/IRMapping.h"
-#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "mlir/Pass/PassManager.h"
 
 #include <fstream>
 #include <iostream>
@@ -1171,3 +1172,24 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
 
 std::unique_ptr<mlir::Pass>
 relalg::createCudaCodeGenPass() { return std::make_unique<CudaCodeGen>(); }
+
+static bool gCudaCodeGenEnabled = false;
+
+void relalg::setCudaCodeGenEnabled(bool enabled) {
+   gCudaCodeGenEnabled = enabled;
+}
+
+void relalg::addCudaCodeGenPass(mlir::OpPassManager& pm) {
+   if (gCudaCodeGenEnabled) {
+      pm.addNestedPass<mlir::func::FuncOp>(createCudaCodeGenPass());
+   }
+}
+
+void relalg::conditionallyEnableCudaCodeGen(int argc, char** argv) {
+   for (int i = 0; i < argc; i++) {
+      if (std::string(argv[i]) == "--gen-cuda-code") {
+         gCudaCodeGenEnabled = true;
+         break;
+      }
+   }
+}

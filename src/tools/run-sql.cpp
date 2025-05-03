@@ -1,3 +1,4 @@
+#include "lingodb/compiler/Dialect/RelAlg/Passes.h"
 #include "lingodb/compiler/mlir-support/eval.h"
 #include "lingodb/execution/Execution.h"
 #include "lingodb/execution/Timing.h"
@@ -19,6 +20,10 @@ int main(int argc, char** argv) {
    }
    std::string inputFileName = std::string(argv[1]);
    std::string directory = std::string(argv[2]);
+
+   // Enable cuda code generation if required
+   lingodb::compiler::dialect::relalg::conditionallyEnableCudaCodeGen(argc, argv);
+
    std::cerr << "Loading Database from: " << directory << '\n';
    auto session = runtime::Session::createSession(directory, eagerLoading.getValue());
 

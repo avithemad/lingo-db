@@ -1,4 +1,3 @@
-#include "lingodb/execution/BackendPasses.h"
 #include "lingodb/compiler/Conversion/DBToStd/DBToStd.h"
 #include "lingodb/compiler/Conversion/DSAToStd/DSAToStd.h"
 #include "lingodb/compiler/Conversion/RelAlgToSubOp/RelAlgToSubOpPass.h"
@@ -12,6 +11,7 @@
 #include "lingodb/compiler/Dialect/TupleStream/TupleStreamDialect.h"
 #include "lingodb/compiler/Dialect/util/UtilDialect.h"
 #include "lingodb/compiler/mlir-support/eval.h"
+#include "lingodb/execution/BackendPasses.h"
 #include "mlir/Dialect/Async/IR/Async.h"
 #include "mlir/Dialect/DLTI/DLTI.h"
 #include "mlir/Dialect/Func/Extensions/AllExtensions.h"
@@ -46,6 +46,10 @@ int main(int argc, char** argv) {
          argv = argvReduced;
       }
    }
+
+   // Enable cuda code generation if required
+   relalg::conditionallyEnableCudaCodeGen(argc, argv);
+
    mlir::registerAllPasses();
 
    relalg::registerRelAlgToSubOpConversionPasses();

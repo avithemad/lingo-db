@@ -4,15 +4,15 @@
 #include "mlir/Transforms/Passes.h"
 
 #include <iostream>
-namespace{
-std::shared_ptr< lingodb::runtime::Catalog> staticCatalog = {};
+namespace {
+std::shared_ptr<lingodb::runtime::Catalog> staticCatalog = {};
 } // end anonymous namespace
 using namespace lingodb::compiler::dialect;
-void relalg::setStaticCatalog(std::shared_ptr< lingodb::runtime::Catalog> catalog) {
+void relalg::setStaticCatalog(std::shared_ptr<lingodb::runtime::Catalog> catalog) {
    std::cerr << "Warning: setting static catalog, should only be used in combination with mlir-db-opt" << std::endl;
    staticCatalog = catalog;
 }
-void relalg::createQueryOptPipeline(mlir::OpPassManager& pm,  lingodb::runtime::Catalog* catalog) {
+void relalg::createQueryOptPipeline(mlir::OpPassManager& pm, lingodb::runtime::Catalog* catalog) {
    pm.addNestedPass<mlir::func::FuncOp>(relalg::createSimplifyAggregationsPass());
    pm.addNestedPass<mlir::func::FuncOp>(relalg::createExtractNestedOperatorsPass());
    pm.addPass(mlir::createCSEPass());
@@ -42,7 +42,7 @@ void relalg::createQueryOptPipeline(mlir::OpPassManager& pm,  lingodb::runtime::
    }
    pm.addNestedPass<mlir::func::FuncOp>(relalg::createIntroduceTmpPass());
    pm.addPass(mlir::createCanonicalizerPass());
-   pm.addNestedPass<mlir::func::FuncOp>(relalg::createCudaCodeGenPass());
+   relalg::addCudaCodeGenPass(pm);
 }
 void relalg::registerQueryOptimizationPasses() {
    ::mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
