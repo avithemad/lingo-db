@@ -42,7 +42,9 @@ void relalg::createQueryOptPipeline(mlir::OpPassManager& pm,  lingodb::runtime::
    }
    pm.addNestedPass<mlir::func::FuncOp>(relalg::createIntroduceTmpPass());
    pm.addPass(mlir::createCanonicalizerPass());
-   pm.addNestedPass<mlir::func::FuncOp>(relalg::createCudaCodeGenPass());
+   // pm.addNestedPass<mlir::func::FuncOp>(relalg::createCudaCodeGenPass());
+   pm.addNestedPass<mlir::func::FuncOp>(relalg::createCudaCodeGenNoCountPass());
+   // pm.addNestedPass<mlir::func::FuncOp>(relalg::createCudaCrystalCodeGenPass());
 }
 void relalg::registerQueryOptimizationPasses() {
    ::mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
@@ -87,9 +89,15 @@ void relalg::registerQueryOptimizationPasses() {
    ::mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
       return relalg::createTrackTuplesPass();
    });
+   // ::mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
+   //    return relalg::createCudaCodeGenPass();
+   // });
    ::mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
-      return relalg::createCudaCodeGenPass();
+      return relalg::createCudaCodeGenNoCountPass();
    });
+   // ::mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
+   //    return relalg::createCudaCrystalCodeGenPass();
+   // });
    mlir::PassPipelineRegistration<mlir::EmptyPipelineOptions>(
       "relalg-query-opt",
       "",
