@@ -272,7 +272,7 @@ class TupleStreamCode {
          args += fmt::format("{1}{0}", mlirToGlobalSymbol[p.first], sep);
          sep = ", ";
       }
-      return fmt::format("{0}_{1}<<<std::ceil((float){2}/128.), 128>>>({3});", _kernelName, ToHex((void*) this), size, args);
+      return fmt::format("{0}_{1}<<<std::ceil((float){2}/128.), 128>>>({3});", _kernelName, GetId((void*) this), size, args);
    }
 
    public:
@@ -739,7 +739,7 @@ d_{1}.retrieve_all(keys_{0}.begin(), vals_{0}.begin());\n\
 d_{1}.clear();\n\
 int64_t* raw_keys{0} = thrust::raw_pointer_cast(keys_{0}.data());\n\
 insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::insert), {2});",
-                                ToHex(op), HT(op), COUNT(op)));
+                                GetId(op), HT(op), COUNT(op)));
    }
    void AggregateInHashTable(mlir::Operation* op) {
       auto aggOp = mlir::dyn_cast_or_null<relalg::AggregationOp>(op);
