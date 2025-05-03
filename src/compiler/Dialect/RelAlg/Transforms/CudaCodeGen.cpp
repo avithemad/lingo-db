@@ -256,7 +256,7 @@ class TupleStreamCode {
          args += fmt::format("{1}{0}", mlirToGlobalSymbol[p.first], sep);
          sep = ", ";
       }
-      return fmt::format("{0}_{1}<<<std::ceil((float){2}/32.), 32>>>({3});", _kernelName, ToHex((void*) this), size, args);
+      return fmt::format("{0}_{1}<<<std::ceil((float){2}/128.), 128>>>({3});", _kernelName, ToHex((void*) this), size, args);
    }
 
    public:
@@ -627,6 +627,8 @@ class TupleStreamCode {
       deviceFrees.insert(fmt::format("d_{0}", BUF(op)));
       appendControl(fmt::format("auto d_{0} = cuco::experimental::static_multimap{{ (int){1}*2, cuco::empty_key{{(int64_t)-1}},cuco::empty_value{{(int64_t)-1}},thrust::equal_to<int64_t>{{}},cuco::linear_probing<1, cuco::default_hash_function<int64_t>>() }};",
                                 HT(op), COUNT(op)));
+      // appendControl(fmt::format("auto d_{0} = cuco::static_map{{ (int){1}*2, cuco::empty_key{{(int64_t)-1}},cuco::empty_value{{(int64_t)-1}},thrust::equal_to<int64_t>{{}},cuco::linear_probing<1, cuco::default_hash_function<int64_t>>() }};",
+      //                           HT(op), COUNT(op)));
       appendControl(launchKernel(KernelType::Main));
       // appendControl(fmt::format("cudaFree(d_{0});", BUF_IDX(op)));
       return columnData;
@@ -639,6 +641,10 @@ class TupleStreamCode {
       auto key = MakeKeys(op, keys, KernelType::Main);
       appendKernel("//Probe Hash table", KernelType::Main);
       appendKernel("//Probe Hash table", KernelType::Count);
+      // appendKernel(fmt::format("auto {0} = {1}.find({2});", SLOT(op), HT(op), key), KernelType::Main);
+      // appendKernel(fmt::format("auto {0} = {1}.find({2});", SLOT(op), HT(op), key), KernelType::Count);
+      // appendKernel(fmt::format("if ({0} == {1}.end()) return;", SLOT(op), HT(op)), KernelType::Main);
+      // appendKernel(fmt::format("if ({0} == {1}.end()) return;", SLOT(op), HT(op)), KernelType::Count);
       appendKernel(fmt::format("{0}.for_each({1}, [&] __device__ (auto const {2}) {{", HT(op), key, SLOT(op)), KernelType::Main);
       appendKernel(fmt::format("auto const [{0}, {1}] = {2};", slot_first(op), slot_second(op), SLOT(op)), KernelType::Main);
       appendKernel(fmt::format("{0}.for_each({1}, [&] __device__ (auto const {2}) {{\n", HT(op), key, SLOT(op)), KernelType::Count);
@@ -656,6 +662,11 @@ class TupleStreamCode {
       }
       for (auto colData : leftColumnData) {
          if (colData.second->type == ColumnType::Direct) {
+            // colData.second->rid = fmt::format("{3}[{0}->second * {1} + {2}]",
+            //                                   SLOT(op),
+            //                                   std::to_string(baseRelations.size()),
+            //                                   streamIdToBufId[colData.second->streamId],
+            //                                   BUF(op));
             colData.second->rid = fmt::format("{3}[{0} * {1} + {2}]",
                                               slot_second(op),
                                               std::to_string(baseRelations.size()),
@@ -671,6 +682,7 @@ class TupleStreamCode {
       mainArgs[BUF(op)] = "uint64_t*";
       countArgs[HT(op)] = "HASHTABLE_PROBE";
       countArgs[BUF(op)] = "uint64_t*";
+      // mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::find)", HT(op));
       mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::for_each)", HT(op));
       mlirToGlobalSymbol[BUF(op)] = fmt::format("d_{}", BUF(op));
    }
@@ -710,7 +722,7 @@ cuco::linear_probing<1, cuco::default_hash_function<int64_t>>() }};",
 d_{1}.retrieve_all(keys_{0}.begin(), vals_{0}.begin());\n\
 d_{1}.clear();\n\
 int64_t* raw_keys{0} = thrust::raw_pointer_cast(keys_{0}.data());\n\
-insertKeys<<<std::ceil((float){2}/32.), 32>>>(raw_keys{0}, d_{1}.ref(cuco::insert), {2});",
+insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::insert), {2});",
                                 ToHex(op), HT(op), COUNT(op)));
    }
    void AggregateInHashTable(mlir::Operation* op) {
