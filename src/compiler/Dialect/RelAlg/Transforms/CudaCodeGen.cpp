@@ -1185,10 +1185,16 @@ void relalg::addCudaCodeGenPass(mlir::OpPassManager& pm) {
    }
 }
 
-void relalg::conditionallyEnableCudaCodeGen(int argc, char** argv) {
+void relalg::conditionallyEnableCudaCodeGen(int& argc, char** argv) {
    for (int i = 0; i < argc; i++) {
       if (std::string(argv[i]) == "--gen-cuda-code") {
          gCudaCodeGenEnabled = true;
+
+         // Remove --gen-cuda-code from the argument list
+         for (int j = i; j < argc - 1; j++) {
+            argv[j] = argv[j + 1];
+         }
+         argc--;
          break;
       }
    }
