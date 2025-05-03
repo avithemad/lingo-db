@@ -319,6 +319,10 @@ if __name__ == "__main__":
 	are_equal, message = compare_csv_files_fuzzy(csv_file1, csv_file2, float_tolerance=float_tolerance) 
 	print(f"Comparison result: {are_equal}")
 	print(f"Message: {message}")
+    
+	# if are_equal is False, exit with non-zero status
+	if not are_equal:
+		sys.exit(1)
      
 	def test_compare():
 		# --- Example Usage (as used in the last execution) ---

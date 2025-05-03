@@ -3,7 +3,7 @@
 # The first argument is the directory where sql-plan-compiler is
 SQL_PLAN_COMPILER_DIR="$1"
 if [ -z "$SQL_PLAN_COMPILER_DIR" ]; then
-  echo "Usage: $0 <sql-plan-compiler-dir>"
+  echo "Usage: $0 <sql-plan-compiler-dir> <cuco-src-path>"
   exit 1
 fi
 
@@ -37,7 +37,7 @@ fi
 
 # List of queries to run - 1, 3, 5, 6, 7, 8, 9
 # QUERIES=(1 3 5 6 7 9 13)
-QUERIES=(13)
+QUERIES=(1 3 5 6 7 9 13)
 
 # Iterate over the queries
 for QUERY in "${QUERIES[@]}"; do
@@ -73,4 +73,31 @@ for QUERY in "${QUERIES[@]}"; do
   PYTHON_CMD="python $SCRIPT_DIR/compare_tpch_outputs.py $OUTPUT_FILE $SQL_PLAN_COMPILER_DIR/gpu-db/tpch/cuda-tpch-$QUERY.csv"
   echo $PYTHON_CMD
   $PYTHON_CMD
+
+  # If the comparison fails, add query to the failed list
+  if [ $? -ne 0 ]; then
+    echo "Query $QUERY failed"
+    FAILED_QUERIES+=($QUERY)
+  else
+    echo "Query $QUERY passed"
+    PASSED_QUERIES+=($QUERY)
+  fi
 done
+
+# Print the results
+# Print some new lines and then a seperator
+echo -e "\n"
+echo "=============================="
+echo "TPCH TEST RESULTS"
+echo "=============================="
+echo "Passed queries: ${PASSED_QUERIES[@]}"
+echo "Failed queries: ${FAILED_QUERIES[@]}"
+echo -e "\n"
+if [ ${#FAILED_QUERIES[@]} -eq 0 ]; then
+  # Print "TEST PASSED" in green
+  echo -e "\033[0;32mTEST PASSED!\033[0m"
+else
+  # Print "TEST FAILED" in red
+  echo -e "\033[0;31mTEST FAILED!\033[0m"
+  exit 1
+fi
