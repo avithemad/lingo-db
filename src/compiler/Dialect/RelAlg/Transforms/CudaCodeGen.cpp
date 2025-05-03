@@ -1174,14 +1174,17 @@ std::unique_ptr<mlir::Pass>
 relalg::createCudaCodeGenPass() { return std::make_unique<CudaCodeGen>(); }
 
 static bool gCudaCodeGenEnabled = false;
+static bool gCudaCodeGenNoCountEnabled = false;
+static bool gCudaCrystalCodeGenEnabled = false;
 
-void relalg::setCudaCodeGenEnabled(bool enabled) {
-   gCudaCodeGenEnabled = enabled;
-}
 
 void relalg::addCudaCodeGenPass(mlir::OpPassManager& pm) {
    if (gCudaCodeGenEnabled) {
       pm.addNestedPass<mlir::func::FuncOp>(createCudaCodeGenPass());
+   } else if (gCudaCodeGenNoCountEnabled) {
+      pm.addNestedPass<mlir::func::FuncOp>(createCudaCodeGenNoCountPass());
+   } else if (gCudaCrystalCodeGenEnabled) {
+      pm.addNestedPass<mlir::func::FuncOp>(createCudaCrystalCodeGenPass());
    }
 }
 
@@ -1189,6 +1192,12 @@ void relalg::conditionallyEnableCudaCodeGen(int argc, char** argv) {
    for (int i = 0; i < argc; i++) {
       if (std::string(argv[i]) == "--gen-cuda-code") {
          gCudaCodeGenEnabled = true;
+         break;
+      } else if (std::string(argv[i]) == "--gen-cuda-code-no-count") {
+         gCudaCodeGenNoCountEnabled = true;
+         break;
+      } else if (std::string(argv[i]) == "--gen-cuda-crystal-code") {
+         gCudaCrystalCodeGenEnabled = true;
          break;
       }
    }
