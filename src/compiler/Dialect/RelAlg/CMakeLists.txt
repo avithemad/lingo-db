@@ -4,6 +4,8 @@ add_mlir_dialect_library(MLIRRelAlg
         RelAlgOpsEnums.cpp
         OperatorInterfaceImpl.cpp
         Transforms/CudaCodeGen.cpp
+        Transforms/CudaCodeGenNoCount.cpp
+        Transforms/CudaCrystalCodeGen.cpp
         Transforms/MetaData.cpp
         Transforms/InferNotNullConditions.cpp
         Transforms/ColumnFolding.cpp

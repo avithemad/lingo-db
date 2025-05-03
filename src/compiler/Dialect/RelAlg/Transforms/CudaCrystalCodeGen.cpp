@@ -8,9 +8,8 @@
 #include "lingodb/compiler/Dialect/TupleStream/TupleStreamOps.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/IRMapping.h"
-#include "mlir/Pass/PassManager.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 #include <fstream>
 #include <iostream>
@@ -34,7 +33,6 @@ enum class ColumnType {
    Direct,
    Mapped
 };
-
 template <typename ObjType>
 class IdGenerator {
    std::map<ObjType, std::string> m_objectIds;
@@ -176,11 +174,9 @@ static std::string mlirTypeToCudaType(const mlir::Type& ty) {
       return "DBDecimalType"; // TODO(avinash, p3): change appropriately to float or double based on decimal type's parameters
    else if (mlir::isa<db::DateType>(ty))
       return "DBDateType";
-   else if (mlir::isa<db::CharType>(ty)) {
-      auto charTy = mlir::dyn_cast_or_null<db::CharType>(ty);
-      if (charTy.getBytes() > 1) return "DBStringType";
+   else if (mlir::isa<db::CharType>(ty))
       return "DBCharType";
-   } else if (mlir::isa<db::NullableType>(ty))
+   else if (mlir::isa<db::NullableType>(ty))
       return mlirTypeToCudaType(mlir::dyn_cast_or_null<db::NullableType>(ty).getType());
    ty.dump();
    assert(false && "unhandled type");
@@ -273,7 +269,7 @@ class TupleStreamCode {
          args += fmt::format("{1}{0}", mlirToGlobalSymbol[p.first], sep);
          sep = ", ";
       }
-      return fmt::format("{0}_{1}<<<std::ceil((float){2}/128.), 128>>>({3});", _kernelName, GetId((void*) this), size, args);
+      return fmt::format("{0}_{1}<<<std::ceil((float){2}/32.), 32>>>({3});", _kernelName, GetId((void*) this), size, args);
    }
 
    public:
@@ -297,13 +293,6 @@ class TupleStreamCode {
          ColumnMetadata* metadata = new ColumnMetadata(mlirSymbol, ColumnType::Direct, StreamId, globalSymbol);
          metadata->rid = "tid";
          columnData[mlirSymbol] = metadata;
-
-         if (mlirTypeToCudaType(detail.type) == "DBStringType") {
-            ColumnMetadata* encoded_metadata = new ColumnMetadata(mlirSymbol + "_encoded", ColumnType::Direct, StreamId, globalSymbol + "_encoded");
-            encoded_metadata->rid = "tid";
-            columnData[mlirSymbol + "_encoded"] = encoded_metadata;
-            mlirToGlobalSymbol[mlirSymbol + "_encoded"] = globalSymbol + "_encoded";
-         }
       }
       id = StreamId;
       StreamId++;
@@ -327,39 +316,21 @@ class TupleStreamCode {
       auto computedCols = aggOp.getComputedCols();
       for (auto& col : groupByKeys) {
          ColumnDetail detail(mlir::cast<tuples::ColumnRefAttr>(col));
-         if (mlirTypeToCudaType(detail.type) == "DBStringType") {
-            auto mlirSymbol = detail.getMlirSymbol() + "_encoded";
-            auto globalSymbol = fmt::format("d_{0}", KEY(op) + mlirSymbol);
-            mlirToGlobalSymbol[mlirSymbol] = globalSymbol;
-            ColumnMetadata* encoded_metadata = new ColumnMetadata(mlirSymbol, ColumnType::Direct, StreamId, globalSymbol);
-            encoded_metadata->rid = "tid";
-            columnData[mlirSymbol] = encoded_metadata;
-         } else {
-            auto mlirSymbol = detail.getMlirSymbol();
-            auto globalSymbol = fmt::format("d_{0}", KEY(op) + mlirSymbol);
-            mlirToGlobalSymbol[mlirSymbol] = globalSymbol;
-            ColumnMetadata* metadata = new ColumnMetadata(mlirSymbol, ColumnType::Direct, StreamId, globalSymbol);
-            metadata->rid = "tid";
-            columnData[mlirSymbol] = metadata;
-         }
+         auto mlirSymbol = detail.getMlirSymbol();
+         auto globalSymbol = fmt::format("d_{0}", KEY(op) + mlirSymbol);
+         mlirToGlobalSymbol[mlirSymbol] = globalSymbol;
+         ColumnMetadata* metadata = new ColumnMetadata(mlirSymbol, ColumnType::Direct, StreamId, globalSymbol);
+         metadata->rid = "tid";
+         columnData[mlirSymbol] = metadata;
       }
       for (auto& col : computedCols) {
          ColumnDetail detail(mlir::cast<tuples::ColumnDefAttr>(col));
-         if (mlirTypeToCudaType(detail.type) == "DBStringType") {
-            auto mlirSymbol = detail.getMlirSymbol() + "_encoded";
-            auto globalSymbol = fmt::format("d_{0}", mlirSymbol);
-            mlirToGlobalSymbol[mlirSymbol] = globalSymbol;
-            ColumnMetadata* encoded_metadata = new ColumnMetadata(mlirSymbol, ColumnType::Direct, StreamId, globalSymbol);
-            encoded_metadata->rid = "tid";
-            columnData[mlirSymbol + "_encoded"] = encoded_metadata;
-         } else {
-            auto mlirSymbol = detail.getMlirSymbol();
-            auto globalSymbol = fmt::format("d_{0}", mlirSymbol);
-            mlirToGlobalSymbol[mlirSymbol] = globalSymbol;
-            ColumnMetadata* metadata = new ColumnMetadata(mlirSymbol, ColumnType::Direct, StreamId, globalSymbol);
-            metadata->rid = "tid";
-            columnData[mlirSymbol] = metadata;
-         }
+         auto mlirSymbol = detail.getMlirSymbol();
+         auto globalSymbol = fmt::format("d_{0}", mlirSymbol);
+         mlirToGlobalSymbol[mlirSymbol] = globalSymbol;
+         ColumnMetadata* metadata = new ColumnMetadata(mlirSymbol, ColumnType::Direct, StreamId, globalSymbol);
+         metadata->rid = "tid";
+         columnData[mlirSymbol] = metadata;
       }
       id = StreamId;
       StreamId++;
@@ -378,46 +349,38 @@ class TupleStreamCode {
             new ColumnMetadata(columnData[detailRef.getMlirSymbol()]);
       }
    }
-   template <int enc = 0>
    std::string LoadColumn(const tuples::ColumnRefAttr& attr, KernelType ty) {
       ColumnDetail detail(attr);
-      if (enc != 0) detail.column += "_encoded"; // use for string encoded columns
+      std::string columnType = mlirTypeToCudaType(detail.type);
       auto mlirSymbol = detail.getMlirSymbol();
 
       if (columnData.find(mlirSymbol) == columnData.end()) {
-         std::clog << mlirSymbol << std::endl;
          assert(false && "Column ref not in tuple stream");
       }
-      auto cudaId = fmt::format("reg_{0}", mlirSymbol);
+      auto cudaId = fmt::format("reg__{0}[ITEMS_PER_THREAD]", mlirSymbol);
       if (ty == KernelType::Main && loadedColumns.find(mlirSymbol) != loadedColumns.end()) {
          return cudaId;
       } else if (ty == KernelType::Count && loadedCountColumns.find(mlirSymbol) != loadedCountColumns.end()) {
          return cudaId;
       }
       if (ty == KernelType::Main)
-         loadedColumns.insert(mlirSymbol);
+      loadedColumns.insert(mlirSymbol);
       else
-         loadedCountColumns.insert(mlirSymbol);
+      loadedCountColumns.insert(mlirSymbol);
       auto colData = columnData[mlirSymbol];
       if (colData->type == ColumnType::Mapped) {
          for (auto dep : colData->dependencies) {
             LoadColumn(dep, ty);
          }
       }
-      appendKernel(fmt::format("auto {1} = {0};", colData->loadExpression + (colData->type == ColumnType::Direct ? "[" + colData->rid + "]" : ""), cudaId), ty);
+      appendKernel(fmt::format("{0} reg__{1}[ITEMS_PER_THREAD];", columnType, mlirSymbol), ty);
+      appendKernel(fmt::format("BlockLoad<{4}, BLOCK_THREADS, ITEMS_PER_THREAD>({0}, {1}, {2}, {3});", colData->loadExpression, cudaId, "blockIdx.x * TILE_SIZE", "TILE_SIZE", columnType), ty);
+      // appendKernel(fmt::format("auto {1} = {0};", colData->loadExpression + (colData->type == ColumnType::Direct ? "[" + colData->rid + "]" : ""), cudaId), ty);
       if (colData->type == ColumnType::Direct) {
-         auto cudaTy = mlirTypeToCudaType(detail.type);
          if (ty == KernelType::Main) {
-            auto cudaTy = mlirTypeToCudaType(detail.type);
-            if (enc == 0)
-               mainArgs[mlirSymbol] = cudaTy + "*"; // columns are always a 1d array
-            else
-               mainArgs[mlirSymbol] = "DBI16Type*";
+            mainArgs[mlirSymbol] = mlirTypeToCudaType(detail.type) + "*"; // columns are always a 1d array
          } else {
-            if (enc == 0)
-               countArgs[mlirSymbol] = cudaTy + "*"; // columns are always a 1d array
-            else
-               countArgs[mlirSymbol] = "DBI16Type*";
+            countArgs[mlirSymbol] = mlirTypeToCudaType(detail.type) + "*";
          }
       }
       return cudaId;
@@ -504,9 +467,8 @@ class TupleStreamCode {
          res += ")";
          return res;
       } else if (auto isNullOp = mlir::dyn_cast_or_null<db::IsNullOp>(op)) {
-         // TODO(avinash):
          // nullable datatypes not handled for now
-         return "false";
+         return "true";
       } else if (auto asNullableOp = mlir::dyn_cast_or_null<db::AsNullableOp>(op)) {
          return "true";
       }
@@ -553,44 +515,28 @@ class TupleStreamCode {
       appendKernel(fmt::format("uint64_t {0} = 0;", KEY(op)), kernelType);
       std::map<std::string, int> allowedKeysToSize;
       allowedKeysToSize["DBCharType"] = 1;
-      allowedKeysToSize["DBStringType"] = 2;
       allowedKeysToSize["DBI32Type"] = 4;
       allowedKeysToSize["DBDateType"] = 4;
-      allowedKeysToSize["DBI64Type"] = 4; // TODO(avinash): This is a temporary fix for date grouping.
+      allowedKeysToSize["DBI64Type"] = 4; // TODO(avinash): not good to truncate keys, doing this now for year grouping
       std::string sep = "";
       int totalKeySize = 0;
       for (auto i = 0ull; i < keys.size(); i++) {
          tuples::ColumnRefAttr key = mlir::cast<tuples::ColumnRefAttr>(keys[i]);
          auto baseType = mlirTypeToCudaType(key.getColumn().type);
-         // handle string type differently (assume that string encoded column is available)
          if (allowedKeysToSize.find(baseType) == allowedKeysToSize.end()) {
             keys.dump();
             assert(false && "Type is not hashable");
          }
-         std::string cudaIdentifierKey;
-         if (baseType == "DBStringType") {
-            cudaIdentifierKey = LoadColumn<1>(key, kernelType);
-         } else {
-            cudaIdentifierKey = LoadColumn(key, kernelType);
-         }
+         std::string cudaIdentifierKey = LoadColumn(key, kernelType);
          appendKernel(sep, kernelType);
-         if (i < keys.size() - 1) {
-            tuples::ColumnRefAttr next_key = mlir::cast<tuples::ColumnRefAttr>(keys[i + 1]);
-            auto next_base_type = mlirTypeToCudaType(next_key.getColumn().type);
-
-            sep = fmt::format("{0} <<= {1};", KEY(op), std::to_string(allowedKeysToSize[next_base_type] * 8));
-         } else {
-            sep = "";
-         }
          if (baseType == "DBI64Type") {
             appendKernel(fmt::format("{0} |= (DBI32Type){1};", KEY(op), cudaIdentifierKey), kernelType);
          } else {
             appendKernel(fmt::format("{0} |= {1};", KEY(op), cudaIdentifierKey), kernelType);
          }
+         sep = fmt::format("{0} <<= {1};", KEY(op), std::to_string(allowedKeysToSize[baseType] * 8));
          totalKeySize += allowedKeysToSize[baseType];
          if (totalKeySize > 8) {
-            std::clog << totalKeySize << std::endl;
-            keys.dump();
             assert(false && "Total hash key exceeded 8 bytes");
          }
       }
@@ -644,8 +590,6 @@ class TupleStreamCode {
       deviceFrees.insert(fmt::format("d_{0}", BUF(op)));
       appendControl(fmt::format("auto d_{0} = cuco::experimental::static_multimap{{ (int){1}*2, cuco::empty_key{{(int64_t)-1}},cuco::empty_value{{(int64_t)-1}},thrust::equal_to<int64_t>{{}},cuco::linear_probing<1, cuco::default_hash_function<int64_t>>() }};",
                                 HT(op), COUNT(op)));
-      // appendControl(fmt::format("auto d_{0} = cuco::static_map{{ (int){1}*2, cuco::empty_key{{(int64_t)-1}},cuco::empty_value{{(int64_t)-1}},thrust::equal_to<int64_t>{{}},cuco::linear_probing<1, cuco::default_hash_function<int64_t>>() }};",
-      //                           HT(op), COUNT(op)));
       appendControl(launchKernel(KernelType::Main));
       // appendControl(fmt::format("cudaFree(d_{0});", BUF_IDX(op)));
       return columnData;
@@ -658,10 +602,6 @@ class TupleStreamCode {
       auto key = MakeKeys(op, keys, KernelType::Main);
       appendKernel("//Probe Hash table", KernelType::Main);
       appendKernel("//Probe Hash table", KernelType::Count);
-      // appendKernel(fmt::format("auto {0} = {1}.find({2});", SLOT(op), HT(op), key), KernelType::Main);
-      // appendKernel(fmt::format("auto {0} = {1}.find({2});", SLOT(op), HT(op), key), KernelType::Count);
-      // appendKernel(fmt::format("if ({0} == {1}.end()) return;", SLOT(op), HT(op)), KernelType::Main);
-      // appendKernel(fmt::format("if ({0} == {1}.end()) return;", SLOT(op), HT(op)), KernelType::Count);
       appendKernel(fmt::format("{0}.for_each({1}, [&] __device__ (auto const {2}) {{", HT(op), key, SLOT(op)), KernelType::Main);
       appendKernel(fmt::format("auto const [{0}, {1}] = {2};", slot_first(op), slot_second(op), SLOT(op)), KernelType::Main);
       appendKernel(fmt::format("{0}.for_each({1}, [&] __device__ (auto const {2}) {{\n", HT(op), key, SLOT(op)), KernelType::Count);
@@ -679,11 +619,6 @@ class TupleStreamCode {
       }
       for (auto colData : leftColumnData) {
          if (colData.second->type == ColumnType::Direct) {
-            // colData.second->rid = fmt::format("{3}[{0}->second * {1} + {2}]",
-            //                                   SLOT(op),
-            //                                   std::to_string(baseRelations.size()),
-            //                                   streamIdToBufId[colData.second->streamId],
-            //                                   BUF(op));
             colData.second->rid = fmt::format("{3}[{0} * {1} + {2}]",
                                               slot_second(op),
                                               std::to_string(baseRelations.size()),
@@ -699,7 +634,6 @@ class TupleStreamCode {
       mainArgs[BUF(op)] = "uint64_t*";
       countArgs[HT(op)] = "HASHTABLE_PROBE";
       countArgs[BUF(op)] = "uint64_t*";
-      // mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::find)", HT(op));
       mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::for_each)", HT(op));
       mlirToGlobalSymbol[BUF(op)] = fmt::format("d_{}", BUF(op));
    }
@@ -739,7 +673,7 @@ cuco::linear_probing<1, cuco::default_hash_function<int64_t>>() }};",
 d_{1}.retrieve_all(keys_{0}.begin(), vals_{0}.begin());\n\
 d_{1}.clear();\n\
 int64_t* raw_keys{0} = thrust::raw_pointer_cast(keys_{0}.data());\n\
-insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::insert), {2});",
+insertKeys<<<std::ceil((float){2}/32.), 32>>>(raw_keys{0}, d_{1}.ref(cuco::insert), {2});",
                                 GetId(op), HT(op), COUNT(op)));
    }
    void AggregateInHashTable(mlir::Operation* op) {
@@ -813,28 +747,16 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       for (auto& col : groupByKeys) {
          ColumnDetail detail(mlir::cast<tuples::ColumnRefAttr>(col));
          std::string mlirSymbol = detail.getMlirSymbol();
+         std::string keyColumnName = KEY(op) + mlirSymbol;
          std::string keyColumnType = mlirTypeToCudaType(detail.type);
-         if (keyColumnType == "DBStringType") {
-            std::string keyColumnName = KEY(op) + mlirSymbol + "_encoded";
-            mainArgs[keyColumnName] = "DBI16Type*";
-            mlirToGlobalSymbol[keyColumnName] = fmt::format("d_{}", keyColumnName);
-            appendControl(fmt::format("DBI16Type* d_{0};", keyColumnName));
-            appendControl(fmt::format("cudaMalloc(&d_{0}, sizeof(DBI16Type) * {1});", keyColumnName, COUNT(op)));
-            deviceFrees.insert(fmt::format("d_{0}", keyColumnName));
-            appendControl(fmt::format("cudaMemset(d_{0}, 0, sizeof(DBI16Type) * {1});", keyColumnName, COUNT(op)));
-            auto key = LoadColumn<1>(mlir::cast<tuples::ColumnRefAttr>(col), KernelType::Main);
-            appendKernel(fmt::format("{0}[{1}] = {2};", keyColumnName, buf_idx(op), key), KernelType::Main);
-         } else {
-            std::string keyColumnName = KEY(op) + mlirSymbol;
-            mainArgs[keyColumnName] = keyColumnType + "*";
-            mlirToGlobalSymbol[keyColumnName] = fmt::format("d_{}", keyColumnName);
-            appendControl(fmt::format("{0}* d_{1};", keyColumnType, keyColumnName));
-            appendControl(fmt::format("cudaMalloc(&d_{0}, sizeof({1}) * {2});", keyColumnName, keyColumnType, COUNT(op)));
-            deviceFrees.insert(fmt::format("d_{0}", keyColumnName));
-            appendControl(fmt::format("cudaMemset(d_{0}, 0, sizeof({1}) * {2});", keyColumnName, keyColumnType, COUNT(op)));
-            auto key = LoadColumn(mlir::cast<tuples::ColumnRefAttr>(col), KernelType::Main);
-            appendKernel(fmt::format("{0}[{1}] = {2};", keyColumnName, buf_idx(op), key), KernelType::Main);
-         }
+         mainArgs[keyColumnName] = keyColumnType + "*";
+         mlirToGlobalSymbol[keyColumnName] = fmt::format("d_{}", keyColumnName);
+         appendControl(fmt::format("{0}* d_{1};", keyColumnType, keyColumnName));
+         appendControl(fmt::format("cudaMalloc(&d_{0}, sizeof({1}) * {2});", keyColumnName, keyColumnType, COUNT(op)));
+         deviceFrees.insert(fmt::format("d_{0}", keyColumnName));
+         appendControl(fmt::format("cudaMemset(d_{0}, 0, sizeof({1}) * {2});", keyColumnName, keyColumnType, COUNT(op)));
+         auto key = LoadColumn(mlir::cast<tuples::ColumnRefAttr>(col), KernelType::Main);
+         appendKernel(fmt::format("{0}[{1}] = {2};", keyColumnName, buf_idx(op), key), KernelType::Main);
       }
       appendControl(launchKernel(KernelType::Main));
    }
@@ -858,55 +780,31 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
          std::string mlirSymbol = detail.getMlirSymbol();
          std::string type = mlirTypeToCudaType(detail.type);
 
-         if (type == "DBStringType") {
-            std::string newBuffer = MAT(op) + mlirSymbol + "_encoded";
-            appendControl(fmt::format("auto {0} = (DBI16Type*)malloc(sizeof(DBI16Type) * {1});", newBuffer, COUNT(op)));
-            hostFrees.insert(newBuffer);
-            appendControl(fmt::format("DBI16Type* d_{0};", newBuffer));
-            appendControl(fmt::format("cudaMalloc(&d_{0}, sizeof(DBI16Type) * {1});", newBuffer, COUNT(op)));
-            deviceFrees.insert(fmt::format("d_{0}", newBuffer));
-            mainArgs[newBuffer] = "DBI16Type*";
-            mlirToGlobalSymbol[newBuffer] = "d_" + newBuffer;
-            auto key = LoadColumn<1>(columnAttr, KernelType::Main);
-            appendKernel(fmt::format("{0}[{2}] = {1};", newBuffer, key, mat_idx(op)), KernelType::Main);
-         } else {
-            std::string newBuffer = MAT(op) + mlirSymbol;
-            appendControl(fmt::format("auto {0} = ({1}*)malloc(sizeof({1}) * {2});", newBuffer, type, COUNT(op)));
-            hostFrees.insert(newBuffer);
-            appendControl(fmt::format("{1}* d_{0};", newBuffer, type));
-            appendControl(fmt::format("cudaMalloc(&d_{0}, sizeof({1}) * {2});", newBuffer, type, COUNT(op)));
-            deviceFrees.insert(fmt::format("d_{0}", newBuffer));
-            mainArgs[newBuffer] = type + "*";
-            mlirToGlobalSymbol[newBuffer] = "d_" + newBuffer;
-            auto key = LoadColumn(columnAttr, KernelType::Main);
-            appendKernel(fmt::format("{0}[{2}] = {1};", newBuffer, key, mat_idx(op)), KernelType::Main);
-         }
+         std::string newBuffer = MAT(op) + mlirSymbol;
+         appendControl(fmt::format("auto {0} = ({1}*)malloc(sizeof({1}) * {2});", newBuffer, type, COUNT(op)));
+         hostFrees.insert(newBuffer);
+         appendControl(fmt::format("{1}* d_{0};", newBuffer, type));
+         appendControl(fmt::format("cudaMalloc(&d_{0}, sizeof({1}) * {2});", newBuffer, type, COUNT(op)));
+         deviceFrees.insert(fmt::format("d_{0}", newBuffer));
+         mainArgs[newBuffer] = type + "*";
+         mlirToGlobalSymbol[newBuffer] = "d_" + newBuffer;
+         auto key = LoadColumn(columnAttr, KernelType::Main);
+         appendKernel(fmt::format("{0}[{2}] = {1};", newBuffer, key, mat_idx(op)), KernelType::Main);
       }
       appendControl(launchKernel(KernelType::Main));
       // appendControl(fmt::format("cudaFree(d_{0});", MAT_IDX(op)));
       std::string printStmts;
-      std::string delimiter = ",";
-      bool first = true;
       for (auto col : materializeOp.getCols()) {
          auto columnAttr = mlir::cast<tuples::ColumnRefAttr>(col);
          auto detail = ColumnDetail(columnAttr);
 
          std::string mlirSymbol = detail.getMlirSymbol();
          std::string type = mlirTypeToCudaType(detail.type);
-         if (type == "DBStringType") {
-            std::string newBuffer = MAT(op) + mlirSymbol + "_encoded";
+         std::string newBuffer = MAT(op) + mlirSymbol;
 
-            appendControl(fmt::format("cudaMemcpy({0}, d_{0}, sizeof(DBI16Type) * {1}, cudaMemcpyDeviceToHost);",
-                                      newBuffer, COUNT(op)));
-            printStmts += fmt::format("std::cout << \"{0}\" << {2}[{1}[i]];\n", first ? "" : delimiter, newBuffer, mlirSymbol + "_map");
-         } else {
-            std::string newBuffer = MAT(op) + mlirSymbol;
-
-            appendControl(fmt::format("cudaMemcpy({0}, d_{0}, sizeof({1}) * {2}, cudaMemcpyDeviceToHost);",
-                                      newBuffer, type, COUNT(op)));
-            printStmts += fmt::format("std::cout << \"{0}\" << {1}[i];\n", first ? "" : delimiter, newBuffer);
-         }
-         first = false;
+         appendControl(fmt::format("cudaMemcpy({0}, d_{0}, sizeof({1}) * {2}, cudaMemcpyDeviceToHost);",
+                                   newBuffer, type, COUNT(op)));
+         printStmts += fmt::format("std::cout << {0}[i] << \"\\t\";\n", newBuffer);
       }
       appendControl(fmt::format("for (auto i=0ull; i < {0}; i++) {{ {1}std::cout << std::endl; }}",
                                 COUNT(op), printStmts));
@@ -1038,11 +936,15 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
    }
 };
 
-class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<mlir::func::FuncOp>> {
-   virtual llvm::StringRef getArgument() const override { return "relalg-cuda-code-gen"; }
+// parameters for crystal code generation
+// 1. Thread block size
+// 2. Number of elements per thread (TILE_SIZE = thread block size * number of elements per thread)
+// 3. Shared memory size (for hash table)
+class CudaCrystalCodeGen : public mlir::PassWrapper<CudaCrystalCodeGen, mlir::OperationPass<mlir::func::FuncOp>> {
+   virtual llvm::StringRef getArgument() const override { return "relalg-cuda-code-gen-crystal"; }
 
    public:
-   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(CudaCodeGen)
+   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(CudaCrystalCodeGen)
 
    std::map<mlir::Operation*, TupleStreamCode*> streamCodeMap;
    std::vector<TupleStreamCode*> kernelSchedule;
@@ -1145,19 +1047,12 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
 #include <thrust/host_vector.h>\n";
       outputFile << "#include \"cudautils.cuh\"\n\
 #include \"db_types.h\"\n\
-#include \"dbruntime.h\"\n";
+#include \"dbruntime_ssb.h\"\n";
       for (auto code : kernelSchedule) {
          code->printKernel(KernelType::Count, outputFile);
          code->printKernel(KernelType::Main, outputFile);
       }
-// --enable this line for tpch
-#ifdef TPCH
-      outputFile << "extern \"C\" void control (DBI32Type * d_nation__n_nationkey, DBStringType * d_nation__n_name, DBI32Type * d_nation__n_regionkey, DBStringType * d_nation__n_comment, size_t nation_size, DBI32Type * d_supplier__s_suppkey, DBI32Type * d_supplier__s_nationkey, DBStringType * d_supplier__s_name, DBStringType * d_supplier__s_address, DBStringType * d_supplier__s_phone, DBDecimalType * d_supplier__s_acctbal, DBStringType * d_supplier__s_comment, size_t supplier_size, DBI32Type * d_partsupp__ps_suppkey, DBI32Type * d_partsupp__ps_partkey, DBI32Type * d_partsupp__ps_availqty, DBDecimalType * d_partsupp__ps_supplycost, DBStringType * d_partsupp__ps_comment, size_t partsupp_size, DBI32Type * d_part__p_partkey, DBStringType * d_part__p_name, DBStringType * d_part__p_mfgr, DBStringType * d_part__p_brand, DBStringType * d_part__p_type, DBI32Type * d_part__p_size, DBStringType * d_part__p_container, DBDecimalType * d_part__p_retailprice, DBStringType * d_part__p_comment, size_t part_size, DBI32Type * d_lineitem__l_orderkey, DBI32Type * d_lineitem__l_partkey, DBI32Type * d_lineitem__l_suppkey, DBI64Type * d_lineitem__l_linenumber, DBDecimalType * d_lineitem__l_quantity, DBDecimalType * d_lineitem__l_extendedprice, DBDecimalType * d_lineitem__l_discount, DBDecimalType * d_lineitem__l_tax, DBCharType * d_lineitem__l_returnflag, DBCharType * d_lineitem__l_linestatus, DBI32Type * d_lineitem__l_shipdate, DBI32Type * d_lineitem__l_commitdate, DBI32Type * d_lineitem__l_receiptdate, DBStringType * d_lineitem__l_shipinstruct, DBStringType * d_lineitem__l_shipmode, DBStringType * d_lineitem__comments, size_t lineitem_size, DBI32Type * d_orders__o_orderkey, DBCharType * d_orders__o_orderstatus, DBI32Type * d_orders__o_custkey, DBDecimalType * d_orders__o_totalprice, DBI32Type * d_orders__o_orderdate, DBStringType * d_orders__o_orderpriority, DBStringType * d_orders__o_clerk, DBI32Type * d_orders__o_shippriority, DBStringType * d_orders__o_comment, size_t orders_size, DBI32Type * d_customer__c_custkey, DBStringType * d_customer__c_name, DBStringType * d_customer__c_address, DBI32Type * d_customer__c_nationkey, DBStringType * d_customer__c_phone, DBDecimalType * d_customer__c_acctbal, DBStringType * d_customer__c_mktsegment, DBStringType * d_customer__c_comment, size_t customer_size, DBI32Type * d_region__r_regionkey, DBStringType * d_region__r_name, DBStringType * d_region__r_comment, size_t region_size, DBI16Type* d_nation__n_name_encoded, std::unordered_map<DBI16Type, DBStringType> &nation__n_name_map, std::unordered_map<DBI16Type, DBStringType> &n1___n_name_map, std::unordered_map<DBI16Type, DBStringType> &n2___n_name_map) {\n";
-#endif
-#ifdef SSB
-      outputFile << "extern \"C\" void control (DBI32Type* d_supplier__s_suppkey, DBStringType* d_supplier__s_name, DBStringType* d_supplier__s_address, DBStringType* d_supplier__s_city, DBStringType* d_supplier__s_nation, DBStringType* d_supplier__s_region, DBStringType* d_supplier__s_phone, size_t supplier_size, DBI32Type* d_part__p_partkey, DBStringType* d_part__p_name, DBStringType* d_part__p_mfgr, DBStringType* d_part__p_category, DBStringType* d_part__p_brand1, DBStringType* d_part__p_color, DBStringType* d_part__p_type, DBI32Type* d_part__p_size, DBStringType* d_part__p_container, size_t part_size, DBI32Type* d_lineorder__lo_orderkey, DBI32Type* d_lineorder__lo_linenumber, DBI32Type* d_lineorder__lo_custkey, DBI32Type* d_lineorder__lo_partkey, DBI32Type* d_lineorder__lo_suppkey, DBDateType* d_lineorder__lo_orderdate, DBDateType* d_lineorder__lo_commitdate, DBStringType* d_lineorder__lo_orderpriority, DBCharType* d_lineorder__lo_shippriority, DBI32Type* d_lineorder__lo_quantity, DBDecimalType* d_lineorder__lo_extendedprice, DBDecimalType* d_lineorder__lo_ordtotalprice, DBDecimalType* d_lineorder__lo_revenue, DBDecimalType* d_lineorder__lo_supplycost, DBI32Type* d_lineorder__lo_discount, DBI32Type* d_lineorder__lo_tax, DBStringType* d_lineorder__lo_shipmode, size_t lineorder_size, DBI32Type* d_date__d_datekey, DBStringType* d_date__d_date, DBStringType* d_date__d_dayofweek, DBStringType* d_date__d_month, DBI32Type* d_date__d_year, DBI32Type* d_date__d_yearmonthnum, DBStringType* d_date__d_yearmonth, DBI32Type* d_date__d_daynuminweek, DBI32Type* d_date__d_daynuminmonth, DBI32Type* d_date__d_daynuminyear, DBI32Type* d_date__d_monthnuminyear, DBI32Type* d_date__d_weeknuminyear, DBStringType* d_date__d_sellingseason, DBI32Type* d_date__d_lastdayinweekfl, DBI32Type* d_date__d_lastdayinmonthfl, DBI32Type* d_date__d_holidayfl, DBI32Type* d_date__d_weekdayfl, size_t date_size, DBI32Type* d_customer__c_custkey, DBStringType* d_customer__c_name, DBStringType* d_customer__c_address, DBStringType* d_customer__c_city, DBStringType* d_customer__c_nation, DBStringType* d_customer__c_region, DBStringType* d_customer__c_phone, DBStringType* d_customer__c_mktsegment, size_t customer_size, DBI32Type* d_region__r_regionkey, DBStringType* d_region__r_name, DBStringType* d_region__r_comment, size_t region_size, DBI16Type* d_part__p_brand1_encoded, DBI16Type* d_supplier__s_nation_encoded, DBI16Type* d_customer__c_city_encoded, DBI16Type* d_supplier__s_city_encoded, DBI16Type* d_customer__c_nation_encoded, DBI16Type* d_part__p_category_encoded, std::unordered_map<DBI16Type, std::string>& part__p_brand1_map, std::unordered_map<DBI16Type, std::string>& supplier__s_nation_map, std::unordered_map<DBI16Type, std::string>& customer__c_city_map, std::unordered_map<DBI16Type, std::string>& supplier__s_city_map, std::unordered_map<DBI16Type, std::string>& customer__c_nation_map, std::unordered_map<DBI16Type, std::string>& part__p_category_map) {\n";
-#endif
-
+      outputFile << "extern \"C\" void control (DBI32Type* d_supplier__s_suppkey, DBStringType* d_supplier__s_name, DBStringType* d_supplier__s_address, DBStringType* d_supplier__s_city, DBStringType* d_supplier__s_nation, DBStringType* d_supplier__s_region, DBStringType* d_supplier__s_phone, size_t supplier_size, DBI32Type* d_part__p_partkey, DBStringType* d_part__p_name, DBStringType* d_part__p_mfgr, DBStringType* d_part__p_category, DBStringType* d_part__p_brand1, DBStringType* d_part__p_color, DBStringType* d_part__p_type, DBI32Type* d_part__p_size, DBStringType* d_part__p_container, size_t part_size, DBI32Type* d_lineorder__lo_orderkey, DBI32Type* d_lineorder__lo_linenumber, DBI32Type* d_lineorder__lo_custkey, DBI32Type* d_lineorder__lo_partkey, DBI32Type* d_lineorder__lo_suppkey, DBDateType* d_lineorder__lo_orderdate, DBDateType* d_lineorder__lo_commitdate, DBStringType* d_lineorder__lo_orderpriority, DBCharType* d_lineorder__lo_shippriority, DBI32Type* d_lineorder__lo_quantity, DBDecimalType* d_lineorder__lo_extendedprice, DBDecimalType* d_lineorder__lo_ordtotalprice, DBDecimalType* d_lineorder__lo_revenue, DBDecimalType* d_lineorder__lo_supplycost, DBI32Type* d_lineorder__lo_discount, DBI32Type* d_lineorder__lo_tax, DBStringType* d_lineorder__lo_shipmode, size_t lineorder_size, DBI32Type* d_date__d_datekey, DBStringType* d_date__d_date, DBStringType* d_date__d_dayofweek, DBStringType* d_date__d_month, DBI32Type* d_date__d_year, DBI32Type* d_date__d_yearmonthnum, DBStringType* d_date__d_yearmonth, DBI32Type* d_date__d_daynuminweek, DBI32Type* d_date__d_daynuminmonth, DBI32Type* d_date__d_daynuminyear, DBI32Type* d_date__d_monthnuminyear, DBI32Type* d_date__d_weeknuminyear, DBStringType* d_date__d_sellingseason, DBI32Type* d_date__d_lastdayinweekfl, DBI32Type* d_date__d_lastdayinmonthfl, DBI32Type* d_date__d_holidayfl, DBI32Type* d_date__d_weekdayfl, size_t date_size, DBI32Type* d_customer__c_custkey, DBStringType* d_customer__c_name, DBStringType* d_customer__c_address, DBStringType* d_customer__c_city, DBStringType* d_customer__c_nation, DBStringType* d_customer__c_region, DBStringType* d_customer__c_phone, DBStringType* d_customer__c_mktsegment, size_t customer_size, DBI32Type* d_region__r_regionkey, DBStringType* d_region__r_name, DBStringType* d_region__r_comment, size_t region_size) {\n";
       for (auto code : kernelSchedule) {
          code->printControl(outputFile);
       }
@@ -1171,44 +1066,4 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
 }
 
 std::unique_ptr<mlir::Pass>
-relalg::createCudaCodeGenPass() { return std::make_unique<CudaCodeGen>(); }
-
-static bool gCudaCodeGenEnabled = false;
-static bool gCudaCodeGenNoCountEnabled = false;
-static bool gCudaCrystalCodeGenEnabled = false;
-
-
-void relalg::addCudaCodeGenPass(mlir::OpPassManager& pm) {
-   if (gCudaCodeGenEnabled) {
-      pm.addNestedPass<mlir::func::FuncOp>(createCudaCodeGenPass());
-   } else if (gCudaCodeGenNoCountEnabled) {
-      pm.addNestedPass<mlir::func::FuncOp>(createCudaCodeGenNoCountPass());
-   } else if (gCudaCrystalCodeGenEnabled) {
-      pm.addNestedPass<mlir::func::FuncOp>(createCudaCrystalCodeGenPass());
-   }
-}
-
-void removeCodeGenSwitch(int& argc,  char** argv, int i) {
-   // Remove --gen-cuda-code from the argument list
-   for (int j = i; j < argc - 1; j++) {
-      argv[j] = argv[j + 1];
-   }
-   argc--;
-}
-void relalg::conditionallyEnableCudaCodeGen(int& argc, char** argv) {
-   for (int i = 0; i < argc; i++) {
-      if (std::string(argv[i]) == "--gen-cuda-code") {
-         gCudaCodeGenEnabled = true;
-         removeCodeGenSwitch(argc, argv, i);
-         break;
-      } else if (std::string(argv[i]) == "--gen-cuda-code-no-count") {
-         gCudaCodeGenNoCountEnabled = true;
-         removeCodeGenSwitch(argc, argv, i);
-         break;
-      } else if (std::string(argv[i]) == "--gen-cuda-crystal-code") {
-         gCudaCrystalCodeGenEnabled = true;
-         removeCodeGenSwitch(argc, argv, i);
-         break;
-      }
-   }
-}
+relalg::createCudaCrystalCodeGenPass() { return std::make_unique<CudaCrystalCodeGen>(); }
