@@ -47,8 +47,10 @@ for QUERY in "${QUERIES[@]}"; do
   echo $RUN_SQL
   $RUN_SQL > $OUTPUT_FILE
 
+  NOCOUNT="$QUERY.nocount"
+
   # Now run the generated CUDA code
-  CP_CMD="cp output.cu $SQL_PLAN_COMPILER_DIR/gpu-db/tpch/q$QUERY.codegen.cu"
+  CP_CMD="cp output.cu $SQL_PLAN_COMPILER_DIR/gpu-db/tpch/q$NOCOUNT.codegen.cu"
   echo $CP_CMD
   $CP_CMD
 
@@ -56,7 +58,7 @@ for QUERY in "${QUERIES[@]}"; do
   echo $CD_CMD
   $CD_CMD
 
-  MAKE_QUERY="make query Q=$QUERY CUCO_SRC_PATH=$CUCO_SRC_PATH"
+  MAKE_QUERY="make query Q=$NOCOUNT CUCO_SRC_PATH=$CUCO_SRC_PATH"
   echo $MAKE_QUERY
   $MAKE_QUERY
 
@@ -64,13 +66,13 @@ for QUERY in "${QUERIES[@]}"; do
   echo $MAKE_RUNTIME
   $MAKE_RUNTIME
 
-  RUN_QUERY_CMD="build/dbruntime --data_dir $TPCH_DATA_DIR/ --query_num $QUERY"
+  RUN_QUERY_CMD="build/dbruntime --data_dir $TPCH_DATA_DIR/ --query_num $NOCOUNT"
   echo $RUN_QUERY_CMD
-  $RUN_QUERY_CMD > "cuda-tpch-$QUERY.csv"
+  $RUN_QUERY_CMD > "cuda-tpch-$NOCOUNT.csv"
 
   cd -
 
-  PYTHON_CMD="python $SCRIPT_DIR/compare_tpch_outputs.py $OUTPUT_FILE $SQL_PLAN_COMPILER_DIR/gpu-db/tpch/cuda-tpch-$QUERY.csv"
+  PYTHON_CMD="python $SCRIPT_DIR/compare_tpch_outputs.py $OUTPUT_FILE $SQL_PLAN_COMPILER_DIR/gpu-db/tpch/cuda-tpch-$NOCOUNT.csv"
   echo $PYTHON_CMD
   $PYTHON_CMD
 

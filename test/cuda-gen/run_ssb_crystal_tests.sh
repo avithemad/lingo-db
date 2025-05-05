@@ -36,19 +36,22 @@ if [ -z "$TSSB_DATA_DIR" ]; then
 fi
 
 # List of queries to run
+
+# following are the failed tests due to use of static_map for join
+# QUERIES=(23 33 42 43)
 QUERIES=(11 12 13 21 22 23 31 32 33 34 41 42 43)
-# QUERIES=(23)
+# QUERIES=(41)
 
 # Iterate over the queries
 for QUERY in "${QUERIES[@]}"; do
   # First run the run-sql tool to generate CUDA and get reference output
-  RUN_SQL="$BUILD_DIR/run-sql $SSB_DIR/$QUERY.sql $SSB_DATA_DIR --gen-cuda-code-no-count --ssb"
+  RUN_SQL="$BUILD_DIR/run-sql $SSB_DIR/$QUERY.sql $SSB_DATA_DIR --gen-cuda-crystal-code --ssb"
   OUTPUT_FILE="ssb-$QUERY-ref.csv"
   echo $RUN_SQL
   $RUN_SQL > $OUTPUT_FILE
 
   # Now run the generated CUDA code
-  NOCOUNT="$QUERY.nocount"
+  NOCOUNT="$QUERY.crystal"
   CP_CMD="cp output.cu $SQL_PLAN_COMPILER_DIR/gpu-db/ssb/q$NOCOUNT.codegen.cu"
   echo $CP_CMD
   $CP_CMD

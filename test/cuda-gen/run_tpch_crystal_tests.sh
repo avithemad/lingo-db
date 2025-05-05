@@ -26,34 +26,35 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEST_DIR="$(dirname "$SCRIPT_DIR")"
 REPO_DIR="$(dirname "$TEST_DIR")"
 
-SSB_DIR="$REPO_DIR/resources/sql/ssb"
+TPCH_DIR="$REPO_DIR/resources/sql/tpch"
 BUILD_DIR="$REPO_DIR/build/$BUILD_NAME"
 
 
 # Set the data directory if not already set
-if [ -z "$TSSB_DATA_DIR" ]; then
-  SSB_DATA_DIR="$REPO_DIR/resources/data/ssb-1"
+if [ -z "$TPCH_DATA_DIR" ]; then
+  TPCH_DATA_DIR="$REPO_DIR/resources/data/tpch-1"
 fi
 
-# List of queries to run
-QUERIES=(11 12 13 21 22 23 31 32 33 34 41 42 43)
-# QUERIES=(23)
+# List of queries to run - 1, 3, 5, 6, 7, 8, 9
+QUERIES=(1 3 5 6 7 9 13)
+# QUERIES=(1)
 
 # Iterate over the queries
 for QUERY in "${QUERIES[@]}"; do
   # First run the run-sql tool to generate CUDA and get reference output
-  RUN_SQL="$BUILD_DIR/run-sql $SSB_DIR/$QUERY.sql $SSB_DATA_DIR --gen-cuda-code-no-count --ssb"
-  OUTPUT_FILE="ssb-$QUERY-ref.csv"
+  RUN_SQL="$BUILD_DIR/run-sql $TPCH_DIR/$QUERY.sql $TPCH_DATA_DIR --gen-cuda-crystal-code"
+  OUTPUT_FILE="tpch-$QUERY-ref.csv"
   echo $RUN_SQL
   $RUN_SQL > $OUTPUT_FILE
 
+  NOCOUNT="$QUERY.crystal"
+
   # Now run the generated CUDA code
-  NOCOUNT="$QUERY.nocount"
-  CP_CMD="cp output.cu $SQL_PLAN_COMPILER_DIR/gpu-db/ssb/q$NOCOUNT.codegen.cu"
+  CP_CMD="cp output.cu $SQL_PLAN_COMPILER_DIR/gpu-db/tpch/q$NOCOUNT.codegen.cu"
   echo $CP_CMD
   $CP_CMD
 
-  CD_CMD="cd $SQL_PLAN_COMPILER_DIR/gpu-db/ssb"
+  CD_CMD="cd $SQL_PLAN_COMPILER_DIR/gpu-db/tpch"
   echo $CD_CMD
   $CD_CMD
 
@@ -65,13 +66,13 @@ for QUERY in "${QUERIES[@]}"; do
   echo $MAKE_RUNTIME
   $MAKE_RUNTIME
 
-  RUN_QUERY_CMD="build/dbruntime --data_dir $SSB_DATA_DIR/ --query_num $NOCOUNT"
+  RUN_QUERY_CMD="build/dbruntime --data_dir $TPCH_DATA_DIR/ --query_num $NOCOUNT"
   echo $RUN_QUERY_CMD
-  $RUN_QUERY_CMD > "cuda-ssb-$NOCOUNT.csv"
+  $RUN_QUERY_CMD > "cuda-tpch-$NOCOUNT.csv"
 
   cd -
 
-  PYTHON_CMD="python $SCRIPT_DIR/compare_tpch_outputs.py $OUTPUT_FILE $SQL_PLAN_COMPILER_DIR/gpu-db/ssb/cuda-ssb-$NOCOUNT.csv"
+  PYTHON_CMD="python $SCRIPT_DIR/compare_tpch_outputs.py $OUTPUT_FILE $SQL_PLAN_COMPILER_DIR/gpu-db/tpch/cuda-tpch-$NOCOUNT.csv"
   echo $PYTHON_CMD
   $PYTHON_CMD
 
@@ -89,7 +90,7 @@ done
 # Print some new lines and then a seperator
 echo -e "\n"
 echo "=============================="
-echo "SSB TEST RESULTS"
+echo "TPCH TEST RESULTS"
 echo "=============================="
 echo "Passed queries: ${PASSED_QUERIES[@]}"
 echo "Failed queries: ${FAILED_QUERIES[@]}"

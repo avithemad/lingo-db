@@ -563,7 +563,7 @@ class TupleStreamCode {
       std::sort(baseRelations.begin(), baseRelations.end());
       return baseRelations;
    }
-   std::map<std::string, ColumnMetadata*> InsertHashTable(mlir::Operation* op) {
+   std::map<std::string, ColumnMetadata*> BuildHashTable(mlir::Operation* op) {
       auto joinOp = mlir::dyn_cast_or_null<relalg::InnerJoinOp>(op);
       if (!joinOp) assert(false && "Insert hash table accepts only inner join operation.");
       std::string ht_size = "";
@@ -612,7 +612,7 @@ class TupleStreamCode {
       appendControl(fmt::format("auto d_{0} = cuco::experimental::static_multimap{{ (int){1}*2, cuco::empty_key{{(int64_t)-1}},cuco::empty_value{{(int64_t)-1}},thrust::equal_to<int64_t>{{}},cuco::linear_probing<1, cuco::default_hash_function<int64_t>>() }};",
                                 HT(op), COUNT(op)));
       // appendControl(fmt::format("auto d_{0} = cuco::static_map{{ (int){1}*2, cuco::empty_key{{(int64_t)-1}},cuco::empty_value{{(int64_t)-1}},thrust::equal_to<int64_t>{{}},cuco::linear_probing<1, cuco::default_hash_function<int64_t>>() }};",
-      //                           HT(op), COUNT(op)));
+                              //   HT(op), COUNT(op)));
       appendControl(launchKernel());
       appendControl(fmt::format("cudaFree(d_{0});", BUF_IDX(op)));
       return columnData;
@@ -1013,7 +1013,7 @@ class CudaCodeGenNoCount : public mlir::PassWrapper<CudaCodeGenNoCount, mlir::Op
                rightStream->dump();
                assert(false && "No downstream operation probe side of hash join found");
             }
-            auto leftCols = leftStreamCode->InsertHashTable(op); // main of left
+            auto leftCols = leftStreamCode->BuildHashTable(op); // main of left
             kernelSchedule.push_back(leftStreamCode);
             rightStreamCode->ProbeHashTable(op, leftCols);
             mlir::Region& predicate = joinOp.getPredicate();

@@ -37,6 +37,7 @@ fi
 
 # List of queries to run
 QUERIES=(11 12 13 21 22 23 31 32 33 34 41 42 43)
+# QUERIES=(32)
 
 # Iterate over the queries
 for QUERY in "${QUERIES[@]}"; do
