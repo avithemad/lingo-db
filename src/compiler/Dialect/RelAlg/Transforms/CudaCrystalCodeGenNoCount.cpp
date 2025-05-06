@@ -603,12 +603,6 @@ class TupleStreamCode {
       auto joinOp = mlir::dyn_cast_or_null<relalg::InnerJoinOp>(op);
       if (!joinOp) assert(false && "Insert hash table accepts only inner join operation.");
       std::string ht_size = "";
-      // if (auto floatAttr = mlir::dyn_cast_or_null<mlir::FloatAttr>(op->getAttr("rows"))) {
-      //    if (std::floor(floatAttr.getValueAsDouble()) != 0)
-      //       ht_size = std::to_string((size_t) std::ceil(floatAttr.getValueAsDouble()));
-      //    else {
-      //    }
-      // }
       for (auto p : mainArgs) {
          // assign the loop length to the size of the hashtable
          if (p.second == "size_t")
@@ -649,6 +643,7 @@ class TupleStreamCode {
       appendControl(fmt::format("uint64_t* d_{0};", BUF(op)));
       appendControl(fmt::format("cudaMalloc(&d_{0}, sizeof(uint64_t) * {1} * {2});", BUF(op), COUNT(op), baseRelations.size()));
       deviceFrees.insert(fmt::format("d_{0}", BUF(op)));
+      // TODO(avinash): switch between multimap and map based on if key is primary or not
       // appendControl(fmt::format("auto d_{0} = cuco::experimental::static_multimap{{ (int){1}*2, cuco::empty_key{{(int64_t)-1}},cuco::empty_value{{(int64_t)-1}},thrust::equal_to<int64_t>{{}},cuco::linear_probing<1, cuco::default_hash_function<int64_t>>() }};",
       //                           HT(op), COUNT(op)));
       appendControl(fmt::format("auto d_{0} = cuco::static_map{{ (int){1}*2, cuco::empty_key{{(int64_t)-1}},cuco::empty_value{{(int64_t)-1}},thrust::equal_to<int64_t>{{}},cuco::linear_probing<1, cuco::default_hash_function<int64_t>>() }};",
@@ -674,7 +669,7 @@ class TupleStreamCode {
       appendKernel(fmt::format("if ({0} == {1}.end()) {{selection_flags[ITEM] = 0; continue;}}", SLOT(op), HT(op)));
       appendKernel(fmt::format("{0}[ITEM] = {1}->second;", slot_second(op), SLOT(op)));
       appendKernel("}");
-      // appendKernel(fmt::format("{0}.for_each({1}, [&] __device__ (auto const {2}) {{", HT(op), key, SLOT(op)));
+      // appendKernel(fmt::format("{0}.for_each({1}[ITEM], [&] __device__ (auto const {2}) {{", HT(op), key, SLOT(op)));
       // appendKernel(fmt::format("auto const [{0}, {1}] = {2};", slot_first(op), slot_second(op), SLOT(op)));
       // forEachScopes++;
 
@@ -698,7 +693,6 @@ class TupleStreamCode {
             //                                   std::to_string(baseRelations.size()),
             //                                   streamIdToBufId[colData.second->streamId],
             //                                   BUF(op));
-            // colData.second->streamId = id;
             columnData[colData.first] = colData.second;
             mlirToGlobalSymbol[colData.second->loadExpression] = colData.second->globalId;
          }
@@ -1040,7 +1034,7 @@ class TupleStreamCode {
       stream << ") {\n";
       for (auto line : mainCode) { stream << line << std::endl; }
       for (int i = 0; i < forEachScopes; i++) {
-         stream << "});\n";
+         stream << "});}\n";
       }
       stream << "}\n";
    }
@@ -1059,11 +1053,11 @@ class TupleStreamCode {
    }
 };
 
-class CudaCrystalCodeGen : public mlir::PassWrapper<CudaCrystalCodeGen, mlir::OperationPass<mlir::func::FuncOp>> {
+class CudaCrystalCodeGenNoCount : public mlir::PassWrapper<CudaCrystalCodeGenNoCount, mlir::OperationPass<mlir::func::FuncOp>> {
    virtual llvm::StringRef getArgument() const override { return "relalg-cuda-code-gen-crystal"; }
 
    public:
-   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(CudaCrystalCodeGen)
+   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(CudaCrystalCodeGenNoCount)
 
    std::map<mlir::Operation*, TupleStreamCode*> streamCodeMap;
    std::vector<TupleStreamCode*> kernelSchedule;
@@ -1185,4 +1179,4 @@ class CudaCrystalCodeGen : public mlir::PassWrapper<CudaCrystalCodeGen, mlir::Op
 }
 
 std::unique_ptr<mlir::Pass>
-relalg::createCudaCrystalCodeGenPass() { return std::make_unique<CudaCrystalCodeGen>(); }
+relalg::createCudaCrystalCodeGenNoCountPass() { return std::make_unique<CudaCrystalCodeGenNoCount>(); }

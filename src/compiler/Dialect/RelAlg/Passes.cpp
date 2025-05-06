@@ -44,7 +44,7 @@ void relalg::createQueryOptPipeline(mlir::OpPassManager& pm, lingodb::runtime::C
    pm.addPass(mlir::createCanonicalizerPass());
    // pm.addNestedPass<mlir::func::FuncOp>(relalg::createCudaCodeGenPass());
    // pm.addNestedPass<mlir::func::FuncOp>(relalg::createCudaCodeGenNoCountPass());
-   // pm.addNestedPass<mlir::func::FuncOp>(relalg::createCudaCrystalCodeGenPass());
+   // pm.addNestedPass<mlir::func::FuncOp>(relalg::createCudaCrystalCodeGenNoCountPass());
    relalg::addCudaCodeGenPass(pm);
 }
 void relalg::registerQueryOptimizationPasses() {
@@ -97,7 +97,7 @@ void relalg::registerQueryOptimizationPasses() {
       return relalg::createCudaCodeGenNoCountPass();
    });
    ::mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
-      return relalg::createCudaCrystalCodeGenPass();
+      return relalg::createCudaCrystalCodeGenNoCountPass();
    });
    mlir::PassPipelineRegistration<mlir::EmptyPipelineOptions>(
       "relalg-query-opt",
