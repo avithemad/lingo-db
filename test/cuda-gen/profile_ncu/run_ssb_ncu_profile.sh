@@ -23,7 +23,8 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Get the path of the parent directory
-TEST_DIR="$(dirname "$SCRIPT_DIR")"
+PROFILE_DIR="$(dirname "$SCRIPT_DIR")"
+TEST_DIR="$(dirname "$PROFILE_DIR")"
 REPO_DIR="$(dirname "$TEST_DIR")"
 
 SSB_DIR="$REPO_DIR/resources/sql/ssb"
