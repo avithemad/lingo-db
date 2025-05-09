@@ -52,7 +52,7 @@ for QUERY in "${QUERIES[@]}"; do
   echo $MAKE_REPORT_FOLDER
   $MAKE_REPORT_FOLDER
 
-  RUN_PROFILE_CMD="ncu --set full --export $REPORT_FOLDER/q$QUERY-ssb.ncu-rep ./build/dbruntime --data_dir $SSB_DATA_DIR/ --query_num $QUERY"
+  RUN_PROFILE_CMD="ncu --set full -f --export $REPORT_FOLDER/q$QUERY-ssb-2.ncu-rep ./build/dbruntime --data_dir $SSB_DATA_DIR/ --query_num $QUERY"
   echo $RUN_PROFILE_CMD
   $RUN_PROFILE_CMD # > op | tee 2>&1
 
