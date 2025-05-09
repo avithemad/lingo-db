@@ -244,6 +244,8 @@ class TupleStreamCode {
 
    std::map<std::string, std::string> mainArgs;
    std::map<std::string, std::string> countArgs;
+   size_t curMainUnpredicatedLoadInsertionIndex = 0;
+   size_t curCountUnpredicatedLoadInsertionIndex = 0;
    int id;
    void appendKernel(std::string stmt, KernelType ty) {
       if (ty == KernelType::Main)
@@ -251,7 +253,22 @@ class TupleStreamCode {
       else
          countCode.push_back(stmt);
    }
-
+   void recordPostThreadIdxCheck(KernelType ty) {
+      if (ty == KernelType::Main)
+         curMainUnpredicatedLoadInsertionIndex = mainCode.size();
+      else
+         curCountUnpredicatedLoadInsertionIndex = countCode.size();
+   }
+   void appendKernelAtStart(std::string stmt, KernelType ty) {
+      if (ty == KernelType::Main) {
+         mainCode.insert(mainCode.begin() + curMainUnpredicatedLoadInsertionIndex, stmt);
+         ++curMainUnpredicatedLoadInsertionIndex;
+      }
+      else {
+         countCode.insert(countCode.begin() + curCountUnpredicatedLoadInsertionIndex, stmt);
+         ++curCountUnpredicatedLoadInsertionIndex;
+      }
+   }
    void appendControl(std::string stmt) {
       controlCode.push_back(stmt);
    }
@@ -288,8 +305,10 @@ class TupleStreamCode {
 
       appendKernel("size_t tid = blockIdx.x * blockDim.x + threadIdx.x;", KernelType::Main);
       appendKernel(fmt::format("if (tid >= {}) return;", tableSize), KernelType::Main);
+      recordPostThreadIdxCheck(KernelType::Main); // this is where we want to insert column loads to issue loads together
       appendKernel("size_t tid = blockIdx.x * blockDim.x + threadIdx.x;", KernelType::Count);
       appendKernel(fmt::format("if (tid >= {}) return;", tableSize), KernelType::Count);
+      recordPostThreadIdxCheck(KernelType::Count);
       for (auto namedAttr : baseTableOp.getColumns().getValue()) {
          auto columnName = namedAttr.getName().str();
          ColumnDetail detail(mlir::cast<tuples::ColumnDefAttr>(namedAttr.getValue()));
@@ -322,8 +341,10 @@ class TupleStreamCode {
 
       appendKernel("size_t tid = blockIdx.x * blockDim.x + threadIdx.x;", KernelType::Main);
       appendKernel(fmt::format("if (tid >= {0}) return;", tableSize), KernelType::Main);
+      recordPostThreadIdxCheck(KernelType::Main); // this is where we want to insert column loads to issue loads together
       appendKernel("size_t tid = blockIdx.x * blockDim.x + threadIdx.x;", KernelType::Count);
       appendKernel(fmt::format("if (tid >= {0}) return;", tableSize), KernelType::Count);
+      recordPostThreadIdxCheck(KernelType::Count);
 
       auto groupByKeys = aggOp.getGroupByCols();
       auto computedCols = aggOp.getComputedCols();
@@ -406,7 +427,10 @@ class TupleStreamCode {
             LoadColumn(dep, ty);
          }
       }
-      appendKernel(fmt::format("auto {1} = {0};", colData->loadExpression + (colData->type == ColumnType::Direct ? "[" + colData->rid + "]" : ""), cudaId), ty);
+      if (colData->rid == "tid")
+         appendKernelAtStart(fmt::format("auto {1} = {0};", colData->loadExpression + (colData->type == ColumnType::Direct ? "[" + colData->rid + "]" : ""), cudaId), ty);
+      else
+         appendKernel(fmt::format("auto {1} = {0};", colData->loadExpression + (colData->type == ColumnType::Direct ? "[" + colData->rid + "]" : ""), cudaId), ty);
       if (colData->type == ColumnType::Direct) {
          auto cudaTy = mlirTypeToCudaType(detail.type);
          if (ty == KernelType::Main) {
@@ -1193,9 +1217,9 @@ void relalg::addCudaCodeGenPass(mlir::OpPassManager& pm) {
       pm.addNestedPass<mlir::func::FuncOp>(createCudaCodeGenPass());
    } else if (gCudaCodeGenNoCountEnabled) {
       pm.addNestedPass<mlir::func::FuncOp>(createCudaCodeGenNoCountPass());
-   } else if (gCudaCrystalCodeGenEnabled) {
-      pm.addNestedPass<mlir::func::FuncOp>(createCudaCrystalCodeGenPass());
-   }
+   }// else if (gCudaCrystalCodeGenEnabled) {
+   //    pm.addNestedPass<mlir::func::FuncOp>(createCudaCrystalCodeGenPass());
+   // }
 }
 
 void removeCodeGenSwitch(int& argc, char** argv, int i) {
