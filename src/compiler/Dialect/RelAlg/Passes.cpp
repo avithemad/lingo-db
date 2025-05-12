@@ -97,6 +97,9 @@ void relalg::registerQueryOptimizationPasses() {
       return relalg::createCudaCodeGenNoCountPass();
    });
    ::mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
+      return relalg::createCudaCrystalCodeGenPass();
+   });
+   ::mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
       return relalg::createCudaCrystalCodeGenNoCountPass();
    });
    mlir::PassPipelineRegistration<mlir::EmptyPipelineOptions>(

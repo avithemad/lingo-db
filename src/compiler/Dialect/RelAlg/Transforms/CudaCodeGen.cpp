@@ -353,7 +353,7 @@ class TupleStreamCode {
             mlirToGlobalSymbol[mlirSymbol] = globalSymbol;
             ColumnMetadata* encoded_metadata = new ColumnMetadata(mlirSymbol, ColumnType::Direct, StreamId, globalSymbol);
             encoded_metadata->rid = "tid";
-            columnData[mlirSymbol + "_encoded"] = encoded_metadata;
+            columnData[mlirSymbol] = encoded_metadata;
          } else {
             auto mlirSymbol = detail.getMlirSymbol();
             auto globalSymbol = fmt::format("d_{0}", mlirSymbol);
@@ -371,13 +371,23 @@ class TupleStreamCode {
       for (auto p : columnData) delete p.second;
    }
    void RenamingOp(relalg::RenamingOp renamingOp) {
+      renamingOp.dump();
       for (mlir::Attribute attr : renamingOp.getColumns()) {
+         attr.dump();
          auto relationDefAttr = mlir::dyn_cast_or_null<tuples::ColumnDefAttr>(attr);
          mlir::Attribute from = mlir::dyn_cast_or_null<mlir::ArrayAttr>(relationDefAttr.getFromExisting())[0];
+         from.dump();
          auto relationRefAttr = mlir::dyn_cast_or_null<tuples::ColumnRefAttr>(from);
          ColumnDetail detailRef(relationRefAttr), detailDef(relationDefAttr);
+         auto colData = columnData[detailRef.getMlirSymbol()];
+         if (colData == nullptr && mlirTypeToCudaType(detailRef.type) == "DBStringType") {
+            colData = columnData[detailRef.getMlirSymbol() + "_encoded"];
+         }
+         if (colData == nullptr) {
+            assert(false && "Renaming op: column ref not in tuple stream");
+         }
          columnData[detailDef.getMlirSymbol()] =
-            new ColumnMetadata(columnData[detailRef.getMlirSymbol()]);
+            new ColumnMetadata(colData);
       }
    }
    template <int enc = 0>
@@ -602,6 +612,7 @@ class TupleStreamCode {
    std::vector<std::pair<int, std::string>> getBaseRelations(const std::map<std::string, ColumnMetadata*>& columnData) {
       std::set<std::pair<int, std::string>> temp;
       for (auto p : columnData) {
+         if (p.second == nullptr) continue;
          auto metadata = p.second;
          if (metadata->type == ColumnType::Direct)
             temp.insert(std::make_pair(metadata->streamId, metadata->rid));
@@ -613,6 +624,7 @@ class TupleStreamCode {
    std::map<std::string, ColumnMetadata*> BuildHashTable(mlir::Operation* op) {
       auto joinOp = mlir::dyn_cast_or_null<relalg::InnerJoinOp>(op);
       if (!joinOp) assert(false && "Insert hash table accepts only inner join operation.");
+      op->dump();
       auto keys = joinOp->getAttrOfType<mlir::ArrayAttr>("leftHash");
       auto key = MakeKeys(op, keys, KernelType::Main);
       appendKernel("// Insert hash table kernel;", KernelType::Main);
@@ -644,10 +656,10 @@ class TupleStreamCode {
       appendControl(fmt::format("uint64_t* d_{0};", BUF(op)));
       appendControl(fmt::format("cudaMalloc(&d_{0}, sizeof(uint64_t) * {1} * {2});", BUF(op), COUNT(op), baseRelations.size()));
       deviceFrees.insert(fmt::format("d_{0}", BUF(op)));
-      appendControl(fmt::format("auto d_{0} = cuco::experimental::static_multimap{{ (int){1}*2, cuco::empty_key{{(int64_t)-1}},cuco::empty_value{{(int64_t)-1}},thrust::equal_to<int64_t>{{}},cuco::linear_probing<1, cuco::default_hash_function<int64_t>>() }};",
-                                HT(op), COUNT(op)));
-      // appendControl(fmt::format("auto d_{0} = cuco::static_map{{ (int){1}*2, cuco::empty_key{{(int64_t)-1}},cuco::empty_value{{(int64_t)-1}},thrust::equal_to<int64_t>{{}},cuco::linear_probing<1, cuco::default_hash_function<int64_t>>() }};",
+      // appendControl(fmt::format("auto d_{0} = cuco::experimental::static_multimap{{ (int){1}*2, cuco::empty_key{{(int64_t)-1}},cuco::empty_value{{(int64_t)-1}},thrust::equal_to<int64_t>{{}},cuco::linear_probing<1, cuco::default_hash_function<int64_t>>() }};",
       //                           HT(op), COUNT(op)));
+      appendControl(fmt::format("auto d_{0} = cuco::static_map{{ (int){1}*2, cuco::empty_key{{(int64_t)-1}},cuco::empty_value{{(int64_t)-1}},thrust::equal_to<int64_t>{{}},cuco::linear_probing<1, cuco::default_hash_function<int64_t>>() }};",
+                                HT(op), COUNT(op)));
       appendControl(launchKernel(KernelType::Main));
       // appendControl(fmt::format("cudaFree(d_{0});", BUF_IDX(op)));
       return columnData;
@@ -660,15 +672,15 @@ class TupleStreamCode {
       auto key = MakeKeys(op, keys, KernelType::Main);
       appendKernel("//Probe Hash table", KernelType::Main);
       appendKernel("//Probe Hash table", KernelType::Count);
-      // appendKernel(fmt::format("auto {0} = {1}.find({2});", SLOT(op), HT(op), key), KernelType::Main);
-      // appendKernel(fmt::format("auto {0} = {1}.find({2});", SLOT(op), HT(op), key), KernelType::Count);
-      // appendKernel(fmt::format("if ({0} == {1}.end()) return;", SLOT(op), HT(op)), KernelType::Main);
-      // appendKernel(fmt::format("if ({0} == {1}.end()) return;", SLOT(op), HT(op)), KernelType::Count);
-      appendKernel(fmt::format("{0}.for_each({1}, [&] __device__ (auto const {2}) {{", HT(op), key, SLOT(op)), KernelType::Main);
-      appendKernel(fmt::format("auto const [{0}, {1}] = {2};", slot_first(op), slot_second(op), SLOT(op)), KernelType::Main);
-      appendKernel(fmt::format("{0}.for_each({1}, [&] __device__ (auto const {2}) {{\n", HT(op), key, SLOT(op)), KernelType::Count);
-      appendKernel(fmt::format("auto const [{0}, {1}] = {2};", slot_first(op), slot_second(op), SLOT(op)), KernelType::Count);
-      forEachScopes++;
+      appendKernel(fmt::format("auto {0} = {1}.find({2});", SLOT(op), HT(op), key), KernelType::Main);
+      appendKernel(fmt::format("auto {0} = {1}.find({2});", SLOT(op), HT(op), key), KernelType::Count);
+      appendKernel(fmt::format("if ({0} == {1}.end()) return;", SLOT(op), HT(op)), KernelType::Main);
+      appendKernel(fmt::format("if ({0} == {1}.end()) return;", SLOT(op), HT(op)), KernelType::Count);
+      // appendKernel(fmt::format("{0}.for_each({1}, [&] __device__ (auto const {2}) {{", HT(op), key, SLOT(op)), KernelType::Main);
+      // appendKernel(fmt::format("auto const [{0}, {1}] = {2};", slot_first(op), slot_second(op), SLOT(op)), KernelType::Main);
+      // appendKernel(fmt::format("{0}.for_each({1}, [&] __device__ (auto const {2}) {{\n", HT(op), key, SLOT(op)), KernelType::Count);
+      // appendKernel(fmt::format("auto const [{0}, {1}] = {2};", slot_first(op), slot_second(op), SLOT(op)), KernelType::Count);
+      // forEachScopes++;
 
       // add all leftColumn data to this data
       auto baseRelations = getBaseRelations(leftColumnData);
@@ -680,17 +692,18 @@ class TupleStreamCode {
          i++;
       }
       for (auto colData : leftColumnData) {
+         if (colData.second == nullptr) continue;
          if (colData.second->type == ColumnType::Direct) {
-            // colData.second->rid = fmt::format("{3}[{0}->second * {1} + {2}]",
-            //                                   SLOT(op),
-            //                                   std::to_string(baseRelations.size()),
-            //                                   streamIdToBufId[colData.second->streamId],
-            //                                   BUF(op));
-            colData.second->rid = fmt::format("{3}[{0} * {1} + {2}]",
-                                              slot_second(op),
+            colData.second->rid = fmt::format("{3}[{0}->second * {1} + {2}]",
+                                              SLOT(op),
                                               std::to_string(baseRelations.size()),
                                               streamIdToBufId[colData.second->streamId],
                                               BUF(op));
+            // colData.second->rid = fmt::format("{3}[{0} * {1} + {2}]",
+            //                                   slot_second(op),
+            //                                   std::to_string(baseRelations.size()),
+            //                                   streamIdToBufId[colData.second->streamId],
+            //                                   BUF(op));
             // colData.second->streamId = id;
             columnData[colData.first] = colData.second;
             mlirToGlobalSymbol[colData.second->loadExpression] = colData.second->globalId;
@@ -701,8 +714,8 @@ class TupleStreamCode {
       mainArgs[BUF(op)] = "uint64_t*";
       countArgs[HT(op)] = "HASHTABLE_PROBE";
       countArgs[BUF(op)] = "uint64_t*";
-      // mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::find)", HT(op));
-      mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::for_each)", HT(op));
+      mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::find)", HT(op));
+      // mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::for_each)", HT(op));
       mlirToGlobalSymbol[BUF(op)] = fmt::format("d_{}", BUF(op));
    }
    void CreateAggregationHashTable(mlir::Operation* op) {
@@ -1057,6 +1070,7 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
    void runOnOperation() override {
       getOperation().walk([&](mlir::Operation* op) {
          if (auto selection = llvm::dyn_cast<relalg::SelectionOp>(op)) {
+            op->dump();
             mlir::Operation* stream = selection.getRelMutable().get().getDefiningOp();
             TupleStreamCode* streamCode = streamCodeMap[stream];
             if (!streamCode) {
@@ -1175,6 +1189,7 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
 static bool gCudaCodeGenEnabled = false;
 static bool gCudaCodeGenNoCountEnabled = false;
 static bool gCudaCrystalCodeGenEnabled = false;
+static bool gCudaCrystalCodeGenNoCountEnabled = false;
 static bool gCompilingSSB = false;
 
 void emitControlFunctionSignature(std::ostream& outputFile) {
@@ -1193,6 +1208,8 @@ void relalg::addCudaCodeGenPass(mlir::OpPassManager& pm) {
       pm.addNestedPass<mlir::func::FuncOp>(createCudaCodeGenPass());
    } else if (gCudaCodeGenNoCountEnabled) {
       pm.addNestedPass<mlir::func::FuncOp>(createCudaCodeGenNoCountPass());
+   } else if (gCudaCrystalCodeGenNoCountEnabled) {
+      pm.addNestedPass<mlir::func::FuncOp>(createCudaCrystalCodeGenNoCountPass());
    } else if (gCudaCrystalCodeGenEnabled) {
       pm.addNestedPass<mlir::func::FuncOp>(createCudaCrystalCodeGenPass());
    }
@@ -1229,6 +1246,10 @@ void relalg::conditionallyEnableCudaCodeGen(int& argc, char** argv) {
          break;
       } else if (std::string(argv[i]) == "--gen-cuda-code-no-count") {
          gCudaCodeGenNoCountEnabled = true;
+         removeCodeGenSwitch(argc, argv, i);
+         break;
+      } else if (std::string(argv[i]) == "--gen-cuda-crystal-code-no-count") {
+         gCudaCrystalCodeGenNoCountEnabled = true;
          removeCodeGenSwitch(argc, argv, i);
          break;
       } else if (std::string(argv[i]) == "--gen-cuda-crystal-code") {

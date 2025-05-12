@@ -300,7 +300,6 @@ class TupleStreamCode {
       StreamId++;
       return;
    }
-   // TODO(avinash): after making the crystal style codegen for materialization, use this code
    TupleStreamCode(mlir::Operation* op) {
       auto aggOp = mlir::dyn_cast_or_null<relalg::AggregationOp>(op);
       if (!aggOp) assert(false && "Expected aggregation operation");
@@ -405,7 +404,6 @@ class TupleStreamCode {
       appendKernel("if (!selection_flags[ITEM]) continue;");
       appendKernel(fmt::format("{0}[ITEM] = {1};", cudaId, colData->loadExpression + (colData->type == ColumnType::Direct ? "[" + colData->rid + "]" : "")));
       appendKernel("}");
-      // TODO(avinash): Add for loop for mapped expressions
       if (colData->type == ColumnType::Direct) {
          auto cudaTy = mlirTypeToCudaType(detail.type);
          if (enc == 0)
@@ -553,8 +551,8 @@ class TupleStreamCode {
       appendKernel(fmt::format("for (int ITEM = 0; ITEM < ITEMS_PER_THREAD && (tid + ITEM < {0}); ++ITEM) {{", kernelSize));
       appendKernel("if (!selection_flags[ITEM]) continue;");
       appendKernel(fmt::format("{0}[ITEM] = 0;", KEY(op)));
+      int totalKeySize = 0;
       for (auto i = 0ull; i < keys.size(); i++) {
-         int totalKeySize = 0;
          tuples::ColumnRefAttr key = mlir::cast<tuples::ColumnRefAttr>(keys[i]);
          auto baseType = mlirTypeToCudaType(key.getColumn().type);
          // handle string type differently (assume that string encoded column is available)
@@ -1054,7 +1052,7 @@ class TupleStreamCode {
 };
 
 class CudaCrystalCodeGenNoCount : public mlir::PassWrapper<CudaCrystalCodeGenNoCount, mlir::OperationPass<mlir::func::FuncOp>> {
-   virtual llvm::StringRef getArgument() const override { return "relalg-cuda-code-gen-crystal"; }
+   virtual llvm::StringRef getArgument() const override { return "relalg-cuda-code-gen-crystal-no-count"; }
 
    public:
    MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(CudaCrystalCodeGenNoCount)
