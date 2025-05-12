@@ -287,11 +287,11 @@ class TupleStreamCode {
       countArgs[tableSize] = "size_t"; // make sure this type is reserved for kernel size only
 
       appendKernel("size_t tile_offset = blockIdx.x * TILE_SIZE;", KernelType::Main);
-      appendKernel("size_t tid = tile_offset + threadIdx.x * ITEMS_PER_THREAD;", KernelType::Main);
+      appendKernel("size_t tid = tile_offset + threadIdx.x;", KernelType::Main);
       appendKernel("int selection_flags[ITEMS_PER_THREAD];", KernelType::Main);
       appendKernel("for (int i=0; i<ITEMS_PER_THREAD; i++) selection_flags[i] = 1;", KernelType::Main);
       appendKernel("size_t tile_offset = blockIdx.x * TILE_SIZE;", KernelType::Count);
-      appendKernel("size_t tid = tile_offset + threadIdx.x * ITEMS_PER_THREAD;", KernelType::Count);
+      appendKernel("size_t tid = tile_offset + threadIdx.x;", KernelType::Count);
       appendKernel("int selection_flags[ITEMS_PER_THREAD];", KernelType::Count);
       appendKernel("for (int i=0; i<ITEMS_PER_THREAD; i++) selection_flags[i] = 1;", KernelType::Count);
 
@@ -326,11 +326,11 @@ class TupleStreamCode {
       countArgs[tableSize] = "size_t"; // make sure this type is reserved for kernel size only
 
       appendKernel("size_t tile_offset = blockIdx.x * TILE_SIZE;", KernelType::Main);
-      appendKernel("size_t tid = tile_offset + threadIdx.x * ITEMS_PER_THREAD;", KernelType::Main);
+      appendKernel("size_t tid = tile_offset + threadIdx.x;", KernelType::Main);
       appendKernel("int selection_flags[ITEMS_PER_THREAD];", KernelType::Main);
       appendKernel("for (int i=0; i<ITEMS_PER_THREAD; i++) selection_flags[i] = 1;", KernelType::Main);
       appendKernel("size_t tile_offset = blockIdx.x * TILE_SIZE;", KernelType::Count);
-      appendKernel("size_t tid = tile_offset + threadIdx.x * ITEMS_PER_THREAD;", KernelType::Count);
+      appendKernel("size_t tid = tile_offset + threadIdx.x;", KernelType::Count);
       appendKernel("int selection_flags[ITEMS_PER_THREAD];", KernelType::Count);
       appendKernel("for (int i=0; i<ITEMS_PER_THREAD; i++) selection_flags[i] = 1;", KernelType::Count);
 
@@ -1251,7 +1251,8 @@ class CudaCrystalCodeGen : public mlir::PassWrapper<CudaCrystalCodeGen, mlir::Op
 #include \"db_types.h\"\n\
 #include \"dbruntime.h\"\n\
 #define ITEMS_PER_THREAD 4\n\
-#define TILE_SIZE 512\n";
+#define TILE_SIZE 512\n\
+#define TB TILE_SIZE/ITEMS_PER_THREAD\n";
       for (auto code : kernelSchedule) {
          code->printKernel(KernelType::Count, outputFile);
          code->printKernel(KernelType::Main, outputFile);
