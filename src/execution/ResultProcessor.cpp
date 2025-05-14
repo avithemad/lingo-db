@@ -136,6 +136,7 @@ void printTableToCSV(const std::shared_ptr<arrow::Table>& table) {
    // Example customization: write_options.include_header = false;
    // Example customization: write_options.delimiter = ';';
    // Example customization: write_options.null_string = "NA";
+   write_options.delimiter = '|';
 
    if (!(WriteCSV(*table, write_options, &output_stream).ok())) {
       std::cerr << "Failed to write table to CSV";

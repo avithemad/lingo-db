@@ -80,8 +80,8 @@ def compare_csv_files_fuzzy(file1_path, file2_path, float_tolerance=1e-5, percen
     """
     try:
         # Read the CSV files
-        df1 = pd.read_csv(file1_path, header=0)
-        df2 = pd.read_csv(file2_path, header=None)
+        df1 = pd.read_csv(file1_path, header=0, delimiter='|')
+        df2 = pd.read_csv(file2_path, header=None, delimiter='|')
         df2.columns = df1.columns # Set df2's columns to match df1's
 
         # --- Basic Checks ---

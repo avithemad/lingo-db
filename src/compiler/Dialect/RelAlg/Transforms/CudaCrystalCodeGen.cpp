@@ -987,7 +987,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       appendControl(launchKernel(KernelType::Main));
       // appendControl(fmt::format("cudaFree(d_{0});", MAT_IDX(op)));
       std::string printStmts;
-      std::string delimiter = ",";
+      std::string delimiter = "|";
       bool first = true;
       for (auto col : materializeOp.getCols()) {
          auto columnAttr = mlir::cast<tuples::ColumnRefAttr>(col);

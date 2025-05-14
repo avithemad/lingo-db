@@ -220,8 +220,11 @@ static std::string translateConstantOp(db::ConstantOp& constantOp) {
       // TODO(avinash): handle char types
       auto strAttr = mlir::dyn_cast_or_null<mlir::StringAttr>(constantOp.getValue());
       assert(strAttr != 0x0 && "Expected character constant attribute to be strattr");
-
-      return ("\"" + strAttr.str() + "\"");
+      if (strAttr.str().size() == 1) {
+         return ("\'" + strAttr.str() + "\'");
+      } else  { 
+         return ("\"" + strAttr.str() + "\"");
+      }
    } else {
       assert(false && "Constant op not handled");
       return "";
@@ -479,7 +482,15 @@ class TupleStreamCode {
          return fmt::format("evaluatePredicate({0}, {1}, {2})", leftOperand, rightOperand, predicate);
       } else if (auto runtimeOp = mlir::dyn_cast_or_null<db::RuntimeCall>(op)) { // or a like operation
          // TODO(avinash, p1): handle runtime predicate like operator
-         assert(false && "TODO: handle runtime predicates\n");
+         // assert(false && "TODO: handle runtime predicates\n");
+         std::string function = runtimeOp.getFn().str();
+         std::string args = "";
+         std::string sep = "";
+         for (auto v : runtimeOp.getArgs()) {
+            args += sep + SelectionOpDfs(v.getDefiningOp());
+            sep = ", ";
+         }
+         return fmt::format("{0}({1})", function, args);
       } else if (auto betweenOp = mlir::dyn_cast_or_null<db::BetweenOp>(op)) {
          std::string operand = SelectionOpDfs(betweenOp.getVal().getDefiningOp());
          std::string lower = SelectionOpDfs(betweenOp.getLower().getDefiningOp());
@@ -525,6 +536,16 @@ class TupleStreamCode {
          return "false";
       } else if (auto asNullableOp = mlir::dyn_cast_or_null<db::AsNullableOp>(op)) {
          return "true";
+      } else if (auto oneOfOp = mlir::dyn_cast_or_null<db::OneOfOp>(op)) {
+         std::string res = "(";
+         std::string sep = "";
+         std::string val = SelectionOpDfs(oneOfOp.getVal().getDefiningOp());
+         for (auto v : oneOfOp.getVals()) {
+            res += sep + fmt::format("evaluatePredicate({0}, {1}, Predicate::eq)", val, SelectionOpDfs(v.getDefiningOp()));
+            sep = " || (";
+            res += ")";
+         }
+         return res;
       }
       op->dump();
       assert(false && "Selection predicate not handled");
@@ -640,6 +661,21 @@ class TupleStreamCode {
                                 HT(op), COUNT(op)));
       appendControl(launchKernel(KernelType::Main));
    }
+   void BuildHashTableAntiSemiJoin(mlir::Operation* op) {
+      auto joinOp = mlir::dyn_cast_or_null<relalg::AntiSemiJoinOp>(op);
+      if (!joinOp) assert(false && "Build hash table accepts only anti semi join operation.");
+      auto keys = joinOp->getAttrOfType<mlir::ArrayAttr>("rightHash");
+      auto key = MakeKeys(op, keys, KernelType::Main);
+      appendKernel("// Insert hash table kernel;", KernelType::Main);
+      appendKernel(fmt::format("{0}.insert(cuco::pair{{{1}, 1}});", HT(op), key), KernelType::Main);
+
+      mainArgs[HT(op)] = "HASHTABLE_INSERT_SJ";
+      mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::insert)", HT(op));
+      appendControl("// Insert hash table control;");
+      appendControl(fmt::format("auto d_{0} = cuco::static_map{{ (int){1}*2, cuco::empty_key{{(int64_t)-1}},cuco::empty_value{{(int64_t)-1}},thrust::equal_to<int64_t>{{}},cuco::linear_probing<1, cuco::default_hash_function<int64_t>>() }};",
+                                HT(op), COUNT(op)));
+      appendControl(launchKernel(KernelType::Main));
+   }
    void ProbeHashTableSemiJoin(mlir::Operation* op) {
       auto joinOp = mlir::dyn_cast_or_null<relalg::SemiJoinOp>(op);
       if (!joinOp) assert(false && "Probe hash table accepts only semi join operation.");
@@ -652,6 +688,23 @@ class TupleStreamCode {
       appendKernel(fmt::format("auto {0} = {1}.find({2});", SLOT(op), HT(op), key), KernelType::Count);
       appendKernel(fmt::format("if ({0} == {1}.end()) return;", SLOT(op), HT(op)), KernelType::Main);
       appendKernel(fmt::format("if ({0} == {1}.end()) return;", SLOT(op), HT(op)), KernelType::Count);
+
+      mainArgs[HT(op)] = "HASHTABLE_PROBE_SJ";
+      countArgs[HT(op)] = "HASHTABLE_PROBE_SJ";
+      mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::find)", HT(op));
+   }
+   void ProbeHashTableAntiSemiJoin(mlir::Operation* op) {
+      auto joinOp = mlir::dyn_cast_or_null<relalg::AntiSemiJoinOp>(op);
+      if (!joinOp) assert(false && "Probe hash table accepts only anti semi join operation.");
+      auto keys = joinOp->getAttrOfType<mlir::ArrayAttr>("leftHash");
+      MakeKeys(op, keys, KernelType::Count);
+      auto key = MakeKeys(op, keys, KernelType::Main);
+      appendKernel("//Probe Hash table", KernelType::Main);
+      appendKernel("//Probe Hash table", KernelType::Count);
+      appendKernel(fmt::format("auto {0} = {1}.find({2});", SLOT(op), HT(op), key), KernelType::Main);
+      appendKernel(fmt::format("auto {0} = {1}.find({2});", SLOT(op), HT(op), key), KernelType::Count);
+      appendKernel(fmt::format("if (!({0} == {1}.end())) return;", SLOT(op), HT(op)), KernelType::Main);
+      appendKernel(fmt::format("if (!({0} == {1}.end())) return;", SLOT(op), HT(op)), KernelType::Count);
 
       mainArgs[HT(op)] = "HASHTABLE_PROBE_SJ";
       countArgs[HT(op)] = "HASHTABLE_PROBE_SJ";
@@ -699,7 +752,7 @@ class TupleStreamCode {
       // appendControl(fmt::format("cudaFree(d_{0});", BUF_IDX(op)));
       return columnData;
    }
-   
+
    void ProbeHashTable(mlir::Operation* op, const std::map<std::string, ColumnMetadata*>& leftColumnData) {
       auto joinOp = mlir::dyn_cast_or_null<relalg::InnerJoinOp>(op);
       if (!joinOp) assert(false && "Probe hash table accepts only inner join operation.");
@@ -813,6 +866,10 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
             ColumnDetail detail(newcol);
             auto newbuffername = detail.getMlirSymbol();
             auto bufferColType = mlirTypeToCudaType(detail.type);
+            if (bufferColType == "DBStringType") {
+               newbuffername = newbuffername + "_encoded";
+               bufferColType = "DBI16Type";
+            }
             mainArgs[newbuffername] = bufferColType + "*";
             mlirToGlobalSymbol[newbuffername] = fmt::format("d_{}", newbuffername);
             appendControl(fmt::format("{0}* d_{1};", bufferColType, newbuffername));
@@ -822,7 +879,14 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
             if (auto aggrFunc = llvm::dyn_cast<relalg::AggrFuncOp>(col.getDefiningOp())) {
                auto slot = fmt::format("{0}[{1}]", newbuffername, buf_idx(op));
                auto fn = aggrFunc.getFn();
-               auto val = LoadColumn(mlir::cast<tuples::ColumnRefAttr>(aggrFunc.getAttr()), KernelType::Main);
+               ColumnDetail aggrCol = ColumnDetail(mlir::cast<tuples::ColumnRefAttr>(aggrFunc.getAttr()));
+               std::string val = "";
+               if (mlirTypeToCudaType(detail.type) == "DBStringType") {
+                  appendControl(fmt::format("auto {0}_map = {1}_map;", detail.getMlirSymbol(), aggrCol.getMlirSymbol()));
+                  val = LoadColumn<1>(mlir::cast<tuples::ColumnRefAttr>(aggrFunc.getAttr()), KernelType::Main);
+               } else {
+                  val = LoadColumn(mlir::cast<tuples::ColumnRefAttr>(aggrFunc.getAttr()), KernelType::Main);
+               }
                switch (fn) {
                   case relalg::AggrFunc::sum: {
                      appendKernel(fmt::format("aggregate_sum(&{0}, {1});", slot, val), KernelType::Main);
@@ -936,7 +1000,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       appendControl(launchKernel(KernelType::Main));
       // appendControl(fmt::format("cudaFree(d_{0});", MAT_IDX(op)));
       std::string printStmts;
-      std::string delimiter = ",";
+      std::string delimiter = "|";
       bool first = true;
       for (auto col : materializeOp.getCols()) {
          auto columnAttr = mlir::cast<tuples::ColumnRefAttr>(col);
@@ -1035,8 +1099,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
          _kernelName = "count";
       }
       bool hasHash = false;
-      for (auto p : _args) hasHash |= (p.second == "HASHTABLE_FIND" || p.second == "HASHTABLE_INSERT" || p.second == "HASHTABLE_PROBE"
-       || p.second == "HASHTABLE_INSERT_SJ" || p.second == "HASHTABLE_PROBE_SJ");
+      for (auto p : _args) hasHash |= (p.second == "HASHTABLE_FIND" || p.second == "HASHTABLE_INSERT" || p.second == "HASHTABLE_PROBE" || p.second == "HASHTABLE_INSERT_SJ" || p.second == "HASHTABLE_PROBE_SJ");
       if (hasHash) {
          stream << "template<";
          bool find = false, insert = false, probe = false;
@@ -1222,6 +1285,27 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
             leftStreamCode->AddSelectionPredicate(predicate);
 
             streamCodeMap[op] = leftStreamCode;
+         } else if (auto antiSemiJoinOp = llvm::dyn_cast<relalg::AntiSemiJoinOp>(op)) {
+            auto leftStream = antiSemiJoinOp.getLeftMutable().get().getDefiningOp();
+            auto rightStream = antiSemiJoinOp.getRightMutable().get().getDefiningOp();
+            auto leftStreamCode = streamCodeMap[leftStream];
+            auto rightStreamCode = streamCodeMap[rightStream];
+            if (!leftStreamCode) {
+               leftStream->dump();
+               assert(false && "No downstream operation left side of hash join found");
+            }
+            if (!rightStreamCode) {
+               rightStream->dump();
+               assert(false && "No downstream operation right side of hash join found");
+            }
+            rightStreamCode->MaterializeCount(op); // count of left
+            rightStreamCode->BuildHashTableAntiSemiJoin(op); // main of left
+            kernelSchedule.push_back(rightStreamCode);
+            leftStreamCode->ProbeHashTableAntiSemiJoin(op);
+            mlir::Region& predicate = antiSemiJoinOp.getPredicate();
+            leftStreamCode->AddSelectionPredicate(predicate);
+
+            streamCodeMap[op] = leftStreamCode;
          }
       });
       std::ofstream outputFile("output.cu");
@@ -1260,7 +1344,7 @@ static bool gCompilingSSB = false;
 
 void emitControlFunctionSignature(std::ostream& outputFile) {
    if (!gCompilingSSB)
-      outputFile << "extern \"C\" void control (DBI32Type * d_nation__n_nationkey, DBStringType * d_nation__n_name, DBI32Type * d_nation__n_regionkey, DBStringType * d_nation__n_comment, size_t nation_size, DBI32Type * d_supplier__s_suppkey, DBI32Type * d_supplier__s_nationkey, DBStringType * d_supplier__s_name, DBStringType * d_supplier__s_address, DBStringType * d_supplier__s_phone, DBDecimalType * d_supplier__s_acctbal, DBStringType * d_supplier__s_comment, size_t supplier_size, DBI32Type * d_partsupp__ps_suppkey, DBI32Type * d_partsupp__ps_partkey, DBI32Type * d_partsupp__ps_availqty, DBDecimalType * d_partsupp__ps_supplycost, DBStringType * d_partsupp__ps_comment, size_t partsupp_size, DBI32Type * d_part__p_partkey, DBStringType * d_part__p_name, DBStringType * d_part__p_mfgr, DBStringType * d_part__p_brand, DBStringType * d_part__p_type, DBI32Type * d_part__p_size, DBStringType * d_part__p_container, DBDecimalType * d_part__p_retailprice, DBStringType * d_part__p_comment, size_t part_size, DBI32Type * d_lineitem__l_orderkey, DBI32Type * d_lineitem__l_partkey, DBI32Type * d_lineitem__l_suppkey, DBI64Type * d_lineitem__l_linenumber, DBDecimalType * d_lineitem__l_quantity, DBDecimalType * d_lineitem__l_extendedprice, DBDecimalType * d_lineitem__l_discount, DBDecimalType * d_lineitem__l_tax, DBCharType * d_lineitem__l_returnflag, DBCharType * d_lineitem__l_linestatus, DBI32Type * d_lineitem__l_shipdate, DBI32Type * d_lineitem__l_commitdate, DBI32Type * d_lineitem__l_receiptdate, DBStringType * d_lineitem__l_shipinstruct, DBStringType * d_lineitem__l_shipmode, DBStringType * d_lineitem__comments, size_t lineitem_size, DBI32Type * d_orders__o_orderkey, DBCharType * d_orders__o_orderstatus, DBI32Type * d_orders__o_custkey, DBDecimalType * d_orders__o_totalprice, DBI32Type * d_orders__o_orderdate, DBStringType * d_orders__o_orderpriority, DBStringType * d_orders__o_clerk, DBI32Type * d_orders__o_shippriority, DBStringType * d_orders__o_comment, size_t orders_size, DBI32Type * d_customer__c_custkey, DBStringType * d_customer__c_name, DBStringType * d_customer__c_address, DBI32Type * d_customer__c_nationkey, DBStringType * d_customer__c_phone, DBDecimalType * d_customer__c_acctbal, DBStringType * d_customer__c_mktsegment, DBStringType * d_customer__c_comment, size_t customer_size, DBI32Type * d_region__r_regionkey, DBStringType * d_region__r_name, DBStringType * d_region__r_comment, size_t region_size, DBI16Type* d_nation__n_name_encoded, std::unordered_map<DBI16Type, DBStringType> &nation__n_name_map, std::unordered_map<DBI16Type, DBStringType> &n1___n_name_map, std::unordered_map<DBI16Type, DBStringType> &n2___n_name_map, DBI16Type* d_orders__o_orderpriority_encoded, std::unordered_map<DBI16Type, std::string>& orders__o_orderpriority_map, DBI16Type* d_customer__c_name_encoded, std::unordered_map<DBI16Type, std::string>& customer__c_name_map) {\n";
+      outputFile << "extern \"C\" void control (DBI32Type * d_nation__n_nationkey, DBStringType * d_nation__n_name, DBI32Type * d_nation__n_regionkey, DBStringType * d_nation__n_comment, size_t nation_size, DBI32Type * d_supplier__s_suppkey, DBI32Type * d_supplier__s_nationkey, DBStringType * d_supplier__s_name, DBStringType * d_supplier__s_address, DBStringType * d_supplier__s_phone, DBDecimalType * d_supplier__s_acctbal, DBStringType * d_supplier__s_comment, size_t supplier_size, DBI32Type * d_partsupp__ps_suppkey, DBI32Type * d_partsupp__ps_partkey, DBI32Type * d_partsupp__ps_availqty, DBDecimalType * d_partsupp__ps_supplycost, DBStringType * d_partsupp__ps_comment, size_t partsupp_size, DBI32Type * d_part__p_partkey, DBStringType * d_part__p_name, DBStringType * d_part__p_mfgr, DBStringType * d_part__p_brand, DBStringType * d_part__p_type, DBI32Type * d_part__p_size, DBStringType * d_part__p_container, DBDecimalType * d_part__p_retailprice, DBStringType * d_part__p_comment, size_t part_size, DBI32Type * d_lineitem__l_orderkey, DBI32Type * d_lineitem__l_partkey, DBI32Type * d_lineitem__l_suppkey, DBI64Type * d_lineitem__l_linenumber, DBDecimalType * d_lineitem__l_quantity, DBDecimalType * d_lineitem__l_extendedprice, DBDecimalType * d_lineitem__l_discount, DBDecimalType * d_lineitem__l_tax, DBCharType * d_lineitem__l_returnflag, DBCharType * d_lineitem__l_linestatus, DBI32Type * d_lineitem__l_shipdate, DBI32Type * d_lineitem__l_commitdate, DBI32Type * d_lineitem__l_receiptdate, DBStringType * d_lineitem__l_shipinstruct, DBStringType * d_lineitem__l_shipmode, DBStringType * d_lineitem__comments, size_t lineitem_size, DBI32Type * d_orders__o_orderkey, DBCharType * d_orders__o_orderstatus, DBI32Type * d_orders__o_custkey, DBDecimalType * d_orders__o_totalprice, DBI32Type * d_orders__o_orderdate, DBStringType * d_orders__o_orderpriority, DBStringType * d_orders__o_clerk, DBI32Type * d_orders__o_shippriority, DBStringType * d_orders__o_comment, size_t orders_size, DBI32Type * d_customer__c_custkey, DBStringType * d_customer__c_name, DBStringType * d_customer__c_address, DBI32Type * d_customer__c_nationkey, DBStringType * d_customer__c_phone, DBDecimalType * d_customer__c_acctbal, DBStringType * d_customer__c_mktsegment, DBStringType * d_customer__c_comment, size_t customer_size, DBI32Type * d_region__r_regionkey, DBStringType * d_region__r_name, DBStringType * d_region__r_comment, size_t region_size, DBI16Type* d_nation__n_name_encoded, std::unordered_map<DBI16Type, DBStringType> &nation__n_name_map, std::unordered_map<DBI16Type, DBStringType> &n1___n_name_map, std::unordered_map<DBI16Type, DBStringType> &n2___n_name_map, DBI16Type* d_orders__o_orderpriority_encoded, std::unordered_map<DBI16Type, std::string>& orders__o_orderpriority_map, DBI16Type* d_customer__c_name_encoded, std::unordered_map<DBI16Type, std::string>& customer__c_name_map, DBI16Type* d_customer__c_comment_encoded, std::unordered_map<DBI16Type, std::string>& customer__c_comment_map, DBI16Type* d_customer__c_phone_encoded, std::unordered_map<DBI16Type, std::string>& customer__c_phone_map, DBI16Type* d_customer__c_address_encoded, std::unordered_map<DBI16Type, std::string>& customer__c_address_map, DBI16Type* d_supplier__s_name_encoded, std::unordered_map<DBI16Type, std::string>& supplier__s_name_map, DBI16Type* d_part__p_brand_encoded, std::unordered_map<DBI16Type, std::string>& part__p_brand_map, DBI16Type* d_part__p_type_encoded, std::unordered_map<DBI16Type, std::string>& part__p_type_map) {\n";
    else
       outputFile << "extern \"C\" void control (DBI32Type* d_supplier__s_suppkey, DBStringType* d_supplier__s_name, DBStringType* d_supplier__s_address, DBStringType* d_supplier__s_city, DBStringType* d_supplier__s_nation, DBStringType* d_supplier__s_region, DBStringType* d_supplier__s_phone, size_t supplier_size, DBI32Type* d_part__p_partkey, DBStringType* d_part__p_name, DBStringType* d_part__p_mfgr, DBStringType* d_part__p_category, DBStringType* d_part__p_brand1, DBStringType* d_part__p_color, DBStringType* d_part__p_type, DBI32Type* d_part__p_size, DBStringType* d_part__p_container, size_t part_size, DBI32Type* d_lineorder__lo_orderkey, DBI32Type* d_lineorder__lo_linenumber, DBI32Type* d_lineorder__lo_custkey, DBI32Type* d_lineorder__lo_partkey, DBI32Type* d_lineorder__lo_suppkey, DBDateType* d_lineorder__lo_orderdate, DBDateType* d_lineorder__lo_commitdate, DBStringType* d_lineorder__lo_orderpriority, DBCharType* d_lineorder__lo_shippriority, DBI32Type* d_lineorder__lo_quantity, DBDecimalType* d_lineorder__lo_extendedprice, DBDecimalType* d_lineorder__lo_ordtotalprice, DBDecimalType* d_lineorder__lo_revenue, DBDecimalType* d_lineorder__lo_supplycost, DBI32Type* d_lineorder__lo_discount, DBI32Type* d_lineorder__lo_tax, DBStringType* d_lineorder__lo_shipmode, size_t lineorder_size, DBI32Type* d_date__d_datekey, DBStringType* d_date__d_date, DBStringType* d_date__d_dayofweek, DBStringType* d_date__d_month, DBI32Type* d_date__d_year, DBI32Type* d_date__d_yearmonthnum, DBStringType* d_date__d_yearmonth, DBI32Type* d_date__d_daynuminweek, DBI32Type* d_date__d_daynuminmonth, DBI32Type* d_date__d_daynuminyear, DBI32Type* d_date__d_monthnuminyear, DBI32Type* d_date__d_weeknuminyear, DBStringType* d_date__d_sellingseason, DBI32Type* d_date__d_lastdayinweekfl, DBI32Type* d_date__d_lastdayinmonthfl, DBI32Type* d_date__d_holidayfl, DBI32Type* d_date__d_weekdayfl, size_t date_size, DBI32Type* d_customer__c_custkey, DBStringType* d_customer__c_name, DBStringType* d_customer__c_address, DBStringType* d_customer__c_city, DBStringType* d_customer__c_nation, DBStringType* d_customer__c_region, DBStringType* d_customer__c_phone, DBStringType* d_customer__c_mktsegment, size_t customer_size, DBI32Type* d_region__r_regionkey, DBStringType* d_region__r_name, DBStringType* d_region__r_comment, size_t region_size, DBI16Type* d_part__p_brand1_encoded, DBI16Type* d_supplier__s_nation_encoded, DBI16Type* d_customer__c_city_encoded, DBI16Type* d_supplier__s_city_encoded, DBI16Type* d_customer__c_nation_encoded, DBI16Type* d_part__p_category_encoded, std::unordered_map<DBI16Type, std::string>& part__p_brand1_map, std::unordered_map<DBI16Type, std::string>& supplier__s_nation_map, std::unordered_map<DBI16Type, std::string>& customer__c_city_map, std::unordered_map<DBI16Type, std::string>& supplier__s_city_map, std::unordered_map<DBI16Type, std::string>& customer__c_nation_map, std::unordered_map<DBI16Type, std::string>& part__p_category_map) {\n";
 }

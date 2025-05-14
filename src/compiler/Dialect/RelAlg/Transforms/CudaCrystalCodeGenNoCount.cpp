@@ -909,7 +909,7 @@ class TupleStreamCode {
       appendControl(launchKernel());
       // appendControl(fmt::format("cudaFree(d_{0});", MAT_IDX(op)));
       std::string printStmts;
-      std::string delimiter = ",";
+      std::string delimiter = "|";
       bool first = true;
       for (auto col : materializeOp.getCols()) {
          auto columnAttr = mlir::cast<tuples::ColumnRefAttr>(col);
