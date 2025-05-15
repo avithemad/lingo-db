@@ -9,6 +9,7 @@
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Pass/PassManager.h"
 
@@ -222,7 +223,7 @@ static std::string translateConstantOp(db::ConstantOp& constantOp) {
       assert(strAttr != 0x0 && "Expected character constant attribute to be strattr");
       if (strAttr.str().size() == 1) {
          return ("\'" + strAttr.str() + "\'");
-      } else  { 
+      } else {
          return ("\"" + strAttr.str() + "\"");
       }
    } else {
@@ -1062,6 +1063,67 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
             sep = ", ";
          }
          return fmt::format("{0}({1})", function, args);
+      } else if (auto scfIfOp = mlir::dyn_cast_or_null<mlir::scf::IfOp>(op)) {
+         std::string cond = mapOpDfs(scfIfOp.getCondition().getDefiningOp(), dep);
+         std::string thenBlock = "";
+         std::string elseBlock = "";
+         for (auto& block : scfIfOp.getThenRegion().getBlocks()) {
+            for (auto& op : block) {
+               if (mlir::isa<mlir::scf::YieldOp>(op)) {
+                  thenBlock += mapOpDfs(&op, dep);
+               }
+            }
+         }
+         for (auto& block : scfIfOp.getElseRegion().getBlocks()) {
+            for (auto& op : block) {
+               if (mlir::isa<mlir::scf::YieldOp>(op)) {
+                  elseBlock += mapOpDfs(&op, dep);
+               }
+            }
+         }
+         return fmt::format("({0}) ? ({1}) : ({2})", cond, thenBlock, elseBlock);
+      } else if (auto deriveTruthOp = mlir::dyn_cast_or_null<db::DeriveTruth>(op)) {
+         std::string expr = mapOpDfs(deriveTruthOp.getVal().getDefiningOp(), dep);
+         return fmt::format("({0})", expr);
+      } else if (auto compareOp = mlir::dyn_cast_or_null<db::CmpOp>(op)) {
+         auto left = compareOp.getLeft();
+         std::string leftOperand = SelectionOpDfs(left.getDefiningOp());
+
+         auto right = compareOp.getRight();
+         std::string rightOperand = SelectionOpDfs(right.getDefiningOp());
+
+         auto cmp = compareOp.getPredicate();
+         std::string predicate = "";
+         switch (cmp) {
+            case db::DBCmpPredicate::eq:
+               predicate = "Predicate::eq";
+               break;
+            case db::DBCmpPredicate::neq:
+               predicate = "Predicate::neq";
+               break;
+            case db::DBCmpPredicate::lt:
+               predicate = "Predicate::lt";
+               break;
+            case db::DBCmpPredicate::gt:
+               predicate = "Predicate::gt";
+               break;
+            case db::DBCmpPredicate::lte:
+               predicate = "Predicate::lte";
+               break;
+            case db::DBCmpPredicate::gte:
+               predicate = "Predicate::gte";
+               break;
+            default:
+               assert(false && "Predicate not handled");
+               break;
+         }
+         return fmt::format("evaluatePredicate({0}, {1}, {2})", leftOperand, rightOperand, predicate);
+      } else if (auto yieldOp = mlir::dyn_cast_or_null<mlir::scf::YieldOp>(op)) {
+         std::string expr = "";
+         for (auto v : yieldOp.getResults()) {
+            expr += mapOpDfs(v.getDefiningOp(), dep);
+         }
+         return fmt::format("({0})", expr);
       }
       op->dump();
       assert(false && "Unexpected compute graph");
