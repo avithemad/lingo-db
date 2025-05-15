@@ -38,8 +38,8 @@ fi
 # List of queries to run - 1, 3, 5, 6, 7, 8, 9
 # QUERIES=(1 3 5 6 7 9 13)
 # 3, 9, 18
-QUERIES=(1 3 4 5 6 7 9 10 13 16 18 19)
-# QUERIES=(17)
+QUERIES=(1 3 4 5 6 7 8 9 10 12 13 14 16 17 18 19 20)
+# QUERIES=(10 18)
 
 # Iterate over the queries
 for QUERY in "${QUERIES[@]}"; do
