@@ -36,22 +36,29 @@ if [ -z "$TPCH_DATA_DIR" ]; then
 fi
 
 # List of queries to run - 1, 3, 5, 6, 7, 8, 9
-QUERIES=(1 3 4 5 6 7 8 9 10 12 13 14 16 17 18 19 20)
 # QUERIES=(1 3 5 6 7 9 13)
-# QUERIES=(12)
+# 3, 9, 18
+QUERIES=(1 3 4 5 6 7 8 9 10 12 13 14 16 17 18 19 20)
+# QUERIES=(20)
+# Failures with static_map
+#   Passed queries: 1 4 5 6 7 9 12 13 14 17 19 20
+#   Failed queries: 3 8 10 16 18
+# Failures with multimap
+    # Passed queries: 1 4 5 6 7 8 9 10 12 13 14 17 19 20
+    # Failed queries: 3 16 18
+
 
 # Iterate over the queries
 for QUERY in "${QUERIES[@]}"; do
   # First run the run-sql tool to generate CUDA and get reference output
-  RUN_SQL="$BUILD_DIR/run-sql $TPCH_DIR/$QUERY.sql $TPCH_DATA_DIR --gen-cuda-crystal-code"
+  RUN_SQL="$BUILD_DIR/run-sql $TPCH_DIR/$QUERY.sql $TPCH_DATA_DIR --gen-cuda-code --static-map-only"
   OUTPUT_FILE="tpch-$QUERY-ref.csv"
   echo $RUN_SQL
   $RUN_SQL > $OUTPUT_FILE
 
-  NOCOUNT="$QUERY.crystal"
-
+  MAPONLY="$QUERY.maponly"
   # Now run the generated CUDA code
-  CP_CMD="cp output.cu $SQL_PLAN_COMPILER_DIR/gpu-db/tpch/q$NOCOUNT.codegen.cu"
+  CP_CMD="cp output.cu $SQL_PLAN_COMPILER_DIR/gpu-db/tpch/q$MAPONLY.codegen.cu"
   echo $CP_CMD
   $CP_CMD
 
@@ -59,7 +66,7 @@ for QUERY in "${QUERIES[@]}"; do
   echo $CD_CMD
   $CD_CMD
 
-  MAKE_QUERY="make query Q=$NOCOUNT CUCO_SRC_PATH=$CUCO_SRC_PATH"
+  MAKE_QUERY="make query Q=$MAPONLY CUCO_SRC_PATH=$CUCO_SRC_PATH"
   echo $MAKE_QUERY
   $MAKE_QUERY
 
@@ -67,13 +74,13 @@ for QUERY in "${QUERIES[@]}"; do
   echo $MAKE_RUNTIME
   $MAKE_RUNTIME
 
-  RUN_QUERY_CMD="build/dbruntime --data_dir $TPCH_DATA_DIR/ --query_num $NOCOUNT"
+  RUN_QUERY_CMD="build/dbruntime --data_dir $TPCH_DATA_DIR/ --query_num $MAPONLY"
   echo $RUN_QUERY_CMD
-  $RUN_QUERY_CMD > "cuda-tpch-$NOCOUNT.csv"
+  $RUN_QUERY_CMD > "cuda-tpch-$MAPONLY.csv"
 
   cd -
 
-  PYTHON_CMD="python $SCRIPT_DIR/compare_tpch_outputs.py $OUTPUT_FILE $SQL_PLAN_COMPILER_DIR/gpu-db/tpch/cuda-tpch-$NOCOUNT.csv"
+  PYTHON_CMD="python $SCRIPT_DIR/compare_tpch_outputs.py $OUTPUT_FILE $SQL_PLAN_COMPILER_DIR/gpu-db/tpch/cuda-tpch-$MAPONLY.csv"
   echo $PYTHON_CMD
   $PYTHON_CMD
 

@@ -25,7 +25,16 @@
 #include <sstream>
 #include <fmt/core.h>
 
+// #define MULTIMAP
 void emitControlFunctionSignature(std::ostream& outputFile);
+bool isPrimaryKey(const std::set<std::string> &keysSet);
+
+static bool gCudaCodeGenEnabled = false;
+static bool gStaticMapOnly = false;
+static bool gCudaCodeGenNoCountEnabled = false;
+static bool gCudaCrystalCodeGenEnabled = false;
+static bool gCudaCrystalCodeGenNoCountEnabled = false;
+static bool gCompilingSSB = false;
 
 namespace {
 using namespace lingodb::compiler::dialect;
@@ -375,12 +384,9 @@ class TupleStreamCode {
       for (auto p : columnData) delete p.second;
    }
    void RenamingOp(relalg::RenamingOp renamingOp) {
-      // renamingOp.dump();
       for (mlir::Attribute attr : renamingOp.getColumns()) {
-         // attr.dump();
          auto relationDefAttr = mlir::dyn_cast_or_null<tuples::ColumnDefAttr>(attr);
          mlir::Attribute from = mlir::dyn_cast_or_null<mlir::ArrayAttr>(relationDefAttr.getFromExisting())[0];
-         // from.dump();
          auto relationRefAttr = mlir::dyn_cast_or_null<tuples::ColumnRefAttr>(from);
          ColumnDetail detailRef(relationRefAttr), detailDef(relationDefAttr);
          auto colData = columnData[detailRef.getMlirSymbol()];
@@ -710,6 +716,7 @@ class TupleStreamCode {
       auto keys = joinOp->getAttrOfType<mlir::ArrayAttr>("leftHash");
       MakeKeys(op, keys, KernelType::Count);
       auto key = MakeKeys(op, keys, KernelType::Main);
+
       appendKernel("//Probe Hash table", KernelType::Main);
       appendKernel("//Probe Hash table", KernelType::Count);
       appendKernel(fmt::format("auto {0} = {1}.find({2});", SLOT(op), HT(op), key), KernelType::Main);
@@ -721,10 +728,11 @@ class TupleStreamCode {
       countArgs[HT(op)] = "HASHTABLE_PROBE_SJ";
       mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::find)", HT(op));
    }
-   std::map<std::string, ColumnMetadata*> BuildHashTable(mlir::Operation* op) {
+   std::map<std::string, ColumnMetadata*> BuildHashTable(mlir::Operation* op, bool pk, bool right) {
       auto joinOp = mlir::dyn_cast_or_null<relalg::InnerJoinOp>(op);
       if (!joinOp) assert(false && "Insert hash table accepts only inner join operation.");
-      auto keys = joinOp->getAttrOfType<mlir::ArrayAttr>("leftHash");
+      std::string hash = right? "rightHash" : "leftHash";
+      auto keys = joinOp->getAttrOfType<mlir::ArrayAttr>(hash);
       auto key = MakeKeys(op, keys, KernelType::Main);
       appendKernel("// Insert hash table kernel;", KernelType::Main);
       appendKernel(fmt::format("auto {0} = atomicAdd((int*){1}, 1);", buf_idx(op), BUF_IDX(op)), KernelType::Main);
@@ -742,6 +750,9 @@ class TupleStreamCode {
       }
 
       mainArgs[BUF_IDX(op)] = "uint64_t*";
+      if (pk)
+      mainArgs[HT(op)] = "HASHTABLE_INSERT_PK";
+      else 
       mainArgs[HT(op)] = "HASHTABLE_INSERT";
       mainArgs[BUF(op)] = "uint64_t*";
       mlirToGlobalSymbol[BUF_IDX(op)] = fmt::format("d_{}", BUF_IDX(op));
@@ -755,32 +766,45 @@ class TupleStreamCode {
       appendControl(fmt::format("uint64_t* d_{0};", BUF(op)));
       appendControl(fmt::format("cudaMalloc(&d_{0}, sizeof(uint64_t) * {1} * {2});", BUF(op), COUNT(op), baseRelations.size()));
       deviceFrees.insert(fmt::format("d_{0}", BUF(op)));
-      appendControl(fmt::format("auto d_{0} = cuco::experimental::static_multimap{{ (int){1}*2, cuco::empty_key{{(int64_t)-1}},cuco::empty_value{{(int64_t)-1}},thrust::equal_to<int64_t>{{}},cuco::linear_probing<1, cuco::default_hash_function<int64_t>>() }};",
-                                HT(op), COUNT(op)));
-      // appendControl(fmt::format("auto d_{0} = cuco::static_map{{ (int){1}*2, cuco::empty_key{{(int64_t)-1}},cuco::empty_value{{(int64_t)-1}},thrust::equal_to<int64_t>{{}},cuco::linear_probing<1, cuco::default_hash_function<int64_t>>() }};",
-      //                           HT(op), COUNT(op)));
+      // #ifdef MULTIMAP
+      if (!pk)
+         appendControl(fmt::format("auto d_{0} = cuco::experimental::static_multimap{{ (int){1}*2, cuco::empty_key{{(int64_t)-1}},cuco::empty_value{{(int64_t)-1}},thrust::equal_to<int64_t>{{}},cuco::linear_probing<1, cuco::default_hash_function<int64_t>>() }};",
+                                   HT(op), COUNT(op)));
+      // #else
+      else
+         appendControl(fmt::format("auto d_{0} = cuco::static_map{{ (int){1}*2, cuco::empty_key{{(int64_t)-1}},cuco::empty_value{{(int64_t)-1}},thrust::equal_to<int64_t>{{}},cuco::linear_probing<1, cuco::default_hash_function<int64_t>>() }};",
+                                   HT(op), COUNT(op)));
+      // #endif
       appendControl(launchKernel(KernelType::Main));
       // appendControl(fmt::format("cudaFree(d_{0});", BUF_IDX(op)));
       return columnData;
    }
 
-   void ProbeHashTable(mlir::Operation* op, const std::map<std::string, ColumnMetadata*>& leftColumnData) {
+   void ProbeHashTable(mlir::Operation* op, const std::map<std::string, ColumnMetadata*>& leftColumnData, bool pk, bool right) {
       auto joinOp = mlir::dyn_cast_or_null<relalg::InnerJoinOp>(op);
       if (!joinOp) assert(false && "Probe hash table accepts only inner join operation.");
-      auto keys = joinOp->getAttrOfType<mlir::ArrayAttr>("rightHash");
+      std::string hash = right? "leftHash" : "rightHash";
+      auto keys = joinOp->getAttrOfType<mlir::ArrayAttr>(hash);
       MakeKeys(op, keys, KernelType::Count);
       auto key = MakeKeys(op, keys, KernelType::Main);
       appendKernel("//Probe Hash table", KernelType::Main);
       appendKernel("//Probe Hash table", KernelType::Count);
-      // appendKernel(fmt::format("auto {0} = {1}.find({2});", SLOT(op), HT(op), key), KernelType::Main);
-      // appendKernel(fmt::format("auto {0} = {1}.find({2});", SLOT(op), HT(op), key), KernelType::Count);
-      // appendKernel(fmt::format("if ({0} == {1}.end()) return;", SLOT(op), HT(op)), KernelType::Main);
-      // appendKernel(fmt::format("if ({0} == {1}.end()) return;", SLOT(op), HT(op)), KernelType::Count);
-      appendKernel(fmt::format("{0}.for_each({1}, [&] __device__ (auto const {2}) {{", HT(op), key, SLOT(op)), KernelType::Main);
-      appendKernel(fmt::format("auto const [{0}, {1}] = {2};", slot_first(op), slot_second(op), SLOT(op)), KernelType::Main);
-      appendKernel(fmt::format("{0}.for_each({1}, [&] __device__ (auto const {2}) {{\n", HT(op), key, SLOT(op)), KernelType::Count);
-      appendKernel(fmt::format("auto const [{0}, {1}] = {2};", slot_first(op), slot_second(op), SLOT(op)), KernelType::Count);
-      forEachScopes++;
+      // #ifdef MULTIMAP
+      if (!pk) {
+         appendKernel(fmt::format("{0}.for_each({1}, [&] __device__ (auto const {2}) {{", HT(op), key, SLOT(op)), KernelType::Main);
+         appendKernel(fmt::format("auto const [{0}, {1}] = {2};", slot_first(op), slot_second(op), SLOT(op)), KernelType::Main);
+         appendKernel(fmt::format("{0}.for_each({1}, [&] __device__ (auto const {2}) {{\n", HT(op), key, SLOT(op)), KernelType::Count);
+         appendKernel(fmt::format("auto const [{0}, {1}] = {2};", slot_first(op), slot_second(op), SLOT(op)), KernelType::Count);
+         forEachScopes++;
+      }
+      // #else
+      else {
+         appendKernel(fmt::format("auto {0} = {1}.find({2});", SLOT(op), HT(op), key), KernelType::Main);
+         appendKernel(fmt::format("auto {0} = {1}.find({2});", SLOT(op), HT(op), key), KernelType::Count);
+         appendKernel(fmt::format("if ({0} == {1}.end()) return;", SLOT(op), HT(op)), KernelType::Main);
+         appendKernel(fmt::format("if ({0} == {1}.end()) return;", SLOT(op), HT(op)), KernelType::Count);
+      }
+      // #endif
 
       // add all leftColumn data to this data
       auto baseRelations = getBaseRelations(leftColumnData);
@@ -794,28 +818,49 @@ class TupleStreamCode {
       for (auto colData : leftColumnData) {
          if (colData.second == nullptr) continue;
          if (colData.second->type == ColumnType::Direct) {
-            // colData.second->rid = fmt::format("{3}[{0}->second * {1} + {2}]",
-            //                                   SLOT(op),
-            //                                   std::to_string(baseRelations.size()),
-            //                                   streamIdToBufId[colData.second->streamId],
-            //                                   BUF(op));
-            colData.second->rid = fmt::format("{3}[{0} * {1} + {2}]",
-                                              slot_second(op),
-                                              std::to_string(baseRelations.size()),
-                                              streamIdToBufId[colData.second->streamId],
-                                              BUF(op));
+            // #ifdef MULTIMAP
+            if (!pk) {
+               colData.second->rid = fmt::format("{3}[{0} * {1} + {2}]",
+                                                 slot_second(op),
+                                                 std::to_string(baseRelations.size()),
+                                                 streamIdToBufId[colData.second->streamId],
+                                                 BUF(op));
+            }
+            // #else
+            else {
+               colData.second->rid = fmt::format("{3}[{0}->second * {1} + {2}]",
+                                                 SLOT(op),
+                                                 std::to_string(baseRelations.size()),
+                                                 streamIdToBufId[colData.second->streamId],
+                                                 BUF(op));
+            }
+            // #endif
             // colData.second->streamId = id;
             columnData[colData.first] = colData.second;
             mlirToGlobalSymbol[colData.second->loadExpression] = colData.second->globalId;
          }
          columnData[colData.first] = colData.second;
       }
-      mainArgs[HT(op)] = "HASHTABLE_PROBE";
-      mainArgs[BUF(op)] = "uint64_t*";
-      countArgs[HT(op)] = "HASHTABLE_PROBE";
-      countArgs[BUF(op)] = "uint64_t*";
-      // mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::find)", HT(op));
-      mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::for_each)", HT(op));
+      if (pk){
+
+         mainArgs[HT(op)] = "HASHTABLE_PROBE_PK";
+         mainArgs[BUF(op)] = "uint64_t*";
+         countArgs[HT(op)] = "HASHTABLE_PROBE_PK";
+         countArgs[BUF(op)] = "uint64_t*";
+      } else {
+         
+         mainArgs[HT(op)] = "HASHTABLE_PROBE";
+         mainArgs[BUF(op)] = "uint64_t*";
+         countArgs[HT(op)] = "HASHTABLE_PROBE";
+         countArgs[BUF(op)] = "uint64_t*";
+      }
+      // #ifdef MULTIMAP
+      if (!pk)
+         mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::for_each)", HT(op));
+      // #else
+      else
+         mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::find)", HT(op));
+      // #endif
       mlirToGlobalSymbol[BUF(op)] = fmt::format("d_{}", BUF(op));
    }
    void CreateAggregationHashTable(mlir::Operation* op) {
@@ -1203,11 +1248,12 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
          _kernelName = "count";
       }
       bool hasHash = false;
-      for (auto p : _args) hasHash |= (p.second == "HASHTABLE_FIND" || p.second == "HASHTABLE_INSERT" || p.second == "HASHTABLE_PROBE" || p.second == "HASHTABLE_INSERT_SJ" || p.second == "HASHTABLE_PROBE_SJ");
+      for (auto p : _args) hasHash |= (p.second == "HASHTABLE_FIND" || p.second == "HASHTABLE_INSERT" || p.second == "HASHTABLE_PROBE" || p.second == "HASHTABLE_INSERT_SJ" || p.second == "HASHTABLE_PROBE_SJ" || p.second == "HASHTABLE_INSERT_PK" || p.second == "HASHTABLE_PROBE_PK");
       if (hasHash) {
          stream << "template<";
          bool find = false, insert = false, probe = false;
          bool insertSJ = false, probeSJ = false;
+         bool insertPK = false, probePK = false;
          std::string sep = "";
          for (auto p : _args) {
             if (p.second == "HASHTABLE_FIND" && !find) {
@@ -1228,6 +1274,14 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
                sep = ", ";
             } else if (p.second == "HASHTABLE_PROBE_SJ" && !probeSJ) {
                probeSJ = true;
+               stream << sep + "typename " + p.second;
+               sep = ", ";
+            } else if (p.second == "HASHTABLE_INSERT_PK" && !insertPK) {
+               insertPK = true;
+               stream << sep + "typename " + p.second;
+               sep = ", ";
+            } else if (p.second == "HASHTABLE_PROBE_PK" && !probePK) {
+               probePK = true;
                stream << sep + "typename " + p.second;
                sep = ", ";
             }
@@ -1306,10 +1360,50 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
                rightStream->dump();
                assert(false && "No downstream operation probe side of hash join found");
             }
+            auto leftkeys = joinOp->getAttrOfType<mlir::ArrayAttr>("leftHash");
+
+            std::set<std::string> leftkeysSet;
+            for (auto key : leftkeys) {
+               if (mlir::isa<mlir::StringAttr>(key)) {
+                  continue;
+               }
+               tuples::ColumnRefAttr key1 = mlir::cast<tuples::ColumnRefAttr>(key);
+               ColumnDetail detail(key1);
+               leftkeysSet.insert(detail.column);
+            }
+            bool pk = false;
+            bool left_pk = isPrimaryKey(leftkeysSet);
+            
+            pk |= left_pk;
+            bool right = false;
+            if (left_pk == false && gStaticMapOnly) {
+               std::set<std::string> rightkeysSet;
+               // check if right side is a pk
+               auto rightKeys = joinOp->getAttrOfType<mlir::ArrayAttr>("rightHash");
+               for (auto key : rightKeys) {
+                  if (mlir::isa<mlir::StringAttr>(key)) {
+                     continue;
+                  }
+                  tuples::ColumnRefAttr key1 = mlir::cast<tuples::ColumnRefAttr>(key);
+                  ColumnDetail detail(key1);
+                  rightkeysSet.insert(detail.column);
+               }
+               bool right_pk = isPrimaryKey(rightkeysSet);
+               if (right_pk == false && gStaticMapOnly) {
+                  op->dump();
+                  assert(false && "This join is not possible without multimap, since both sides are not pk");
+               }
+               if (gStaticMapOnly) {
+                  std::swap(leftStreamCode, rightStreamCode);
+                  pk |= right_pk;
+                  right = true;
+               }
+            }
+
             leftStreamCode->MaterializeCount(op); // count of left
-            auto leftCols = leftStreamCode->BuildHashTable(op); // main of left
+            auto leftCols = leftStreamCode->BuildHashTable(op, pk, right); // main of left
             kernelSchedule.push_back(leftStreamCode);
-            rightStreamCode->ProbeHashTable(op, leftCols);
+            rightStreamCode->ProbeHashTable(op, leftCols, pk, right);
             mlir::Region& predicate = joinOp.getPredicate();
             rightStreamCode->AddSelectionPredicate(predicate);
 
@@ -1440,12 +1534,27 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
 };
 }
 
-static bool gCudaCodeGenEnabled = false;
-static bool gCudaCodeGenNoCountEnabled = false;
-static bool gCudaCrystalCodeGenEnabled = false;
-static bool gCudaCrystalCodeGenNoCountEnabled = false;
-static bool gCompilingSSB = false;
 
+bool isPrimaryKey(const std::set<std::string> &keysSet) {
+   bool pk = false;
+   std::vector<std::string> tpch_pks = {
+      "o_orderkey", "r_regionkey", "c_custkey", "n_nationkey", "s_suppkey", "p_partkey"
+   };
+   std::vector<std::string> ssb_pks = {
+      "p_partkey", "s_suppkey", "d_datekey", "c_custkey"
+   };
+   if (!gCompilingSSB) {
+      for (auto k: tpch_pks) {
+         if (keysSet.find(k) != keysSet.end()) pk = true;
+      }
+      pk |= (keysSet.find("ps_partkey") != keysSet.end() && keysSet.find("ps_suppkey") != keysSet.end());
+   } else {
+      for (auto k: ssb_pks) {
+         if (keysSet.find(k) != keysSet.end()) pk = true;
+      }
+   }
+   return pk;
+}
 void emitControlFunctionSignature(std::ostream& outputFile) {
    if (!gCompilingSSB)
       outputFile << "extern \"C\" void control (DBI32Type * d_nation__n_nationkey, DBStringType * d_nation__n_name, DBI32Type * d_nation__n_regionkey, DBStringType * d_nation__n_comment, size_t nation_size, DBI32Type * d_supplier__s_suppkey, DBI32Type * d_supplier__s_nationkey, DBStringType * d_supplier__s_name, DBStringType * d_supplier__s_address, DBStringType * d_supplier__s_phone, DBDecimalType * d_supplier__s_acctbal, DBStringType * d_supplier__s_comment, size_t supplier_size, DBI32Type * d_partsupp__ps_suppkey, DBI32Type * d_partsupp__ps_partkey, DBI32Type * d_partsupp__ps_availqty, DBDecimalType * d_partsupp__ps_supplycost, DBStringType * d_partsupp__ps_comment, size_t partsupp_size, DBI32Type * d_part__p_partkey, DBStringType * d_part__p_name, DBStringType * d_part__p_mfgr, DBStringType * d_part__p_brand, DBStringType * d_part__p_type, DBI32Type * d_part__p_size, DBStringType * d_part__p_container, DBDecimalType * d_part__p_retailprice, DBStringType * d_part__p_comment, size_t part_size, DBI32Type * d_lineitem__l_orderkey, DBI32Type * d_lineitem__l_partkey, DBI32Type * d_lineitem__l_suppkey, DBI64Type * d_lineitem__l_linenumber, DBDecimalType * d_lineitem__l_quantity, DBDecimalType * d_lineitem__l_extendedprice, DBDecimalType * d_lineitem__l_discount, DBDecimalType * d_lineitem__l_tax, DBCharType * d_lineitem__l_returnflag, DBCharType * d_lineitem__l_linestatus, DBI32Type * d_lineitem__l_shipdate, DBI32Type * d_lineitem__l_commitdate, DBI32Type * d_lineitem__l_receiptdate, DBStringType * d_lineitem__l_shipinstruct, DBStringType * d_lineitem__l_shipmode, DBStringType * d_lineitem__comments, size_t lineitem_size, DBI32Type * d_orders__o_orderkey, DBCharType * d_orders__o_orderstatus, DBI32Type * d_orders__o_custkey, DBDecimalType * d_orders__o_totalprice, DBI32Type * d_orders__o_orderdate, DBStringType * d_orders__o_orderpriority, DBStringType * d_orders__o_clerk, DBI32Type * d_orders__o_shippriority, DBStringType * d_orders__o_comment, size_t orders_size, DBI32Type * d_customer__c_custkey, DBStringType * d_customer__c_name, DBStringType * d_customer__c_address, DBI32Type * d_customer__c_nationkey, DBStringType * d_customer__c_phone, DBDecimalType * d_customer__c_acctbal, DBStringType * d_customer__c_mktsegment, DBStringType * d_customer__c_comment, size_t customer_size, DBI32Type * d_region__r_regionkey, DBStringType * d_region__r_name, DBStringType * d_region__r_comment, size_t region_size, DBI16Type* d_nation__n_name_encoded, std::unordered_map<DBI16Type, DBStringType> &nation__n_name_map, std::unordered_map<DBI16Type, DBStringType> &n1___n_name_map, std::unordered_map<DBI16Type, DBStringType> &n2___n_name_map, DBI16Type* d_orders__o_orderpriority_encoded, std::unordered_map<DBI16Type, std::string>& orders__o_orderpriority_map, DBI16Type* d_customer__c_name_encoded, std::unordered_map<DBI16Type, std::string>& customer__c_name_map, DBI16Type* d_customer__c_comment_encoded, std::unordered_map<DBI16Type, std::string>& customer__c_comment_map, DBI16Type* d_customer__c_phone_encoded, std::unordered_map<DBI16Type, std::string>& customer__c_phone_map, DBI16Type* d_customer__c_address_encoded, std::unordered_map<DBI16Type, std::string>& customer__c_address_map, DBI16Type* d_supplier__s_name_encoded, std::unordered_map<DBI16Type, std::string>& supplier__s_name_map, DBI16Type* d_part__p_brand_encoded, std::unordered_map<DBI16Type, std::string>& part__p_brand_map, DBI16Type* d_part__p_type_encoded, std::unordered_map<DBI16Type, std::string>& part__p_type_map, DBI16Type* d_lineitem__l_shipmode_encoded, std::unordered_map<DBI16Type, std::string>& lineitem__l_shipmode_map, DBI16Type* d_supplier__s_address_encoded, std::unordered_map<DBI16Type, std::string>& supplier__s_address_map) {\n";
@@ -1491,6 +1600,15 @@ void checkForBenchmarkSwitch(int& argc, char** argv) {
       }
    }
 }
+void checkForStaticMapOnlySwitch(int& argc, char** argv) {
+   for (int i = 0; i < argc; i++) {
+      if (std::string(argv[i]) == "--static-map-only") {
+         gStaticMapOnly = true;
+         removeCodeGenSwitch(argc, argv, i);
+         break;
+      }
+   }
+}
 
 void relalg::conditionallyEnableCudaCodeGen(int& argc, char** argv) {
    for (int i = 0; i < argc; i++) {
@@ -1513,4 +1631,5 @@ void relalg::conditionallyEnableCudaCodeGen(int& argc, char** argv) {
       }
    }
    checkForBenchmarkSwitch(argc, argv);
+   checkForStaticMapOnlySwitch(argc, argv);
 }
