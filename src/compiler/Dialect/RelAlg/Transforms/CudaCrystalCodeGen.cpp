@@ -1374,9 +1374,6 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       } else {
          for (auto line : countCode) { stream << line << std::endl; }
       }
-      for (int i = 0; i < forEachScopes; i++) {
-         stream << "});\n";
-      }
       stream << "}\n";
    }
    void printControl(std::ostream& stream) {

@@ -36,16 +36,15 @@ if [ -z "$TPCH_DATA_DIR" ]; then
 fi
 
 # List of queries to run - 1, 3, 5, 6, 7, 8, 9
-# QUERIES=(1 3 5 6 7 9 13)
-# 3, 9, 18
-QUERIES=(1 3 4 5 6 7 8 9 10 12 13 14 16 17 18 19 20)
+# only these queries in tpch need multimap
+QUERIES=(8 10 14 20)
 # QUERIES=(20)
-# Failures with static_map
-#   Passed queries: 1 4 5 6 7 9 12 13 14 17 19 20
-#   Failed queries: 3 8 10 16 18
-# Failures with multimap
-    # Passed queries: 1 4 5 6 7 8 9 10 12 13 14 17 19 20
-    # Failed queries: 3 16 18
+
+pushd $SQL_PLAN_COMPILER_DIR/gpu-db/tpch
+MAKE_RUNTIME="make build-runtime CUCO_SRC_PATH=$CUCO_SRC_PATH"
+echo $MAKE_RUNTIME
+$MAKE_RUNTIME
+popd
 
 
 # Iterate over the queries
@@ -69,10 +68,6 @@ for QUERY in "${QUERIES[@]}"; do
   MAKE_QUERY="make query Q=$MAPONLY CUCO_SRC_PATH=$CUCO_SRC_PATH"
   echo $MAKE_QUERY
   $MAKE_QUERY
-
-  MAKE_RUNTIME="make build-runtime CUCO_SRC_PATH=$CUCO_SRC_PATH"
-  echo $MAKE_RUNTIME
-  $MAKE_RUNTIME
 
   RUN_QUERY_CMD="build/dbruntime --data_dir $TPCH_DATA_DIR/ --query_num $MAPONLY"
   echo $RUN_QUERY_CMD

@@ -36,8 +36,13 @@ if [ -z "$TPCH_DATA_DIR" ]; then
 fi
 
 # List of queries to run - 1, 3, 5, 6, 7, 8, 9
-QUERIES=(1 3 5 6 7 9 13)
+QUERIES=(1 3 4 5 6 7 8 9 10 12 13 14 16 17 18 19 20)
 # QUERIES=(1)
+pushd $SQL_PLAN_COMPILER_DIR/gpu-db/tpch
+MAKE_RUNTIME="make build-runtime CUCO_SRC_PATH=$CUCO_SRC_PATH"
+echo $MAKE_RUNTIME
+$MAKE_RUNTIME
+popd
 
 # Iterate over the queries
 for QUERY in "${QUERIES[@]}"; do
@@ -61,10 +66,6 @@ for QUERY in "${QUERIES[@]}"; do
   MAKE_QUERY="make query Q=$NOCOUNT CUCO_SRC_PATH=$CUCO_SRC_PATH"
   echo $MAKE_QUERY
   $MAKE_QUERY
-
-  MAKE_RUNTIME="make build-runtime CUCO_SRC_PATH=$CUCO_SRC_PATH"
-  echo $MAKE_RUNTIME
-  $MAKE_RUNTIME
 
   RUN_QUERY_CMD="build/dbruntime --data_dir $TPCH_DATA_DIR/ --query_num $NOCOUNT"
   echo $RUN_QUERY_CMD

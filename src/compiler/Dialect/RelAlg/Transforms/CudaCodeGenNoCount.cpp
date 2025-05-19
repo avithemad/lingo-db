@@ -8,8 +8,10 @@
 #include "lingodb/compiler/Dialect/TupleStream/TupleStreamOps.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/IRMapping.h"
-#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "mlir/Pass/PassManager.h"
 
 #include <fstream>
 #include <iostream>
@@ -25,7 +27,8 @@
 
 // Defined in CudaCodeGen.cpp
 void emitControlFunctionSignature(std::ostream& outputFile);
-
+bool isPrimaryKey(const std::set<std::string>& keysSet);
+bool invertJoinIfPossible(std::set<std::string> &rightkeysSet, bool left_pk);
 namespace {
 using namespace lingodb::compiler::dialect;
 enum class KernelType {
@@ -58,6 +61,9 @@ std::string GetId(const void* op) {
    static IdGenerator<const void*> idGen;
    std::string result = idGen.getId(op);
    return result;
+}
+static std::string MATCOUNT(const void* op) {
+   return "MATCOUNT_" + GetId(op);
 }
 static std::string SLOT_COUNT(const void* op) {
    return "SLOT_COUNT_" + GetId(op);
@@ -205,7 +211,7 @@ static std::string translateConstantOp(db::ConstantOp& constantOp) {
 
       assert((strAttr != 0x0 || intAttr != 0x0 || floatAttr != 0x0) && "Expected Decimal constant attribute to be floatattr or integer attr");
 
-      if (intAttr) return std::to_string(intAttr.getInt());
+      if (intAttr) return std::to_string(intAttr.getInt()) + ".0";
       if (floatAttr) return std::to_string(floatAttr.getValueAsDouble());
       return strAttr.str();
    } else if (mlir::isa<db::StringType>(ty)) {
@@ -222,8 +228,11 @@ static std::string translateConstantOp(db::ConstantOp& constantOp) {
       // TODO(avinash): handle char types
       auto strAttr = mlir::dyn_cast_or_null<mlir::StringAttr>(constantOp.getValue());
       assert(strAttr != 0x0 && "Expected character constant attribute to be strattr");
-
-      return ("\"" + strAttr.str() + "\"");
+      if (strAttr.str().size() == 1) {
+         return ("\'" + strAttr.str() + "\'");
+      } else {
+         return ("\"" + strAttr.str() + "\"");
+      }
    } else {
       assert(false && "Constant op not handled");
       return "";
@@ -337,7 +346,7 @@ class TupleStreamCode {
             mlirToGlobalSymbol[mlirSymbol] = globalSymbol;
             ColumnMetadata* encoded_metadata = new ColumnMetadata(mlirSymbol, ColumnType::Direct, StreamId, globalSymbol);
             encoded_metadata->rid = "tid";
-            columnData[mlirSymbol + "_encoded"] = encoded_metadata;
+            columnData[mlirSymbol] = encoded_metadata;
          } else {
             auto mlirSymbol = detail.getMlirSymbol();
             auto globalSymbol = fmt::format("d_{0}", mlirSymbol);
@@ -360,8 +369,18 @@ class TupleStreamCode {
          mlir::Attribute from = mlir::dyn_cast_or_null<mlir::ArrayAttr>(relationDefAttr.getFromExisting())[0];
          auto relationRefAttr = mlir::dyn_cast_or_null<tuples::ColumnRefAttr>(from);
          ColumnDetail detailRef(relationRefAttr), detailDef(relationDefAttr);
+         auto colData = columnData[detailRef.getMlirSymbol()];
+         std::string ty = mlirTypeToCudaType(detailRef.type);
+         if (colData == nullptr && mlirTypeToCudaType(detailRef.type) == "DBStringType") {
+            colData = columnData[detailRef.getMlirSymbol() + "_encoded"];
+            ty = "DBI6Type";
+         }
+         if (colData == nullptr) {
+            assert(false && "Renaming op: column ref not in tuple stream");
+         }
+         mainArgs[detailRef.getMlirSymbol()] = ty + "*";
          columnData[detailDef.getMlirSymbol()] =
-            new ColumnMetadata(columnData[detailRef.getMlirSymbol()]);
+            new ColumnMetadata(colData);
       }
    }
    template <int enc = 0>
@@ -386,6 +405,9 @@ class TupleStreamCode {
          }
       }
       appendKernel(fmt::format("auto {1} = {0};", colData->loadExpression + (colData->type == ColumnType::Direct ? "[" + colData->rid + "]" : ""), cudaId));
+      if (mlirSymbol != colData->loadExpression) {
+         return cudaId;
+      }
       if (colData->type == ColumnType::Direct) {
          auto cudaTy = mlirTypeToCudaType(detail.type);
          if (enc == 0)
@@ -435,7 +457,15 @@ class TupleStreamCode {
          return fmt::format("evaluatePredicate({0}, {1}, {2})", leftOperand, rightOperand, predicate);
       } else if (auto runtimeOp = mlir::dyn_cast_or_null<db::RuntimeCall>(op)) { // or a like operation
          // TODO(avinash, p1): handle runtime predicate like operator
-         assert(false && "TODO: handle runtime predicates\n");
+         // assert(false && "TODO: handle runtime predicates\n");
+         std::string function = runtimeOp.getFn().str();
+         std::string args = "";
+         std::string sep = "";
+         for (auto v : runtimeOp.getArgs()) {
+            args += sep + SelectionOpDfs(v.getDefiningOp());
+            sep = ", ";
+         }
+         return fmt::format("{0}({1})", function, args);
       } else if (auto betweenOp = mlir::dyn_cast_or_null<db::BetweenOp>(op)) {
          std::string operand = SelectionOpDfs(betweenOp.getVal().getDefiningOp());
          std::string lower = SelectionOpDfs(betweenOp.getLower().getDefiningOp());
@@ -481,6 +511,19 @@ class TupleStreamCode {
          return "false";
       } else if (auto asNullableOp = mlir::dyn_cast_or_null<db::AsNullableOp>(op)) {
          return "true";
+      } else if (auto oneOfOp = mlir::dyn_cast_or_null<db::OneOfOp>(op)) {
+         std::string res = "(";
+         std::string sep = "";
+         std::string val = SelectionOpDfs(oneOfOp.getVal().getDefiningOp());
+         for (auto v : oneOfOp.getVals()) {
+            res += sep + fmt::format("evaluatePredicate({0}, {1}, Predicate::eq)", val, SelectionOpDfs(v.getDefiningOp()));
+            sep = " || (";
+            res += ")";
+         }
+         return res;
+      } else if (auto castOp = mlir::dyn_cast_or_null<db::CastOp>(op)) {
+         auto val = castOp.getVal();
+         return fmt::format("(({1}){0})", SelectionOpDfs(val.getDefiningOp()), mlirTypeToCudaType(castOp.getRes().getType()));
       }
       op->dump();
       assert(false && "Selection predicate not handled");
@@ -515,6 +558,10 @@ class TupleStreamCode {
       std::string sep = "";
       int totalKeySize = 0;
       for (auto i = 0ull; i < keys.size(); i++) {
+         // check if key[i] is cpp string, then continue
+         if (mlir::isa<mlir::StringAttr>(keys[i])) {
+            continue;
+         }
          tuples::ColumnRefAttr key = mlir::cast<tuples::ColumnRefAttr>(keys[i]);
          auto baseType = mlirTypeToCudaType(key.getColumn().type);
          // handle string type differently (assume that string encoded column is available)
@@ -555,6 +602,7 @@ class TupleStreamCode {
    std::vector<std::pair<int, std::string>> getBaseRelations(const std::map<std::string, ColumnMetadata*>& columnData) {
       std::set<std::pair<int, std::string>> temp;
       for (auto p : columnData) {
+         if (p.second == nullptr) continue;
          auto metadata = p.second;
          if (metadata->type == ColumnType::Direct)
             temp.insert(std::make_pair(metadata->streamId, metadata->rid));
@@ -563,7 +611,76 @@ class TupleStreamCode {
       std::sort(baseRelations.begin(), baseRelations.end());
       return baseRelations;
    }
-   std::map<std::string, ColumnMetadata*> BuildHashTable(mlir::Operation* op) {
+   void BuildHashTableSemiJoin(mlir::Operation* op) {
+      auto joinOp = mlir::dyn_cast_or_null<relalg::SemiJoinOp>(op);
+      if (!joinOp) assert(false && "Build hash table accepts only semi join operation.");
+      std::string ht_size = "";
+      for (auto p : mainArgs) {
+         // assign the loop length to the size of the hashtable
+         if (p.second == "size_t")
+            ht_size = p.first;
+      }
+      appendControl(fmt::format("size_t {0} = {1};", COUNT(op), ht_size));
+      auto keys = joinOp->getAttrOfType<mlir::ArrayAttr>("rightHash");
+      auto key = MakeKeys(op, keys);
+      appendKernel("// Insert hash table kernel;");
+      appendKernel(fmt::format("{0}.insert(cuco::pair{{{1}, 1}});", HT(op), key));
+
+      mainArgs[HT(op)] = "HASHTABLE_INSERT_SJ";
+      mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::insert)", HT(op));
+      appendControl("// Insert hash table control;");
+      appendControl(fmt::format("auto d_{0} = cuco::static_map{{ (int){1}*2, cuco::empty_key{{(int64_t)-1}},cuco::empty_value{{(int64_t)-1}},thrust::equal_to<int64_t>{{}},cuco::linear_probing<1, cuco::default_hash_function<int64_t>>() }};",
+                                HT(op), COUNT(op)));
+      appendControl(launchKernel());
+   }
+   void BuildHashTableAntiSemiJoin(mlir::Operation* op) {
+      auto joinOp = mlir::dyn_cast_or_null<relalg::AntiSemiJoinOp>(op);
+      if (!joinOp) assert(false && "Build hash table accepts only anti semi join operation.");
+      std::string ht_size = "";
+      for (auto p : mainArgs) {
+         // assign the loop length to the size of the hashtable
+         if (p.second == "size_t")
+            ht_size = p.first;
+      }
+      appendControl(fmt::format("size_t {0} = {1};", COUNT(op), ht_size));
+      auto keys = joinOp->getAttrOfType<mlir::ArrayAttr>("rightHash");
+      auto key = MakeKeys(op, keys);
+      appendKernel("// Insert hash table kernel;");
+      appendKernel(fmt::format("{0}.insert(cuco::pair{{{1}, 1}});", HT(op), key));
+
+      mainArgs[HT(op)] = "HASHTABLE_INSERT_SJ";
+      mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::insert)", HT(op));
+      appendControl("// Insert hash table control;");
+      appendControl(fmt::format("auto d_{0} = cuco::static_map{{ (int){1}*2, cuco::empty_key{{(int64_t)-1}},cuco::empty_value{{(int64_t)-1}},thrust::equal_to<int64_t>{{}},cuco::linear_probing<1, cuco::default_hash_function<int64_t>>() }};",
+                                HT(op), COUNT(op)));
+      appendControl(launchKernel());
+   }
+   void ProbeHashTableSemiJoin(mlir::Operation* op) {
+      auto joinOp = mlir::dyn_cast_or_null<relalg::SemiJoinOp>(op);
+      if (!joinOp) assert(false && "Probe hash table accepts only semi join operation.");
+      auto keys = joinOp->getAttrOfType<mlir::ArrayAttr>("leftHash");
+      auto key = MakeKeys(op, keys);
+      appendKernel("//Probe Hash table");
+      appendKernel(fmt::format("auto {0} = {1}.find({2});", SLOT(op), HT(op), key));
+      appendKernel(fmt::format("if ({0} == {1}.end()) return;", SLOT(op), HT(op)));
+
+      mainArgs[HT(op)] = "HASHTABLE_PROBE_SJ";
+      mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::find)", HT(op));
+   }
+   void ProbeHashTableAntiSemiJoin(mlir::Operation* op) {
+      auto joinOp = mlir::dyn_cast_or_null<relalg::AntiSemiJoinOp>(op);
+      if (!joinOp) assert(false && "Probe hash table accepts only anti semi join operation.");
+      auto keys = joinOp->getAttrOfType<mlir::ArrayAttr>("leftHash");
+      auto key = MakeKeys(op, keys);
+
+      appendKernel("//Probe Hash table");
+      appendKernel(fmt::format("auto {0} = {1}.find({2});", SLOT(op), HT(op), key));
+      appendKernel(fmt::format("if (!({0} == {1}.end())) return;", SLOT(op), HT(op)));
+
+      mainArgs[HT(op)] = "HASHTABLE_PROBE_SJ";
+      mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::find)", HT(op));
+   }
+   std::map<std::string, ColumnMetadata*> BuildHashTable(mlir::Operation* op, bool pk, bool right) {
       auto joinOp = mlir::dyn_cast_or_null<relalg::InnerJoinOp>(op);
       if (!joinOp) assert(false && "Insert hash table accepts only inner join operation.");
       std::string ht_size = "";
@@ -573,7 +690,8 @@ class TupleStreamCode {
             ht_size = p.first;
       }
       appendControl(fmt::format("size_t {0} = {1};", COUNT(op), ht_size));
-      auto keys = joinOp->getAttrOfType<mlir::ArrayAttr>("leftHash");
+      std::string hash = right ? "rightHash" : "leftHash";
+      auto keys = joinOp->getAttrOfType<mlir::ArrayAttr>(hash);
       auto key = MakeKeys(op, keys);
       appendKernel("// Insert hash table kernel;");
       appendKernel(fmt::format("auto {0} = atomicAdd((int*){1}, 1);", buf_idx(op), BUF_IDX(op)));
@@ -603,25 +721,31 @@ class TupleStreamCode {
       appendControl(fmt::format("uint64_t* d_{0};", BUF(op)));
       appendControl(fmt::format("cudaMalloc(&d_{0}, sizeof(uint64_t) * {1} * {2});", BUF(op), COUNT(op), baseRelations.size()));
       deviceFrees.insert(fmt::format("d_{0}", BUF(op)));
-      // appendControl(fmt::format("auto d_{0} = cuco::experimental::static_multimap{{ (int){1}*2, cuco::empty_key{{(int64_t)-1}},cuco::empty_value{{(int64_t)-1}},thrust::equal_to<int64_t>{{}},cuco::linear_probing<1, cuco::default_hash_function<int64_t>>() }};",
-      //                           HT(op), COUNT(op)));
-      appendControl(fmt::format("auto d_{0} = cuco::static_map{{ (int){1}*2, cuco::empty_key{{(int64_t)-1}},cuco::empty_value{{(int64_t)-1}},thrust::equal_to<int64_t>{{}},cuco::linear_probing<1, cuco::default_hash_function<int64_t>>() }};",
-                                HT(op), COUNT(op)));
+      if (!pk)
+         appendControl(fmt::format("auto d_{0} = cuco::experimental::static_multimap{{ (int){1}*2, cuco::empty_key{{(int64_t)-1}},cuco::empty_value{{(int64_t)-1}},thrust::equal_to<int64_t>{{}},cuco::linear_probing<1, cuco::default_hash_function<int64_t>>() }};",
+                                   HT(op), COUNT(op)));
+      else
+         appendControl(fmt::format("auto d_{0} = cuco::static_map{{ (int){1}*2, cuco::empty_key{{(int64_t)-1}},cuco::empty_value{{(int64_t)-1}},thrust::equal_to<int64_t>{{}},cuco::linear_probing<1, cuco::default_hash_function<int64_t>>() }};",
+                                   HT(op), COUNT(op)));
       appendControl(launchKernel());
       appendControl(fmt::format("cudaFree(d_{0});", BUF_IDX(op)));
       return columnData;
    }
-   void ProbeHashTable(mlir::Operation* op, const std::map<std::string, ColumnMetadata*>& leftColumnData) {
+   void ProbeHashTable(mlir::Operation* op, const std::map<std::string, ColumnMetadata*>& leftColumnData, bool pk, bool right) {
       auto joinOp = mlir::dyn_cast_or_null<relalg::InnerJoinOp>(op);
       if (!joinOp) assert(false && "Probe hash table accepts only inner join operation.");
-      auto keys = joinOp->getAttrOfType<mlir::ArrayAttr>("rightHash");
+      std::string hash = right ? "leftHash" : "rightHash";
+      auto keys = joinOp->getAttrOfType<mlir::ArrayAttr>(hash);
       auto key = MakeKeys(op, keys);
       appendKernel("//Probe Hash table");
-      appendKernel(fmt::format("auto {0} = {1}.find({2});", SLOT(op), HT(op), key));
-      appendKernel(fmt::format("if ({0} == {1}.end()) return;", SLOT(op), HT(op)));
-      // appendKernel(fmt::format("{0}.for_each({1}, [&] __device__ (auto const {2}) {{", HT(op), key, SLOT(op)));
-      // appendKernel(fmt::format("auto const [{0}, {1}] = {2};", slot_first(op), slot_second(op), SLOT(op)));
-      // forEachScopes++;
+      if (pk) {
+         appendKernel(fmt::format("auto {0} = {1}.find({2});", SLOT(op), HT(op), key));
+         appendKernel(fmt::format("if ({0} == {1}.end()) return;", SLOT(op), HT(op)));
+      } else {
+         appendKernel(fmt::format("{0}.for_each({1}, [&] __device__ (auto const {2}) {{", HT(op), key, SLOT(op)));
+         appendKernel(fmt::format("auto const [{0}, {1}] = {2};", slot_first(op), slot_second(op), SLOT(op)));
+         forEachScopes++;
+      }
 
       // add all leftColumn data to this data
       auto baseRelations = getBaseRelations(leftColumnData);
@@ -634,26 +758,37 @@ class TupleStreamCode {
       }
       for (auto colData : leftColumnData) {
          if (colData.second->type == ColumnType::Direct) {
-            colData.second->rid = fmt::format("{3}[{0}->second * {1} + {2}]",
-                                              SLOT(op),
-                                              std::to_string(baseRelations.size()),
-                                              streamIdToBufId[colData.second->streamId],
-                                              BUF(op));
-            // colData.second->rid = fmt::format("{3}[{0} * {1} + {2}]",
-            //                                   slot_second(op),
-            //                                   std::to_string(baseRelations.size()),
-            //                                   streamIdToBufId[colData.second->streamId],
-            //                                   BUF(op));
+            if (pk) {
+               colData.second->rid = fmt::format("{3}[{0}->second * {1} + {2}]",
+                                                 SLOT(op),
+                                                 std::to_string(baseRelations.size()),
+                                                 streamIdToBufId[colData.second->streamId],
+                                                 BUF(op));
+            } else {
+               colData.second->rid = fmt::format("{3}[{0} * {1} + {2}]",
+                                                 slot_second(op),
+                                                 std::to_string(baseRelations.size()),
+                                                 streamIdToBufId[colData.second->streamId],
+                                                 BUF(op));
+            }
             // colData.second->streamId = id;
             columnData[colData.first] = colData.second;
             mlirToGlobalSymbol[colData.second->loadExpression] = colData.second->globalId;
          }
          columnData[colData.first] = colData.second;
       }
-      mainArgs[HT(op)] = "HASHTABLE_PROBE";
-      mainArgs[BUF(op)] = "uint64_t*";
-      mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::find)", HT(op));
-      // mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::for_each)", HT(op));
+      if (pk) {
+         mainArgs[HT(op)] = "HASHTABLE_PROBE_PK";
+         mainArgs[BUF(op)] = "uint64_t*";
+
+         mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::find)", HT(op));
+      }
+      else {
+         mainArgs[HT(op)] = "HASHTABLE_PROBE";
+         mainArgs[BUF(op)] = "uint64_t*";
+
+         mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::for_each)", HT(op));
+      }
       mlirToGlobalSymbol[BUF(op)] = fmt::format("d_{}", BUF(op));
    }
 
@@ -700,6 +835,10 @@ class TupleStreamCode {
             ColumnDetail detail(newcol);
             auto newbuffername = detail.getMlirSymbol();
             auto bufferColType = mlirTypeToCudaType(detail.type);
+            if (bufferColType == "DBStringType") {
+               newbuffername = newbuffername + "_encoded";
+               bufferColType = "DBI16Type";
+            }
             mainArgs[newbuffername] = bufferColType + "*";
             mlirToGlobalSymbol[newbuffername] = fmt::format("d_{}", newbuffername);
             appendControl(fmt::format("{0}* d_{1};", bufferColType, newbuffername));
@@ -709,7 +848,14 @@ class TupleStreamCode {
             if (auto aggrFunc = llvm::dyn_cast<relalg::AggrFuncOp>(col.getDefiningOp())) {
                auto slot = fmt::format("{0}[{1}]", newbuffername, buf_idx(op));
                auto fn = aggrFunc.getFn();
-               auto val = LoadColumn(mlir::cast<tuples::ColumnRefAttr>(aggrFunc.getAttr()));
+               ColumnDetail aggrCol = ColumnDetail(mlir::cast<tuples::ColumnRefAttr>(aggrFunc.getAttr()));
+               std::string val = "";
+               if (mlirTypeToCudaType(detail.type) == "DBStringType") {
+                  appendControl(fmt::format("auto {0}_map = {1}_map;", detail.getMlirSymbol(), aggrCol.getMlirSymbol()));
+                  val = LoadColumn<1>(mlir::cast<tuples::ColumnRefAttr>(aggrFunc.getAttr()));
+               } else {
+                  val = LoadColumn(mlir::cast<tuples::ColumnRefAttr>(aggrFunc.getAttr()));
+               }
                switch (fn) {
                   case relalg::AggrFunc::sum: {
                      appendKernel(fmt::format("aggregate_sum(&{0}, {1});", slot, val));
@@ -828,6 +974,8 @@ class TupleStreamCode {
          }
       }
       appendControl(launchKernel());
+      appendControl(fmt::format("uint64_t {0} = 0;", MATCOUNT(op)));
+      appendControl(fmt::format("cudaMemcpy(&{0}, d_{1}, sizeof(uint64_t), cudaMemcpyDeviceToHost);", MATCOUNT(op), MAT_IDX(op)));
       // appendControl(fmt::format("cudaFree(d_{0});", MAT_IDX(op)));
       std::string printStmts;
       std::string delimiter = "|";
@@ -854,7 +1002,7 @@ class TupleStreamCode {
          first = false;
       }
       appendControl(fmt::format("for (auto i=0ull; i < {0}; i++) {{ {1}std::cout << std::endl; }}",
-                                COUNT(op), printStmts));
+                                MATCOUNT(op), printStmts));
    }
 
    std::string mapOpDfs(mlir::Operation* op, std::vector<tuples::ColumnRefAttr>& dep) {
@@ -892,6 +1040,99 @@ class TupleStreamCode {
             sep = ", ";
          }
          return fmt::format("{0}({1})", function, args);
+      } else if (auto scfIfOp = mlir::dyn_cast_or_null<mlir::scf::IfOp>(op)) {
+         std::string cond = mapOpDfs(scfIfOp.getCondition().getDefiningOp(), dep);
+         std::string thenBlock = "";
+         std::string elseBlock = "";
+         for (auto& block : scfIfOp.getThenRegion().getBlocks()) {
+            for (auto& op : block) {
+               if (mlir::isa<mlir::scf::YieldOp>(op)) {
+                  thenBlock += mapOpDfs(&op, dep);
+               }
+            }
+         }
+         for (auto& block : scfIfOp.getElseRegion().getBlocks()) {
+            for (auto& op : block) {
+               if (mlir::isa<mlir::scf::YieldOp>(op)) {
+                  elseBlock += mapOpDfs(&op, dep);
+               }
+            }
+         }
+         return fmt::format("({0}) ? ({1}) : ({2})", cond, thenBlock, elseBlock);
+      } else if (auto deriveTruthOp = mlir::dyn_cast_or_null<db::DeriveTruth>(op)) {
+         std::string expr = mapOpDfs(deriveTruthOp.getVal().getDefiningOp(), dep);
+         return fmt::format("({0})", expr);
+      } else if (auto compareOp = mlir::dyn_cast_or_null<db::CmpOp>(op)) {
+         auto left = compareOp.getLeft();
+         std::string leftOperand = mapOpDfs(left.getDefiningOp(), dep);
+
+         auto right = compareOp.getRight();
+         std::string rightOperand = mapOpDfs(right.getDefiningOp(), dep);
+
+         auto cmp = compareOp.getPredicate();
+         std::string predicate = "";
+         switch (cmp) {
+            case db::DBCmpPredicate::eq:
+               predicate = "Predicate::eq";
+               break;
+            case db::DBCmpPredicate::neq:
+               predicate = "Predicate::neq";
+               break;
+            case db::DBCmpPredicate::lt:
+               predicate = "Predicate::lt";
+               break;
+            case db::DBCmpPredicate::gt:
+               predicate = "Predicate::gt";
+               break;
+            case db::DBCmpPredicate::lte:
+               predicate = "Predicate::lte";
+               break;
+            case db::DBCmpPredicate::gte:
+               predicate = "Predicate::gte";
+               break;
+            default:
+               assert(false && "Predicate not handled");
+               break;
+         }
+         return fmt::format("evaluatePredicate({0}, {1}, {2})", leftOperand, rightOperand, predicate);
+      } else if (auto yieldOp = mlir::dyn_cast_or_null<mlir::scf::YieldOp>(op)) {
+         std::string expr = "";
+         for (auto v : yieldOp.getResults()) {
+            expr += mapOpDfs(v.getDefiningOp(), dep);
+         }
+         return fmt::format("({0})", expr);
+      } else if (auto extuiOp = mlir::dyn_cast_or_null<mlir::arith::ExtUIOp>(op)) {
+         auto val = extuiOp.getIn();
+         return fmt::format("({0})", mapOpDfs(val.getDefiningOp(), dep));
+      } else if (auto andOp = mlir::dyn_cast_or_null<db::AndOp>(op)) {
+         std::string res = "(";
+         std::string sep = "";
+         for (auto v : andOp.getVals()) {
+            res += sep + mapOpDfs(v.getDefiningOp(), dep);
+            sep = " && (";
+            res += ")";
+         }
+         return res;
+         // return "true";
+      } else if (auto orOp = mlir::dyn_cast_or_null<db::OrOp>(op)) {
+         std::string res = "(";
+         std::string sep = "";
+         for (auto v : orOp.getVals()) {
+            res += sep + mapOpDfs(v.getDefiningOp(), dep);
+            sep = " || (";
+            res += ")";
+         }
+         return res;
+      } else if (auto selectOp = mlir::dyn_cast_or_null<mlir::arith::SelectOp>(op)) {
+         auto cond = selectOp.getCondition();
+         auto trueVal = selectOp.getTrueValue();
+         auto falseVal = selectOp.getFalseValue();
+         return fmt::format("({0}) ? ({1}) : ({2})", mapOpDfs(cond.getDefiningOp(), dep),
+                            mapOpDfs(trueVal.getDefiningOp(), dep),
+                            mapOpDfs(falseVal.getDefiningOp(), dep));
+      } else if (auto castOp = mlir::dyn_cast_or_null<db::CastOp>(op)) {
+         auto val = castOp.getVal();
+         return fmt::format("(({1}){0})", mapOpDfs(val.getDefiningOp(), dep), mlirTypeToCudaType(castOp.getRes().getType()));
       }
       op->dump();
       assert(false && "Unexpected compute graph");
@@ -922,10 +1163,12 @@ class TupleStreamCode {
       std::map<std::string, std::string> _args = mainArgs;
       std::string _kernelName = "main";
       bool hasHash = false;
-      for (auto p : _args) hasHash |= (p.second == "HASHTABLE_FIND" || p.second == "HASHTABLE_INSERT" || p.second == "HASHTABLE_PROBE");
+      for (auto p : _args) hasHash |= (p.second == "HASHTABLE_FIND" || p.second == "HASHTABLE_INSERT" || p.second == "HASHTABLE_PROBE" || p.second == "HASHTABLE_INSERT_SJ" || p.second == "HASHTABLE_PROBE_SJ" || p.second == "HASHTABLE_INSERT_PK" || p.second == "HASHTABLE_PROBE_PK");
       if (hasHash) {
          stream << "template<";
          bool find = false, insert = false, probe = false;
+         bool insertSJ = false, probeSJ = false;
+         bool insertPK = false, probePK = false;
          std::string sep = "";
          for (auto p : _args) {
             if (p.second == "HASHTABLE_FIND" && !find) {
@@ -938,6 +1181,22 @@ class TupleStreamCode {
                sep = ", ";
             } else if (p.second == "HASHTABLE_PROBE" && !probe) {
                probe = true;
+               stream << sep + "typename " + p.second;
+               sep = ", ";
+            } else if (p.second == "HASHTABLE_INSERT_SJ" && !insertSJ) {
+               insertSJ = true;
+               stream << sep + "typename " + p.second;
+               sep = ", ";
+            } else if (p.second == "HASHTABLE_PROBE_SJ" && !probeSJ) {
+               probeSJ = true;
+               stream << sep + "typename " + p.second;
+               sep = ", ";
+            } else if (p.second == "HASHTABLE_INSERT_PK" && !insertPK) {
+               insertPK = true;
+               stream << sep + "typename " + p.second;
+               sep = ", ";
+            } else if (p.second == "HASHTABLE_PROBE_PK" && !probePK) {
+               probePK = true;
                stream << sep + "typename " + p.second;
                sep = ", ";
             }
@@ -1007,9 +1266,40 @@ class CudaCodeGenNoCount : public mlir::PassWrapper<CudaCodeGenNoCount, mlir::Op
                rightStream->dump();
                assert(false && "No downstream operation probe side of hash join found");
             }
-            auto leftCols = leftStreamCode->BuildHashTable(op); // main of left
+            auto leftkeys = joinOp->getAttrOfType<mlir::ArrayAttr>("leftHash");
+
+            std::set<std::string> leftkeysSet;
+            for (auto key : leftkeys) {
+               if (mlir::isa<mlir::StringAttr>(key)) {
+                  continue;
+               }
+               tuples::ColumnRefAttr key1 = mlir::cast<tuples::ColumnRefAttr>(key);
+               ColumnDetail detail(key1);
+               leftkeysSet.insert(detail.column);
+            }
+            bool is_pk = false;
+            bool is_left_pk = isPrimaryKey(leftkeysSet);
+
+            is_pk |= is_left_pk;
+            std::set<std::string> rightkeysSet;
+            auto rightKeys = joinOp->getAttrOfType<mlir::ArrayAttr>("rightHash");
+            for (auto key : rightKeys) {
+               if (mlir::isa<mlir::StringAttr>(key)) {
+                  continue;
+               }
+               tuples::ColumnRefAttr key1 = mlir::cast<tuples::ColumnRefAttr>(key);
+               ColumnDetail detail(key1);
+               rightkeysSet.insert(detail.column);
+            }
+            bool is_right_pk = invertJoinIfPossible(rightkeysSet, is_left_pk);
+            if (is_right_pk) {
+               std::swap(leftStreamCode, rightStreamCode);
+            }
+            is_pk |= is_right_pk;
+
+            auto leftCols = leftStreamCode->BuildHashTable(op, is_pk, is_right_pk); // main of left
             kernelSchedule.push_back(leftStreamCode);
-            rightStreamCode->ProbeHashTable(op, leftCols);
+            rightStreamCode->ProbeHashTable(op, leftCols, is_pk, is_right_pk);
             mlir::Region& predicate = joinOp.getPredicate();
             rightStreamCode->AddSelectionPredicate(predicate);
 
@@ -1066,6 +1356,46 @@ class CudaCodeGenNoCount : public mlir::PassWrapper<CudaCodeGenNoCount, mlir::Op
 
             streamCode->RenamingOp(renamingOp);
             streamCodeMap[op] = streamCode;
+         } else if (auto semiJoinOp = llvm::dyn_cast<relalg::SemiJoinOp>(op)) {
+            auto leftStream = semiJoinOp.getLeftMutable().get().getDefiningOp();
+            auto rightStream = semiJoinOp.getRightMutable().get().getDefiningOp();
+            auto leftStreamCode = streamCodeMap[leftStream];
+            auto rightStreamCode = streamCodeMap[rightStream];
+            if (!leftStreamCode) {
+               leftStream->dump();
+               assert(false && "No downstream operation left side of hash join found");
+            }
+            if (!rightStreamCode) {
+               rightStream->dump();
+               assert(false && "No downstream operation right side of hash join found");
+            }
+            rightStreamCode->BuildHashTableSemiJoin(op); // main of left
+            kernelSchedule.push_back(rightStreamCode);
+            leftStreamCode->ProbeHashTableSemiJoin(op);
+            mlir::Region& predicate = semiJoinOp.getPredicate();
+            leftStreamCode->AddSelectionPredicate(predicate);
+
+            streamCodeMap[op] = leftStreamCode;
+         } else if (auto antiSemiJoinOp = llvm::dyn_cast<relalg::AntiSemiJoinOp>(op)) {
+            auto leftStream = antiSemiJoinOp.getLeftMutable().get().getDefiningOp();
+            auto rightStream = antiSemiJoinOp.getRightMutable().get().getDefiningOp();
+            auto leftStreamCode = streamCodeMap[leftStream];
+            auto rightStreamCode = streamCodeMap[rightStream];
+            if (!leftStreamCode) {
+               leftStream->dump();
+               assert(false && "No downstream operation left side of hash join found");
+            }
+            if (!rightStreamCode) {
+               rightStream->dump();
+               assert(false && "No downstream operation right side of hash join found");
+            }
+            rightStreamCode->BuildHashTableAntiSemiJoin(op); // main of left
+            kernelSchedule.push_back(rightStreamCode);
+            leftStreamCode->ProbeHashTableAntiSemiJoin(op);
+            mlir::Region& predicate = antiSemiJoinOp.getPredicate();
+            leftStreamCode->AddSelectionPredicate(predicate);
+
+            streamCodeMap[op] = leftStreamCode;
          }
       });
       std::ofstream outputFile("output.cu");

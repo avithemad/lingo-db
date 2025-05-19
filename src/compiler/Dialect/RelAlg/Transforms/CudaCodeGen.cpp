@@ -28,7 +28,7 @@
 // #define MULTIMAP
 void emitControlFunctionSignature(std::ostream& outputFile);
 bool isPrimaryKey(const std::set<std::string> &keysSet);
-
+bool invertJoinIfPossible(std::set<std::string> &rightkeysSet, bool left_pk);
 static bool gCudaCodeGenEnabled = false;
 static bool gStaticMapOnly = false;
 static bool gCudaCodeGenNoCountEnabled = false;
@@ -38,6 +38,7 @@ static bool gCompilingSSB = false;
 
 namespace {
 using namespace lingodb::compiler::dialect;
+
 enum class KernelType {
    Main,
    Count
@@ -1371,39 +1372,31 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
                ColumnDetail detail(key1);
                leftkeysSet.insert(detail.column);
             }
-            bool pk = false;
-            bool left_pk = isPrimaryKey(leftkeysSet);
+            bool is_pk = false;
+            bool is_left_pk = isPrimaryKey(leftkeysSet);
             
-            pk |= left_pk;
-            bool right = false;
-            if (left_pk == false && gStaticMapOnly) {
-               std::set<std::string> rightkeysSet;
-               // check if right side is a pk
-               auto rightKeys = joinOp->getAttrOfType<mlir::ArrayAttr>("rightHash");
-               for (auto key : rightKeys) {
-                  if (mlir::isa<mlir::StringAttr>(key)) {
-                     continue;
-                  }
-                  tuples::ColumnRefAttr key1 = mlir::cast<tuples::ColumnRefAttr>(key);
-                  ColumnDetail detail(key1);
-                  rightkeysSet.insert(detail.column);
+            is_pk |= is_left_pk;
+            std::set<std::string> rightkeysSet;
+            auto rightKeys = joinOp->getAttrOfType<mlir::ArrayAttr>("rightHash");
+            for (auto key : rightKeys) {
+               if (mlir::isa<mlir::StringAttr>(key)) {
+                  continue;
                }
-               bool right_pk = isPrimaryKey(rightkeysSet);
-               if (right_pk == false && gStaticMapOnly) {
-                  op->dump();
-                  assert(false && "This join is not possible without multimap, since both sides are not pk");
-               }
-               if (gStaticMapOnly) {
-                  std::swap(leftStreamCode, rightStreamCode);
-                  pk |= right_pk;
-                  right = true;
-               }
+               tuples::ColumnRefAttr key1 = mlir::cast<tuples::ColumnRefAttr>(key);
+               ColumnDetail detail(key1);
+               rightkeysSet.insert(detail.column);
             }
+            bool is_right_pk = invertJoinIfPossible(rightkeysSet, is_left_pk);
+            if (is_right_pk) {
+               std::swap(leftStreamCode, rightStreamCode);
+            }
+            is_pk |= is_right_pk;
+
 
             leftStreamCode->MaterializeCount(op); // count of left
-            auto leftCols = leftStreamCode->BuildHashTable(op, pk, right); // main of left
+            auto leftCols = leftStreamCode->BuildHashTable(op, is_pk, is_right_pk); // main of left
             kernelSchedule.push_back(leftStreamCode);
-            rightStreamCode->ProbeHashTable(op, leftCols, pk, right);
+            rightStreamCode->ProbeHashTable(op, leftCols, is_pk, is_right_pk);
             mlir::Region& predicate = joinOp.getPredicate();
             rightStreamCode->AddSelectionPredicate(predicate);
 
@@ -1554,6 +1547,20 @@ bool isPrimaryKey(const std::set<std::string> &keysSet) {
       }
    }
    return pk;
+}
+
+bool invertJoinIfPossible(std::set<std::string> &rightkeysSet, bool left_pk) {
+   if (left_pk == false && gStaticMapOnly) {
+      // check if right side is a pk
+      bool right_pk = isPrimaryKey(rightkeysSet);
+      if (right_pk == false && gStaticMapOnly) {
+         assert(false && "This join is not possible without multimap, since both sides are not pk");
+      }
+      if (right_pk == true && gStaticMapOnly) {
+         return true;
+      }
+   }
+   return false;
 }
 void emitControlFunctionSignature(std::ostream& outputFile) {
    if (!gCompilingSSB)

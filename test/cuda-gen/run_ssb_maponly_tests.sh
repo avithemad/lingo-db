@@ -26,25 +26,22 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEST_DIR="$(dirname "$SCRIPT_DIR")"
 REPO_DIR="$(dirname "$TEST_DIR")"
 
-TPCH_DIR="$REPO_DIR/resources/sql/tpch"
+SSB_DIR="$REPO_DIR/resources/sql/ssb"
 BUILD_DIR="$REPO_DIR/build/$BUILD_NAME"
 
 
 # Set the data directory if not already set
-if [ -z "$TPCH_DATA_DIR" ]; then
-  TPCH_DATA_DIR="$REPO_DIR/resources/data/tpch-1"
+if [ -z "$TSSB_DATA_DIR" ]; then
+  SSB_DATA_DIR="$REPO_DIR/resources/data/ssb-1"
 fi
 
-# List of queries to run - 1, 3, 5, 6, 7, 8, 9
-QUERIES=(1 3 4 5 6 7 8 9 10 12 13 14 16 17 18 19 20)
-#  3 16 18 20
-# Known failures
-# 1. 3 - date comparison
-# 2. 16 - distinct count within group by (supplier_cnt)
-# 3. 18 - date comparison
-# QUERIES=(20)
+# List of queries to run
+#   only these queries in ssb need multimap
+QUERIES=(23 33 42 43)
+# QUERIES=(32)
 
-pushd $SQL_PLAN_COMPILER_DIR/gpu-db/tpch
+
+pushd $SQL_PLAN_COMPILER_DIR/gpu-db/ssb
 MAKE_RUNTIME="make build-runtime CUCO_SRC_PATH=$CUCO_SRC_PATH"
 echo $MAKE_RUNTIME
 $MAKE_RUNTIME
@@ -53,33 +50,33 @@ popd
 # Iterate over the queries
 for QUERY in "${QUERIES[@]}"; do
   # First run the run-sql tool to generate CUDA and get reference output
-  RUN_SQL="$BUILD_DIR/run-sql $TPCH_DIR/$QUERY.sql $TPCH_DATA_DIR --gen-cuda-code-no-count"
-  OUTPUT_FILE="tpch-$QUERY-ref.csv"
+  RUN_SQL="$BUILD_DIR/run-sql $SSB_DIR/$QUERY.sql $SSB_DATA_DIR --gen-cuda-code --ssb --static-map-only"
+  OUTPUT_FILE="ssb-$QUERY-ref.csv"
   echo $RUN_SQL
   $RUN_SQL > $OUTPUT_FILE
 
-  NOCOUNT="$QUERY.nocount"
+  MAPONLY="$QUERY.maponly"
 
   # Now run the generated CUDA code
-  CP_CMD="cp output.cu $SQL_PLAN_COMPILER_DIR/gpu-db/tpch/q$NOCOUNT.codegen.cu"
+  CP_CMD="cp output.cu $SQL_PLAN_COMPILER_DIR/gpu-db/ssb/q$MAPONLY.codegen.cu"
   echo $CP_CMD
   $CP_CMD
 
-  CD_CMD="cd $SQL_PLAN_COMPILER_DIR/gpu-db/tpch"
+  CD_CMD="cd $SQL_PLAN_COMPILER_DIR/gpu-db/ssb"
   echo $CD_CMD
   $CD_CMD
 
-  MAKE_QUERY="make query Q=$NOCOUNT CUCO_SRC_PATH=$CUCO_SRC_PATH"
+  MAKE_QUERY="make query Q=$MAPONLY CUCO_SRC_PATH=$CUCO_SRC_PATH"
   echo $MAKE_QUERY
   $MAKE_QUERY
 
-  RUN_QUERY_CMD="build/dbruntime --data_dir $TPCH_DATA_DIR/ --query_num $NOCOUNT"
+  RUN_QUERY_CMD="build/dbruntime --data_dir $SSB_DATA_DIR/ --query_num $MAPONLY"
   echo $RUN_QUERY_CMD
-  $RUN_QUERY_CMD > "cuda-tpch-$NOCOUNT.csv"
+  $RUN_QUERY_CMD > "cuda-ssb-$MAPONLY.csv"
 
   cd -
 
-  PYTHON_CMD="python $SCRIPT_DIR/compare_tpch_outputs.py $OUTPUT_FILE $SQL_PLAN_COMPILER_DIR/gpu-db/tpch/cuda-tpch-$NOCOUNT.csv"
+  PYTHON_CMD="python $SCRIPT_DIR/compare_tpch_outputs.py $OUTPUT_FILE $SQL_PLAN_COMPILER_DIR/gpu-db/ssb/cuda-ssb-$MAPONLY.csv"
   echo $PYTHON_CMD
   $PYTHON_CMD
 
@@ -97,7 +94,7 @@ done
 # Print some new lines and then a seperator
 echo -e "\n"
 echo "=============================="
-echo "TPCH TEST RESULTS"
+echo "SSB TEST RESULTS"
 echo "=============================="
 echo "Passed queries: ${PASSED_QUERIES[@]}"
 echo "Failed queries: ${FAILED_QUERIES[@]}"
