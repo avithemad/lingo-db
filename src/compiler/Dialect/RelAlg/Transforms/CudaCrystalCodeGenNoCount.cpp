@@ -28,7 +28,7 @@
 // Defined in CudaCodeGen.cpp
 void emitControlFunctionSignature(std::ostream& outputFile);
 bool isPrimaryKey(const std::set<std::string> &keysSet);
-
+std::vector<std::string> split(std::string s, std::string delimiter);
 namespace {
 using namespace lingodb::compiler::dialect;
 enum class KernelType {
@@ -477,9 +477,39 @@ class TupleStreamCode {
          std::string function = runtimeOp.getFn().str();
          std::string args = "";
          std::string sep = "";
+         int i = 0;
          for (auto v : runtimeOp.getArgs()) {
-            args += sep + SelectionOpDfs(v.getDefiningOp());
-            sep = ", ";
+            if ((i == 1) && (function == "Like")) {
+               // remove first and last character from the string, 
+               std::string likeArg = SelectionOpDfs(v.getDefiningOp());
+               if (likeArg[0] == '\"' && likeArg[likeArg.size() - 1] == '\"') {
+                  likeArg = likeArg.substr(1, likeArg.size() - 2);
+               }
+               std::vector<std::string> tokens = split(likeArg, "%");
+               std::string patternArray = "", sizeArray = "";
+               std::clog << "TOKENS: "; for (auto t : tokens) std::clog << t << "|"; std::clog << std::endl;
+               int midpatterns = 0;
+               if (tokens.size() <= 2) {
+                  patternArray = "nullptr"; sizeArray = "nullptr";
+               } else {
+                  std::string t1 = "";
+                  for (size_t i=1; i<tokens.size()-1; i++) {
+                     patternArray += t1 + fmt::format("\"{}\"", tokens[i]);
+                     sizeArray += t1 + std::to_string(tokens[i].size());
+                     t1 = ", ";
+                     midpatterns++;
+                  }
+               }
+               std::string patarr = patternArray == "nullptr" ? "nullptr" : fmt::format("(const char*[]){{ {0} }}", patternArray);
+               std::string sizearr = sizeArray == "nullptr" ? "nullptr" : fmt::format("(const int[]){{ {0} }}", sizeArray);
+               args += sep + fmt::format("\"{0}\", \"{1}\", {2}, {3}, {4}", tokens[0], tokens[tokens.size() - 1], patarr, sizearr, midpatterns);
+               break;
+            } else {
+
+               args += sep + SelectionOpDfs(v.getDefiningOp());
+               sep = ", ";
+            }
+            i++;
          }
          return fmt::format("{0}({1})", function, args);
       } else if (auto betweenOp = mlir::dyn_cast_or_null<db::BetweenOp>(op)) {
