@@ -1158,9 +1158,39 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
          std::string function = runtimeOp.getFn().str();
          std::string args = "";
          std::string sep = "";
+         int i = 0;
          for (auto v : runtimeOp.getArgs()) {
-            args += sep + mapOpDfs(v.getDefiningOp(), dep);
-            sep = ", ";
+            if ((i == 1) && (function == "Like")) {
+               // remove first and last character from the string, 
+               std::string likeArg = SelectionOpDfs(v.getDefiningOp());
+               if (likeArg[0] == '\"' && likeArg[likeArg.size() - 1] == '\"') {
+                  likeArg = likeArg.substr(1, likeArg.size() - 2);
+               }
+               std::vector<std::string> tokens = split(likeArg, "%");
+               std::string patternArray = "", sizeArray = "";
+               std::clog << "TOKENS: "; for (auto t : tokens) std::clog << t << "|"; std::clog << std::endl;
+               int midpatterns = 0;
+               if (tokens.size() <= 2) {
+                  patternArray = "nullptr"; sizeArray = "nullptr";
+               } else {
+                  std::string t1 = "";
+                  for (size_t i=1; i<tokens.size()-1; i++) {
+                     patternArray += t1 + fmt::format("\"{}\"", tokens[i]);
+                     sizeArray += t1 + std::to_string(tokens[i].size());
+                     t1 = ", ";
+                     midpatterns++;
+                  }
+               }
+               std::string patarr = patternArray == "nullptr" ? "nullptr" : fmt::format("(const char*[]){{ {0} }}", patternArray);
+               std::string sizearr = sizeArray == "nullptr" ? "nullptr" : fmt::format("(const int[]){{ {0} }}", sizeArray);
+               args += sep + fmt::format("\"{0}\", \"{1}\", {2}, {3}, {4}", tokens[0], tokens[tokens.size() - 1], patarr, sizearr, midpatterns);
+               break;
+            } else {
+
+               args += sep + SelectionOpDfs(v.getDefiningOp());
+               sep = ", ";
+            }
+            i++;
          }
          return fmt::format("{0}({1})", function, args);
       } else if (auto scfIfOp = mlir::dyn_cast_or_null<mlir::scf::IfOp>(op)) {
