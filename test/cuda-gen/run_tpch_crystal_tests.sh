@@ -72,7 +72,7 @@ for QUERY in "${QUERIES[@]}"; do
 
   RUN_QUERY_CMD="build/dbruntime --data_dir $TPCH_DATA_DIR/ --query_num $NOCOUNT"
   echo $RUN_QUERY_CMD
-  $RUN_QUERY_CMD > "cuda-tpch-$NOCOUNT.csv"
+  $RUN_QUERY_CMD > "cuda-tpch-$NOCOUNT.csv" 2> "cuda-tpch-$NOCOUNT.log"
 
   cd -
 

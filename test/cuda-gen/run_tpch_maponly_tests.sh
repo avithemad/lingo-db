@@ -71,7 +71,7 @@ for QUERY in "${QUERIES[@]}"; do
 
   RUN_QUERY_CMD="build/dbruntime --data_dir $TPCH_DATA_DIR/ --query_num $MAPONLY"
   echo $RUN_QUERY_CMD
-  $RUN_QUERY_CMD > "cuda-tpch-$MAPONLY.csv"
+  $RUN_QUERY_CMD > "cuda-tpch-$MAPONLY.csv" 2> "cuda-tpch-$MAPONLY.log"
 
   cd -
 

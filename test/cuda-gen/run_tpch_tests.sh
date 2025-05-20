@@ -39,7 +39,7 @@ fi
 # QUERIES=(1 3 5 6 7 9 13)
 # 3, 9, 18
 QUERIES=(1 3 4 5 6 7 8 9 10 12 13 14 16 17 18 19 20)
-# QUERIES=(20)
+# QUERIES=(16)
 
 pushd $SQL_PLAN_COMPILER_DIR/gpu-db/tpch
 MAKE_RUNTIME="make build-runtime CUCO_SRC_PATH=$CUCO_SRC_PATH"
@@ -71,7 +71,7 @@ for QUERY in "${QUERIES[@]}"; do
 
   RUN_QUERY_CMD="build/dbruntime --data_dir $TPCH_DATA_DIR/ --query_num $QUERY"
   echo $RUN_QUERY_CMD
-  $RUN_QUERY_CMD > "cuda-tpch-$QUERY.csv"
+  $RUN_QUERY_CMD > "cuda-tpch-$QUERY.csv" 2> "cuda-tpch-$QUERY.log"
 
   cd -
 

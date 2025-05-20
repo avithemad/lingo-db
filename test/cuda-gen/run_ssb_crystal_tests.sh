@@ -70,7 +70,7 @@ for QUERY in "${QUERIES[@]}"; do
 
   RUN_QUERY_CMD="build/dbruntime --data_dir $SSB_DATA_DIR/ --query_num $NOCOUNT"
   echo $RUN_QUERY_CMD
-  $RUN_QUERY_CMD > "cuda-ssb-$NOCOUNT.csv"
+  $RUN_QUERY_CMD > "cuda-ssb-$NOCOUNT.csv" 2> "cuda-ssb-$NOCOUNT.log"
 
   cd -
 

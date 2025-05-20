@@ -72,7 +72,7 @@ for QUERY in "${QUERIES[@]}"; do
 
   RUN_QUERY_CMD="build/dbruntime --data_dir $SSB_DATA_DIR/ --query_num $MAPONLY"
   echo $RUN_QUERY_CMD
-  $RUN_QUERY_CMD > "cuda-ssb-$MAPONLY.csv"
+  $RUN_QUERY_CMD > "cuda-ssb-$MAPONLY.csv" 2> "cuda-ssb-$MAPONLY.log"
 
   cd -
 

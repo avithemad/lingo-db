@@ -37,7 +37,7 @@ fi
 
 # List of queries to run
 QUERIES=(11 12 13 21 22 23 31 32 33 34 41 42 43)
-# QUERIES=(32)
+# QUERIES=(11)
 
 
 pushd $SQL_PLAN_COMPILER_DIR/gpu-db/ssb
@@ -69,7 +69,7 @@ for QUERY in "${QUERIES[@]}"; do
 
   RUN_QUERY_CMD="build/dbruntime --data_dir $SSB_DATA_DIR/ --query_num $QUERY"
   echo $RUN_QUERY_CMD
-  $RUN_QUERY_CMD > "cuda-ssb-$QUERY.csv"
+  $RUN_QUERY_CMD > "cuda-ssb-$QUERY.csv" 2> "cuda-ssb-$QUERY.log"
 
   cd -
 
