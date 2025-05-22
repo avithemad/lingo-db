@@ -1032,6 +1032,9 @@ class TupleStreamCode {
          }
          first = false;
       }
+      appendControl(fmt::format("auto end = std::chrono::high_resolution_clock::now();"));
+      appendControl(fmt::format("auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);"));
+      appendControl(fmt::format("std::clog << \"Query execution time: \" << duration.count() / 1000. << \" milliseconds.\" << std::endl;\n"));
       appendControl(fmt::format("for (auto i=0ull; i < {0}; i++) {{ {1}std::cout << std::endl; }}",
                                 MATCOUNT(op), printStmts));
    }
@@ -1467,16 +1470,21 @@ class CudaCodeGenNoCount : public mlir::PassWrapper<CudaCodeGenNoCount, mlir::Op
 #include <thrust/host_vector.h>\n";
       outputFile << "#include \"cudautils.cuh\"\n\
 #include \"db_types.h\"\n\
-#include \"dbruntime.h\"\n";
+#include \"dbruntime.h\"\n\
+#include <chrono>\n";
       for (auto code : kernelSchedule) {
          code->printKernel(outputFile);
       }
 
       emitControlFunctionSignature(outputFile);
-
+      outputFile << "size_t used_mem = usedGpuMem();\n";
+      outputFile << "auto start = std::chrono::high_resolution_clock::now();\n";
       for (auto code : kernelSchedule) {
          code->printControl(outputFile);
       }
+      outputFile << "std::clog << \"Used memory: \" << used_mem / (1024 * 1024) << \" MB\" << std::endl; \n\
+size_t aux_mem = usedGpuMem() - used_mem;\n\
+std::clog << \"Auxiliary memory: \" << aux_mem / (1024) << \" KB\" << std::endl;\n";
       for (auto code : kernelSchedule) {
          code->printFrees(outputFile);
       }

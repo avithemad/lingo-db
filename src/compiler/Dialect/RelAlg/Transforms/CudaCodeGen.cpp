@@ -1124,6 +1124,9 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
          }
          first = false;
       }
+      appendControl(fmt::format("auto end = std::chrono::high_resolution_clock::now();"));
+      appendControl(fmt::format("auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);"));
+      appendControl(fmt::format("std::clog << \"Query execution time: \" << duration.count() / 1000. << \" milliseconds.\" << std::endl;\n"));
       appendControl(fmt::format("for (auto i=0ull; i < {0}; i++) {{ {1}std::cout << std::endl; }}",
                                 COUNT(op), printStmts));
    }
@@ -1581,7 +1584,8 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
 #include <thrust/host_vector.h>\n";
       outputFile << "#include \"cudautils.cuh\"\n\
 #include \"db_types.h\"\n\
-#include \"dbruntime.h\"\n";
+#include \"dbruntime.h\"\n\
+#include <chrono>\n";
       for (auto code : kernelSchedule) {
          code->printKernel(KernelType::Count, outputFile);
          code->printKernel(KernelType::Main, outputFile);
@@ -1589,9 +1593,15 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
 
       emitControlFunctionSignature(outputFile);
 
+      outputFile << "size_t used_mem = usedGpuMem();\n";
+      outputFile << "auto start = std::chrono::high_resolution_clock::now();\n";
       for (auto code : kernelSchedule) {
          code->printControl(outputFile);
       }
+      outputFile << "std::clog << \"Used memory: \" << used_mem / (1024 * 1024) << \" MB\" << std::endl; \n\
+size_t aux_mem = usedGpuMem() - used_mem;\n\
+std::clog << \"Auxiliary memory: \" << aux_mem / (1024) << \" KB\" << std::endl;\n";
+
       for (auto code : kernelSchedule) {
          code->printFrees(outputFile);
       }
