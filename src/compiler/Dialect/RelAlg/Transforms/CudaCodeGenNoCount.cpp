@@ -1054,17 +1054,19 @@ class TupleStreamCode {
          }
          first = false;
       }
-      appendControl(fmt::format("auto end = std::chrono::high_resolution_clock::now();"));
-      appendControl(fmt::format("auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);"));
-      appendControl(fmt::format("std::clog << \"Query execution time: \" << duration.count() / 1000. << \" milliseconds.\" << std::endl;\n"));
-
+      appendControl(fmt::format("auto endTime = std::chrono::high_resolution_clock::now();"));
+      appendControl(fmt::format("auto duration = std::chrono::duration_cast<std::chrono::microseconds>(endTime - startTime);"));
 
       // Only append the print statements if we are not generating kernel timing code
       // We want to be able to parse the timing info and don't want unnecessary print statements
       // when we're timing kernels
-      if (!generateKernelTimingCode())
+      if (!generateKernelTimingCode()) {
+         appendControl(fmt::format("std::clog << \"Query execution time: \" << duration.count() / 1000. << \" milliseconds.\" << std::endl;\n"));
          appendControl(fmt::format("for (auto i=0ull; i < {0}; i++) {{ {1}std::cout << std::endl; }}",
-                                   MATCOUNT(op), printStmts));
+                                   COUNT(op), printStmts));
+      } else {
+         appendControl("std::cout << \"total_query, \" << duration.count() / 1000. << std::endl;\n");
+      }
    }
 
    std::string mapOpDfs(mlir::Operation* op, std::vector<tuples::ColumnRefAttr>& dep) {
@@ -1508,7 +1510,7 @@ class CudaCodeGenNoCount : public mlir::PassWrapper<CudaCodeGenNoCount, mlir::Op
 
       emitControlFunctionSignature(outputFile);
       outputFile << "size_t used_mem = usedGpuMem();\n";
-      outputFile << "auto start = std::chrono::high_resolution_clock::now();\n";
+      outputFile << "auto startTime = std::chrono::high_resolution_clock::now();\n";
       emitTimingEventCreation(outputFile);
 
       for (auto code : kernelSchedule) {
