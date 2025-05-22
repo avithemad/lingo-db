@@ -26,8 +26,12 @@
 #include <fmt/core.h>
 
 void emitControlFunctionSignature(std::ostream& outputFile);
-bool isPrimaryKey(const std::set<std::string> &keysSet);
+void emitTimingEventCreation(std::ostream& outputFile);
+
+bool isPrimaryKey(const std::set<std::string>& keysSet);
 std::vector<std::string> split(std::string s, std::string delimiter);
+
+bool generateKernelTimingCode();
 
 namespace {
 using namespace lingodb::compiler::dialect;
@@ -259,6 +263,13 @@ class TupleStreamCode {
       controlCode.push_back(stmt);
    }
 
+   std::string getKernelName(KernelType ty) {
+      if (ty == KernelType::Main)
+         return "main";
+      else
+         return "count";
+   }
+
    std::string launchKernel(KernelType ty) {
       std::string _kernelName;
       std::map<std::string, std::string> _args;
@@ -279,6 +290,21 @@ class TupleStreamCode {
          sep = ", ";
       }
       return fmt::format("{0}_{1}<<<std::ceil((float){2}/(float)TILE_SIZE), TILE_SIZE/ITEMS_PER_THREAD>>>({3});", _kernelName, GetId((void*) this), size, args);
+   }
+
+   void genLaunchKernel(KernelType ty) {
+      if (generateKernelTimingCode())
+         appendControl("cudaEventRecord(start);");
+      appendControl(launchKernel(ty));
+      if (generateKernelTimingCode()) {
+         appendControl("cudaEventRecord(stop);");
+         auto kernelName = getKernelName(ty) + "_" + GetId((void*) this);
+         auto kernelTimeVarName = kernelName + "_time";
+         appendControl("float " + kernelTimeVarName + ";");
+         appendControl(fmt::format("cudaEventSynchronize(stop);"));
+         appendControl(fmt::format("cudaEventElapsedTime(&{0}, start, stop);", kernelTimeVarName));
+         appendControl(fmt::format("std::cout << \"{0}\" << \", \" << {1} << std::endl;", kernelName, kernelTimeVarName));
+      }
    }
 
    public:
@@ -404,7 +430,8 @@ class TupleStreamCode {
       }
    }
    std::string getKernelSizeVariable() {
-      for (auto it: mainArgs) if (it.second == "size_t") return it.first;
+      for (auto it : mainArgs)
+         if (it.second == "size_t") return it.first;
       assert(false && "this kernel is supposed to have a size parameter");
       return "";
    }
@@ -509,23 +536,27 @@ class TupleStreamCode {
          // TODO(avinash, p1): handle runtime predicate like operator
          std::string function = runtimeOp.getFn().str();
          std::string args = "";
-         std::string sep = "";int i = 0;
+         std::string sep = "";
+         int i = 0;
          for (auto v : runtimeOp.getArgs()) {
             if ((i == 1) && (function == "Like")) {
-               // remove first and last character from the string, 
+               // remove first and last character from the string,
                std::string likeArg = SelectionOpDfs(v.getDefiningOp());
                if (likeArg[0] == '\"' && likeArg[likeArg.size() - 1] == '\"') {
                   likeArg = likeArg.substr(1, likeArg.size() - 2);
                }
                std::vector<std::string> tokens = split(likeArg, "%");
                std::string patternArray = "", sizeArray = "";
-               std::clog << "TOKENS: "; for (auto t : tokens) std::clog << t << "|"; std::clog << std::endl;
+               std::clog << "TOKENS: ";
+               for (auto t : tokens) std::clog << t << "|";
+               std::clog << std::endl;
                int midpatterns = 0;
                if (tokens.size() <= 2) {
-                  patternArray = "nullptr"; sizeArray = "nullptr";
+                  patternArray = "nullptr";
+                  sizeArray = "nullptr";
                } else {
                   std::string t1 = "";
-                  for (size_t i=1; i<tokens.size()-1; i++) {
+                  for (size_t i = 1; i < tokens.size() - 1; i++) {
                      patternArray += t1 + fmt::format("\"{}\"", tokens[i]);
                      sizeArray += t1 + std::to_string(tokens[i].size());
                      t1 = ", ";
@@ -537,7 +568,6 @@ class TupleStreamCode {
                args += sep + fmt::format("\"{0}\", \"{1}\", {2}, {3}, {4}", tokens[0], tokens[tokens.size() - 1], patarr, sizearr, midpatterns);
                break;
             } else {
-
                args += sep + SelectionOpDfs(v.getDefiningOp());
                sep = ", ";
             }
@@ -649,7 +679,7 @@ class TupleStreamCode {
       appendControl(fmt::format("cudaMalloc(&d_{0}, sizeof(uint64_t));", COUNT(op)));
       deviceFrees.insert(fmt::format("d_{0}", COUNT(op)));
       appendControl(fmt::format("cudaMemset(d_{0}, 0, sizeof(uint64_t));", COUNT(op)));
-      appendControl(launchKernel(KernelType::Count));
+      genLaunchKernel(KernelType::Count);
       appendControl(fmt::format("uint64_t {0};", COUNT(op)));
       appendControl(fmt::format("cudaMemcpy(&{0}, d_{0}, sizeof(uint64_t), cudaMemcpyDeviceToHost);", COUNT(op)));
       // appendControl(fmt::format("cudaFree(d_{0});", COUNT(op)));
@@ -683,7 +713,7 @@ class TupleStreamCode {
       appendKernel("if (!selection_flags[ITEM]) continue;", kernelType);
       appendKernel(fmt::format("{0}[ITEM] = 0;", KEY(op)), kernelType);
       int totalKeySize = 0;
-      int j=0;
+      int j = 0;
       for (auto i = 0ull; i < keys.size(); i++) {
          if (mlir::isa<mlir::StringAttr>(keys[i])) {
             continue;
@@ -696,7 +726,7 @@ class TupleStreamCode {
             assert(false && "Type is not hashable");
          }
          std::string cudaIdentifierKey = loadedColumnIds[j++];
-         if (sep!="") appendKernel(sep, kernelType);
+         if (sep != "") appendKernel(sep, kernelType);
          if (i < keys.size() - 1) {
             tuples::ColumnRefAttr next_key = mlir::cast<tuples::ColumnRefAttr>(keys[i + 1]);
             auto next_base_type = mlirTypeToCudaType(next_key.getColumn().type);
@@ -751,7 +781,7 @@ class TupleStreamCode {
       appendControl("// Insert hash table control;");
       appendControl(fmt::format("auto d_{0} = cuco::static_map{{ (int){1}*2, cuco::empty_key{{(int64_t)-1}},cuco::empty_value{{(int64_t)-1}},thrust::equal_to<int64_t>{{}},cuco::linear_probing<1, cuco::default_hash_function<int64_t>>() }};",
                                 HT(op), COUNT(op)));
-      appendControl(launchKernel(KernelType::Main));
+      genLaunchKernel(KernelType::Main);
    }
    void BuildHashTableAntiSemiJoin(mlir::Operation* op) {
       auto joinOp = mlir::dyn_cast_or_null<relalg::AntiSemiJoinOp>(op);
@@ -771,7 +801,7 @@ class TupleStreamCode {
       appendControl("// Insert hash table control;");
       appendControl(fmt::format("auto d_{0} = cuco::static_map{{ (int){1}*2, cuco::empty_key{{(int64_t)-1}},cuco::empty_value{{(int64_t)-1}},thrust::equal_to<int64_t>{{}},cuco::linear_probing<1, cuco::default_hash_function<int64_t>>() }};",
                                 HT(op), COUNT(op)));
-      appendControl(launchKernel(KernelType::Main));
+      genLaunchKernel(KernelType::Main);
    }
    void ProbeHashTableSemiJoin(mlir::Operation* op) {
       auto joinOp = mlir::dyn_cast_or_null<relalg::SemiJoinOp>(op);
@@ -866,7 +896,7 @@ class TupleStreamCode {
       deviceFrees.insert(fmt::format("d_{0}", BUF(op)));
       appendControl(fmt::format("auto d_{0} = cuco::static_map{{ (int){1}*2, cuco::empty_key{{(int64_t)-1}},cuco::empty_value{{(int64_t)-1}},thrust::equal_to<int64_t>{{}},cuco::linear_probing<1, cuco::default_hash_function<int64_t>>() }};",
                                 HT(op), COUNT(op)));
-      appendControl(launchKernel(KernelType::Main));
+      genLaunchKernel(KernelType::Main);
       // appendControl(fmt::format("cudaFree(d_{0});", BUF_IDX(op)));
       return columnData;
    }
@@ -878,7 +908,7 @@ class TupleStreamCode {
       auto keys = joinOp->getAttrOfType<mlir::ArrayAttr>(hash);
       MakeKeys(op, keys, KernelType::Count);
       auto key = MakeKeys(op, keys, KernelType::Main);
-      
+
       std::string kernelSize = getKernelSizeVariable();
       appendKernel(fmt::format("int64_t {0}[ITEMS_PER_THREAD];", slot_second(op)), KernelType::Main);
       appendKernel("#pragma unroll", KernelType::Main);
@@ -960,7 +990,7 @@ cuco::empty_value{{(int64_t)-1}},\
 thrust::equal_to<int64_t>{{}},\
 cuco::linear_probing<1, cuco::default_hash_function<int64_t>>() }};",
                                 HT(op), ht_size));
-      appendControl(launchKernel(KernelType::Count));
+      genLaunchKernel(KernelType::Count);
       appendControl(fmt::format("size_t {0} = d_{1}.size();", COUNT(op), HT(op)));
       // TODO(avinash): deallocate the old hash table and create a new one to save space in gpu when estimations are way off
       appendControl(fmt::format("thrust::device_vector<int64_t> keys_{0}({2}), vals_{0}({2});\n\
@@ -988,7 +1018,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
                // TODO(avinash): check if it is a string column
                ColumnDetail detail(aggrFunc.getAttr());
                if (mlirTypeToCudaType(detail.type) == "DBStringType") {
-               LoadColumn<1>(mlir::cast<tuples::ColumnRefAttr>(aggrFunc.getAttr()), KernelType::Main);
+                  LoadColumn<1>(mlir::cast<tuples::ColumnRefAttr>(aggrFunc.getAttr()), KernelType::Main);
                } else {
                   LoadColumn(mlir::cast<tuples::ColumnRefAttr>(aggrFunc.getAttr()), KernelType::Main);
                }
@@ -1095,7 +1125,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
          }
       }
       appendKernel("}", KernelType::Main);
-      appendControl(launchKernel(KernelType::Main));
+      genLaunchKernel(KernelType::Main);
    }
    void MaterializeBuffers(mlir::Operation* op) {
       auto materializeOp = mlir::dyn_cast_or_null<relalg::MaterializeOp>(op);
@@ -1112,7 +1142,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       for (auto col : materializeOp.getCols()) {
          auto columnAttr = mlir::cast<tuples::ColumnRefAttr>(col);
          auto detail = ColumnDetail(columnAttr);
-         
+
          std::string type = mlirTypeToCudaType(detail.type);
          if (type == "DBStringType") {
             LoadColumn<1>(columnAttr, KernelType::Main);
@@ -1157,7 +1187,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
          }
       }
       appendKernel("}", KernelType::Main);
-      appendControl(launchKernel(KernelType::Main));
+      genLaunchKernel(KernelType::Main);
       // appendControl(fmt::format("cudaFree(d_{0});", MAT_IDX(op)));
       std::string printStmts;
       std::string delimiter = "|";
@@ -1183,11 +1213,19 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
          }
          first = false;
       }
-      appendControl(fmt::format("auto end = std::chrono::high_resolution_clock::now();"));
-      appendControl(fmt::format("auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);"));
-      appendControl(fmt::format("std::clog << \"Query execution time: \" << duration.count() / 1000. << \" milliseconds.\" << std::endl;\n"));
-      appendControl(fmt::format("for (auto i=0ull; i < {0}; i++) {{ {1}std::cout << std::endl; }}",
-                                COUNT(op), printStmts));
+      appendControl(fmt::format("auto endTime = std::chrono::high_resolution_clock::now();"));
+      appendControl(fmt::format("auto duration = std::chrono::duration_cast<std::chrono::microseconds>(endTime - startTime);"));
+
+      // Only append the print statements if we are not generating kernel timing code
+      // We want to be able to parse the timing info and don't want unnecessary print statements
+      // when we're timing kernels
+      if (!generateKernelTimingCode()) {
+         appendControl(fmt::format("std::clog << \"Query execution time: \" << duration.count() / 1000. << \" milliseconds.\" << std::endl;\n"));
+         appendControl(fmt::format("for (auto i=0ull; i < {0}; i++) {{ {1}std::cout << std::endl; }}",
+                                   COUNT(op), printStmts));
+      } else {
+         appendControl("std::cout << \"total_query, \" << duration.count() / 1000. << std::endl;\n");
+      }
    }
 
    std::string mapOpDfs(mlir::Operation* op, std::vector<tuples::ColumnRefAttr>& dep) {
@@ -1223,20 +1261,23 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
          int i = 0;
          for (auto v : runtimeOp.getArgs()) {
             if ((i == 1) && (function == "Like")) {
-               // remove first and last character from the string, 
+               // remove first and last character from the string,
                std::string likeArg = SelectionOpDfs(v.getDefiningOp());
                if (likeArg[0] == '\"' && likeArg[likeArg.size() - 1] == '\"') {
                   likeArg = likeArg.substr(1, likeArg.size() - 2);
                }
                std::vector<std::string> tokens = split(likeArg, "%");
                std::string patternArray = "", sizeArray = "";
-               std::clog << "TOKENS: "; for (auto t : tokens) std::clog << t << "|"; std::clog << std::endl;
+               std::clog << "TOKENS: ";
+               for (auto t : tokens) std::clog << t << "|";
+               std::clog << std::endl;
                int midpatterns = 0;
                if (tokens.size() <= 2) {
-                  patternArray = "nullptr"; sizeArray = "nullptr";
+                  patternArray = "nullptr";
+                  sizeArray = "nullptr";
                } else {
                   std::string t1 = "";
-                  for (size_t i=1; i<tokens.size()-1; i++) {
+                  for (size_t i = 1; i < tokens.size() - 1; i++) {
                      patternArray += t1 + fmt::format("\"{}\"", tokens[i]);
                      sizeArray += t1 + std::to_string(tokens[i].size());
                      t1 = ", ";
@@ -1248,7 +1289,6 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
                args += sep + fmt::format("\"{0}\", \"{1}\", {2}, {3}, {4}", tokens[0], tokens[tokens.size() - 1], patarr, sizearr, midpatterns);
                break;
             } else {
-
                args += sep + SelectionOpDfs(v.getDefiningOp());
                sep = ", ";
             }
@@ -1504,7 +1544,7 @@ class CudaCrystalCodeGen : public mlir::PassWrapper<CudaCrystalCodeGen, mlir::Op
                leftkeysSet.insert(detail.column);
             }
             bool left_pk = isPrimaryKey(leftkeysSet);
-            
+
             bool right = false;
             if (left_pk == false) {
                std::set<std::string> rightkeysSet;
@@ -1652,8 +1692,10 @@ class CudaCrystalCodeGen : public mlir::PassWrapper<CudaCrystalCodeGen, mlir::Op
       }
 
       emitControlFunctionSignature(outputFile);
+      emitTimingEventCreation(outputFile);
+
       outputFile << "size_t used_mem = usedGpuMem();\n";
-      outputFile << "auto start = std::chrono::high_resolution_clock::now();\n";
+      outputFile << "auto startTime = std::chrono::high_resolution_clock::now();\n";
       for (auto code : kernelSchedule) {
          code->printControl(outputFile);
       }
