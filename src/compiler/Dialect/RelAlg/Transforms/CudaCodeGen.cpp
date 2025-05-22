@@ -27,20 +27,22 @@
 
 // #define MULTIMAP
 void emitControlFunctionSignature(std::ostream& outputFile);
-bool isPrimaryKey(const std::set<std::string> &keysSet);
-bool invertJoinIfPossible(std::set<std::string> &rightkeysSet, bool left_pk);
+void emitTimingEventCreation(std::ostream& outputFile);
+
+bool isPrimaryKey(const std::set<std::string>& keysSet);
+bool invertJoinIfPossible(std::set<std::string>& rightkeysSet, bool left_pk);
 std::vector<std::string> split(std::string s, std::string delimiter) {
    size_t pos_start = 0, pos_end, delim_len = delimiter.length();
    std::string token;
    std::vector<std::string> res;
 
    while ((pos_end = s.find(delimiter, pos_start)) != std::string::npos) {
-       token = s.substr (pos_start, pos_end - pos_start);
-       pos_start = pos_end + delim_len;
-       res.push_back (token);
+      token = s.substr(pos_start, pos_end - pos_start);
+      pos_start = pos_end + delim_len;
+      res.push_back(token);
    }
 
-   res.push_back (s.substr (pos_start));
+   res.push_back(s.substr(pos_start));
    return res;
 }
 static bool gCudaCodeGenEnabled = false;
@@ -49,6 +51,10 @@ static bool gCudaCodeGenNoCountEnabled = false;
 static bool gCudaCrystalCodeGenEnabled = false;
 static bool gCudaCrystalCodeGenNoCountEnabled = false;
 static bool gCompilingSSB = false;
+
+bool gGenKernelTimingCode = false;
+
+bool generateKernelTimingCode() { return gGenKernelTimingCode; }
 
 namespace {
 using namespace lingodb::compiler::dialect;
@@ -273,6 +279,7 @@ class TupleStreamCode {
    std::map<std::string, std::string> mainArgs;
    std::map<std::string, std::string> countArgs;
    int id;
+
    void appendKernel(std::string stmt, KernelType ty) {
       if (ty == KernelType::Main)
          mainCode.push_back(stmt);
@@ -282,6 +289,13 @@ class TupleStreamCode {
 
    void appendControl(std::string stmt) {
       controlCode.push_back(stmt);
+   }
+
+   std::string getKernelName(KernelType ty) {
+      if (ty == KernelType::Main)
+         return "main";
+      else
+         return "count";
    }
 
    std::string launchKernel(KernelType ty) {
@@ -304,6 +318,21 @@ class TupleStreamCode {
          sep = ", ";
       }
       return fmt::format("{0}_{1}<<<std::ceil((float){2}/128.), 128>>>({3});", _kernelName, GetId((void*) this), size, args);
+   }
+
+   void genLaunchKernel(KernelType ty) {
+      if (generateKernelTimingCode())
+         appendControl("cudaEventRecord(start);");
+      appendControl(launchKernel(ty));
+      if (generateKernelTimingCode()) {
+         appendControl("cudaEventRecord(stop);");
+         auto kernelName = getKernelName(ty) + "_" + GetId((void*) this);
+         auto kernelTimeVarName = kernelName + "_time";
+         appendControl("float " + kernelTimeVarName + ";");
+         appendControl(fmt::format("cudaEventSynchronize(stop);"));
+         appendControl(fmt::format("cudaEventElapsedTime(&{0}, start, stop);", kernelTimeVarName));
+         appendControl(fmt::format("std::cout << \"{0}\" << \", \" << {1} << std::endl;", kernelName, kernelTimeVarName));
+      }
    }
 
    public:
@@ -514,20 +543,23 @@ class TupleStreamCode {
          int i = 0;
          for (auto v : runtimeOp.getArgs()) {
             if ((i == 1) && (function == "Like")) {
-               // remove first and last character from the string, 
+               // remove first and last character from the string,
                std::string likeArg = SelectionOpDfs(v.getDefiningOp());
                if (likeArg[0] == '\"' && likeArg[likeArg.size() - 1] == '\"') {
                   likeArg = likeArg.substr(1, likeArg.size() - 2);
                }
                std::vector<std::string> tokens = split(likeArg, "%");
                std::string patternArray = "", sizeArray = "";
-               std::clog << "TOKENS: "; for (auto t : tokens) std::clog << t << "|"; std::clog << std::endl;
+               std::clog << "TOKENS: ";
+               for (auto t : tokens) std::clog << t << "|";
+               std::clog << std::endl;
                int midpatterns = 0;
                if (tokens.size() <= 2) {
-                  patternArray = "nullptr"; sizeArray = "nullptr";
+                  patternArray = "nullptr";
+                  sizeArray = "nullptr";
                } else {
                   std::string t1 = "";
-                  for (size_t i=1; i<tokens.size()-1; i++) {
+                  for (size_t i = 1; i < tokens.size() - 1; i++) {
                      patternArray += t1 + fmt::format("\"{}\"", tokens[i]);
                      sizeArray += t1 + std::to_string(tokens[i].size());
                      t1 = ", ";
@@ -539,7 +571,6 @@ class TupleStreamCode {
                args += sep + fmt::format("\"{0}\", \"{1}\", {2}, {3}, {4}", tokens[0], tokens[tokens.size() - 1], patarr, sizearr, midpatterns);
                break;
             } else {
-
                args += sep + SelectionOpDfs(v.getDefiningOp());
                sep = ", ";
             }
@@ -638,7 +669,7 @@ class TupleStreamCode {
       appendControl(fmt::format("cudaMalloc(&d_{0}, sizeof(uint64_t));", COUNT(op)));
       deviceFrees.insert(fmt::format("d_{0}", COUNT(op)));
       appendControl(fmt::format("cudaMemset(d_{0}, 0, sizeof(uint64_t));", COUNT(op)));
-      appendControl(launchKernel(KernelType::Count));
+      genLaunchKernel(KernelType::Count);
       appendControl(fmt::format("uint64_t {0};", COUNT(op)));
       appendControl(fmt::format("cudaMemcpy(&{0}, d_{0}, sizeof(uint64_t), cudaMemcpyDeviceToHost);", COUNT(op)));
       // appendControl(fmt::format("cudaFree(d_{0});", COUNT(op)));
@@ -721,7 +752,7 @@ class TupleStreamCode {
       appendControl("// Insert hash table control;");
       appendControl(fmt::format("auto d_{0} = cuco::static_map{{ (int){1}*2, cuco::empty_key{{(int64_t)-1}},cuco::empty_value{{(int64_t)-1}},thrust::equal_to<int64_t>{{}},cuco::linear_probing<1, cuco::default_hash_function<int64_t>>() }};",
                                 HT(op), COUNT(op)));
-      appendControl(launchKernel(KernelType::Main));
+      genLaunchKernel(KernelType::Main);
    }
    void BuildHashTableAntiSemiJoin(mlir::Operation* op) {
       auto joinOp = mlir::dyn_cast_or_null<relalg::AntiSemiJoinOp>(op);
@@ -736,7 +767,7 @@ class TupleStreamCode {
       appendControl("// Insert hash table control;");
       appendControl(fmt::format("auto d_{0} = cuco::static_map{{ (int){1}*2, cuco::empty_key{{(int64_t)-1}},cuco::empty_value{{(int64_t)-1}},thrust::equal_to<int64_t>{{}},cuco::linear_probing<1, cuco::default_hash_function<int64_t>>() }};",
                                 HT(op), COUNT(op)));
-      appendControl(launchKernel(KernelType::Main));
+      genLaunchKernel(KernelType::Main);
    }
    void ProbeHashTableSemiJoin(mlir::Operation* op) {
       auto joinOp = mlir::dyn_cast_or_null<relalg::SemiJoinOp>(op);
@@ -776,7 +807,7 @@ class TupleStreamCode {
    std::map<std::string, ColumnMetadata*> BuildHashTable(mlir::Operation* op, bool pk, bool right) {
       auto joinOp = mlir::dyn_cast_or_null<relalg::InnerJoinOp>(op);
       if (!joinOp) assert(false && "Insert hash table accepts only inner join operation.");
-      std::string hash = right? "rightHash" : "leftHash";
+      std::string hash = right ? "rightHash" : "leftHash";
       auto keys = joinOp->getAttrOfType<mlir::ArrayAttr>(hash);
       auto key = MakeKeys(op, keys, KernelType::Main);
       appendKernel("// Insert hash table kernel;", KernelType::Main);
@@ -796,9 +827,9 @@ class TupleStreamCode {
 
       mainArgs[BUF_IDX(op)] = "uint64_t*";
       if (pk)
-      mainArgs[HT(op)] = "HASHTABLE_INSERT_PK";
-      else 
-      mainArgs[HT(op)] = "HASHTABLE_INSERT";
+         mainArgs[HT(op)] = "HASHTABLE_INSERT_PK";
+      else
+         mainArgs[HT(op)] = "HASHTABLE_INSERT";
       mainArgs[BUF(op)] = "uint64_t*";
       mlirToGlobalSymbol[BUF_IDX(op)] = fmt::format("d_{}", BUF_IDX(op));
       mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::insert)", HT(op));
@@ -820,7 +851,7 @@ class TupleStreamCode {
          appendControl(fmt::format("auto d_{0} = cuco::static_map{{ (int){1}*2, cuco::empty_key{{(int64_t)-1}},cuco::empty_value{{(int64_t)-1}},thrust::equal_to<int64_t>{{}},cuco::linear_probing<1, cuco::default_hash_function<int64_t>>() }};",
                                    HT(op), COUNT(op)));
       // #endif
-      appendControl(launchKernel(KernelType::Main));
+      genLaunchKernel(KernelType::Main);
       // appendControl(fmt::format("cudaFree(d_{0});", BUF_IDX(op)));
       return columnData;
    }
@@ -828,7 +859,7 @@ class TupleStreamCode {
    void ProbeHashTable(mlir::Operation* op, const std::map<std::string, ColumnMetadata*>& leftColumnData, bool pk, bool right) {
       auto joinOp = mlir::dyn_cast_or_null<relalg::InnerJoinOp>(op);
       if (!joinOp) assert(false && "Probe hash table accepts only inner join operation.");
-      std::string hash = right? "leftHash" : "rightHash";
+      std::string hash = right ? "leftHash" : "rightHash";
       auto keys = joinOp->getAttrOfType<mlir::ArrayAttr>(hash);
       MakeKeys(op, keys, KernelType::Count);
       auto key = MakeKeys(op, keys, KernelType::Main);
@@ -886,14 +917,12 @@ class TupleStreamCode {
          }
          columnData[colData.first] = colData.second;
       }
-      if (pk){
-
+      if (pk) {
          mainArgs[HT(op)] = "HASHTABLE_PROBE_PK";
          mainArgs[BUF(op)] = "uint64_t*";
          countArgs[HT(op)] = "HASHTABLE_PROBE_PK";
          countArgs[BUF(op)] = "uint64_t*";
       } else {
-         
          mainArgs[HT(op)] = "HASHTABLE_PROBE";
          mainArgs[BUF(op)] = "uint64_t*";
          countArgs[HT(op)] = "HASHTABLE_PROBE";
@@ -937,7 +966,7 @@ cuco::empty_value{{(int64_t)-1}},\
 thrust::equal_to<int64_t>{{}},\
 cuco::linear_probing<1, cuco::default_hash_function<int64_t>>() }};",
                                 HT(op), ht_size));
-      appendControl(launchKernel(KernelType::Count));
+      genLaunchKernel(KernelType::Count);
       appendControl(fmt::format("size_t {0} = d_{1}.size();", COUNT(op), HT(op)));
       // TODO(avinash): deallocate the old hash table and create a new one to save space in gpu when estimations are way off
       appendControl(fmt::format("thrust::device_vector<int64_t> keys_{0}({2}), vals_{0}({2});\n\
@@ -1052,7 +1081,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
             appendKernel(fmt::format("{0}[{1}] = {2};", keyColumnName, buf_idx(op), key), KernelType::Main);
          }
       }
-      appendControl(launchKernel(KernelType::Main));
+      genLaunchKernel(KernelType::Main);
    }
    void MaterializeBuffers(mlir::Operation* op) {
       auto materializeOp = mlir::dyn_cast_or_null<relalg::MaterializeOp>(op);
@@ -1098,7 +1127,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
             appendKernel(fmt::format("{0}[{2}] = {1};", newBuffer, key, mat_idx(op)), KernelType::Main);
          }
       }
-      appendControl(launchKernel(KernelType::Main));
+      genLaunchKernel(KernelType::Main);
       // appendControl(fmt::format("cudaFree(d_{0});", MAT_IDX(op)));
       std::string printStmts;
       std::string delimiter = "|";
@@ -1127,8 +1156,14 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       appendControl(fmt::format("auto end = std::chrono::high_resolution_clock::now();"));
       appendControl(fmt::format("auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);"));
       appendControl(fmt::format("std::clog << \"Query execution time: \" << duration.count() / 1000. << \" milliseconds.\" << std::endl;\n"));
-      appendControl(fmt::format("for (auto i=0ull; i < {0}; i++) {{ {1}std::cout << std::endl; }}",
-                                COUNT(op), printStmts));
+
+
+      // Only append the print statements if we are not generating kernel timing code
+      // We want to be able to parse the timing info and don't want unnecessary print statements
+      // when we're timing kernels
+      if (!generateKernelTimingCode())
+         appendControl(fmt::format("for (auto i=0ull; i < {0}; i++) {{ {1}std::cout << std::endl; }}",
+                                   COUNT(op), printStmts));
    }
 
    std::string mapOpDfs(mlir::Operation* op, std::vector<tuples::ColumnRefAttr>& dep) {
@@ -1164,20 +1199,23 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
          int i = 0;
          for (auto v : runtimeOp.getArgs()) {
             if ((i == 1) && (function == "Like")) {
-               // remove first and last character from the string, 
+               // remove first and last character from the string,
                std::string likeArg = SelectionOpDfs(v.getDefiningOp());
                if (likeArg[0] == '\"' && likeArg[likeArg.size() - 1] == '\"') {
                   likeArg = likeArg.substr(1, likeArg.size() - 2);
                }
                std::vector<std::string> tokens = split(likeArg, "%");
                std::string patternArray = "", sizeArray = "";
-               std::clog << "TOKENS: "; for (auto t : tokens) std::clog << t << "|"; std::clog << std::endl;
+               std::clog << "TOKENS: ";
+               for (auto t : tokens) std::clog << t << "|";
+               std::clog << std::endl;
                int midpatterns = 0;
                if (tokens.size() <= 2) {
-                  patternArray = "nullptr"; sizeArray = "nullptr";
+                  patternArray = "nullptr";
+                  sizeArray = "nullptr";
                } else {
                   std::string t1 = "";
-                  for (size_t i=1; i<tokens.size()-1; i++) {
+                  for (size_t i = 1; i < tokens.size() - 1; i++) {
                      patternArray += t1 + fmt::format("\"{}\"", tokens[i]);
                      sizeArray += t1 + std::to_string(tokens[i].size());
                      t1 = ", ";
@@ -1189,7 +1227,6 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
                args += sep + fmt::format("\"{0}\", \"{1}\", {2}, {3}, {4}", tokens[0], tokens[tokens.size() - 1], patarr, sizearr, midpatterns);
                break;
             } else {
-
                args += sep + SelectionOpDfs(v.getDefiningOp());
                sep = ", ";
             }
@@ -1451,7 +1488,7 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
             }
             bool is_pk = false;
             bool is_left_pk = isPrimaryKey(leftkeysSet);
-            
+
             is_pk |= is_left_pk;
             std::set<std::string> rightkeysSet;
             auto rightKeys = joinOp->getAttrOfType<mlir::ArrayAttr>("rightHash");
@@ -1468,7 +1505,6 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
                std::swap(leftStreamCode, rightStreamCode);
             }
             is_pk |= is_right_pk;
-
 
             leftStreamCode->MaterializeCount(op); // count of left
             auto leftCols = leftStreamCode->BuildHashTable(op, is_pk, is_right_pk); // main of left
@@ -1586,12 +1622,19 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
 #include \"db_types.h\"\n\
 #include \"dbruntime.h\"\n\
 #include <chrono>\n";
+#include \"dbruntime.h\"\n";
+
+      if (generateKernelTimingCode()) {
+         outputFile << "#include <cuda_runtime.h>\n";
+      }
+
       for (auto code : kernelSchedule) {
          code->printKernel(KernelType::Count, outputFile);
          code->printKernel(KernelType::Main, outputFile);
       }
 
       emitControlFunctionSignature(outputFile);
+      emitTimingEventCreation(outputFile);
 
       outputFile << "size_t used_mem = usedGpuMem();\n";
       outputFile << "auto start = std::chrono::high_resolution_clock::now();\n";
@@ -1611,29 +1654,26 @@ std::clog << \"Auxiliary memory: \" << aux_mem / (1024) << \" KB\" << std::endl;
 };
 }
 
-
-bool isPrimaryKey(const std::set<std::string> &keysSet) {
+bool isPrimaryKey(const std::set<std::string>& keysSet) {
    bool pk = false;
    std::vector<std::string> tpch_pks = {
-      "o_orderkey", "r_regionkey", "c_custkey", "n_nationkey", "s_suppkey", "p_partkey"
-   };
+      "o_orderkey", "r_regionkey", "c_custkey", "n_nationkey", "s_suppkey", "p_partkey"};
    std::vector<std::string> ssb_pks = {
-      "p_partkey", "s_suppkey", "d_datekey", "c_custkey"
-   };
+      "p_partkey", "s_suppkey", "d_datekey", "c_custkey"};
    if (!gCompilingSSB) {
-      for (auto k: tpch_pks) {
+      for (auto k : tpch_pks) {
          if (keysSet.find(k) != keysSet.end()) pk = true;
       }
       pk |= (keysSet.find("ps_partkey") != keysSet.end() && keysSet.find("ps_suppkey") != keysSet.end());
    } else {
-      for (auto k: ssb_pks) {
+      for (auto k : ssb_pks) {
          if (keysSet.find(k) != keysSet.end()) pk = true;
       }
    }
    return pk;
 }
 
-bool invertJoinIfPossible(std::set<std::string> &rightkeysSet, bool left_pk) {
+bool invertJoinIfPossible(std::set<std::string>& rightkeysSet, bool left_pk) {
    if (left_pk == false && gStaticMapOnly) {
       // check if right side is a pk
       bool right_pk = isPrimaryKey(rightkeysSet);
@@ -1646,6 +1686,15 @@ bool invertJoinIfPossible(std::set<std::string> &rightkeysSet, bool left_pk) {
    }
    return false;
 }
+
+void emitTimingEventCreation(std::ostream& outputFile) {
+   if (generateKernelTimingCode()) {
+      outputFile << "cudaEvent_t start, stop;" << std::endl;
+      outputFile << "cudaEventCreate(&start);" << std::endl;
+      outputFile << "cudaEventCreate(&stop);" << std::endl;
+   }
+}
+
 void emitControlFunctionSignature(std::ostream& outputFile) {
    if (!gCompilingSSB)
       outputFile << "extern \"C\" void control (DBI32Type * d_nation__n_nationkey, DBStringType * d_nation__n_name, DBI32Type * d_nation__n_regionkey, DBStringType * d_nation__n_comment, size_t nation_size, DBI32Type * d_supplier__s_suppkey, DBI32Type * d_supplier__s_nationkey, DBStringType * d_supplier__s_name, DBStringType * d_supplier__s_address, DBStringType * d_supplier__s_phone, DBDecimalType * d_supplier__s_acctbal, DBStringType * d_supplier__s_comment, size_t supplier_size, DBI32Type * d_partsupp__ps_suppkey, DBI32Type * d_partsupp__ps_partkey, DBI32Type * d_partsupp__ps_availqty, DBDecimalType * d_partsupp__ps_supplycost, DBStringType * d_partsupp__ps_comment, size_t partsupp_size, DBI32Type * d_part__p_partkey, DBStringType * d_part__p_name, DBStringType * d_part__p_mfgr, DBStringType * d_part__p_brand, DBStringType * d_part__p_type, DBI32Type * d_part__p_size, DBStringType * d_part__p_container, DBDecimalType * d_part__p_retailprice, DBStringType * d_part__p_comment, size_t part_size, DBI32Type * d_lineitem__l_orderkey, DBI32Type * d_lineitem__l_partkey, DBI32Type * d_lineitem__l_suppkey, DBI64Type * d_lineitem__l_linenumber, DBDecimalType * d_lineitem__l_quantity, DBDecimalType * d_lineitem__l_extendedprice, DBDecimalType * d_lineitem__l_discount, DBDecimalType * d_lineitem__l_tax, DBCharType * d_lineitem__l_returnflag, DBCharType * d_lineitem__l_linestatus, DBI32Type * d_lineitem__l_shipdate, DBI32Type * d_lineitem__l_commitdate, DBI32Type * d_lineitem__l_receiptdate, DBStringType * d_lineitem__l_shipinstruct, DBStringType * d_lineitem__l_shipmode, DBStringType * d_lineitem__comments, size_t lineitem_size, DBI32Type * d_orders__o_orderkey, DBCharType * d_orders__o_orderstatus, DBI32Type * d_orders__o_custkey, DBDecimalType * d_orders__o_totalprice, DBI32Type * d_orders__o_orderdate, DBStringType * d_orders__o_orderpriority, DBStringType * d_orders__o_clerk, DBI32Type * d_orders__o_shippriority, DBStringType * d_orders__o_comment, size_t orders_size, DBI32Type * d_customer__c_custkey, DBStringType * d_customer__c_name, DBStringType * d_customer__c_address, DBI32Type * d_customer__c_nationkey, DBStringType * d_customer__c_phone, DBDecimalType * d_customer__c_acctbal, DBStringType * d_customer__c_mktsegment, DBStringType * d_customer__c_comment, size_t customer_size, DBI32Type * d_region__r_regionkey, DBStringType * d_region__r_name, DBStringType * d_region__r_comment, size_t region_size, DBI16Type* d_nation__n_name_encoded, std::unordered_map<DBI16Type, DBStringType> &nation__n_name_map, std::unordered_map<DBI16Type, DBStringType> &n1___n_name_map, std::unordered_map<DBI16Type, DBStringType> &n2___n_name_map, DBI16Type* d_orders__o_orderpriority_encoded, std::unordered_map<DBI16Type, std::string>& orders__o_orderpriority_map, DBI16Type* d_customer__c_name_encoded, std::unordered_map<DBI16Type, std::string>& customer__c_name_map, DBI16Type* d_customer__c_comment_encoded, std::unordered_map<DBI16Type, std::string>& customer__c_comment_map, DBI16Type* d_customer__c_phone_encoded, std::unordered_map<DBI16Type, std::string>& customer__c_phone_map, DBI16Type* d_customer__c_address_encoded, std::unordered_map<DBI16Type, std::string>& customer__c_address_map, DBI16Type* d_supplier__s_name_encoded, std::unordered_map<DBI16Type, std::string>& supplier__s_name_map, DBI16Type* d_part__p_brand_encoded, std::unordered_map<DBI16Type, std::string>& part__p_brand_map, DBI16Type* d_part__p_type_encoded, std::unordered_map<DBI16Type, std::string>& part__p_type_map, DBI16Type* d_lineitem__l_shipmode_encoded, std::unordered_map<DBI16Type, std::string>& lineitem__l_shipmode_map, DBI16Type* d_supplier__s_address_encoded, std::unordered_map<DBI16Type, std::string>& supplier__s_address_map) {\n";
@@ -1691,6 +1740,7 @@ void checkForBenchmarkSwitch(int& argc, char** argv) {
       }
    }
 }
+
 void checkForStaticMapOnlySwitch(int& argc, char** argv) {
    for (int i = 0; i < argc; i++) {
       if (std::string(argv[i]) == "--static-map-only") {
@@ -1699,6 +1749,16 @@ void checkForStaticMapOnlySwitch(int& argc, char** argv) {
          break;
       }
    }
+}
+
+void checkForGenKernelTimingCodeSwith(int& argc, char** argv) {
+   for (int i = 0; i < argc; i++)
+      if (std::string(argv[i]) == "--gen-kernel-timing") {
+         std::clog << "Enabled generation of kernel timing code\n";
+         gGenKernelTimingCode = true;
+         removeCodeGenSwitch(argc, argv, i);
+         break;
+      }
 }
 
 void relalg::conditionallyEnableCudaCodeGen(int& argc, char** argv) {
@@ -1723,4 +1783,5 @@ void relalg::conditionallyEnableCudaCodeGen(int& argc, char** argv) {
    }
    checkForBenchmarkSwitch(argc, argv);
    checkForStaticMapOnlySwitch(argc, argv);
+   checkForGenKernelTimingCodeSwith(argc, argv);
 }
