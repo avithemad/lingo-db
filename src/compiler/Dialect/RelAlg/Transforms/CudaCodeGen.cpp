@@ -1751,7 +1751,6 @@ void checkForGenKernelTimingCodeSwith(int& argc, char** argv) {
 
 void relalg::conditionallyEnableCudaCodeGen(int& argc, char** argv) {
    for (int i = 0; i < argc; i++) {
-      std::clog << "Checking for codegen switch: " << argv[i] << std::endl;
       if (std::string(argv[i]) == "--gen-cuda-code") {
          gCudaCodeGenEnabled = true;
          removeCodeGenSwitch(argc, argv, i);
