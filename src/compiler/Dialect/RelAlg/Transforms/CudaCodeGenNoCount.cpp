@@ -1063,7 +1063,7 @@ class TupleStreamCode {
       if (!generateKernelTimingCode()) {
          appendControl(fmt::format("std::clog << \"Query execution time: \" << duration.count() / 1000. << \" milliseconds.\" << std::endl;\n"));
          appendControl(fmt::format("for (auto i=0ull; i < {0}; i++) {{ {1}std::cout << std::endl; }}",
-                                   COUNT(op), printStmts));
+                                   MATCOUNT(op), printStmts));
       } else {
          appendControl("std::cout << \"total_query, \" << duration.count() / 1000. << std::endl;\n");
       }
