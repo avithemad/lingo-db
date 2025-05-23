@@ -26,28 +26,26 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEST_DIR="$(dirname $(dirname "$SCRIPT_DIR"))"
 REPO_DIR="$(dirname "$TEST_DIR")"
 
-TPCH_DIR="$REPO_DIR/resources/sql/tpch"
+SSB_DIR="$REPO_DIR/resources/sql/ssb"
 BUILD_DIR="$REPO_DIR/build/$BUILD_NAME"
 
 
 # Set the data directory if not already set
-if [ -z "$TPCH_DATA_DIR" ]; then
-  TPCH_DATA_DIR="$REPO_DIR/resources/data/tpch-1"
+if [ -z "$SSB_DATA_DIR" ]; then
+  SSB_DATA_DIR="$REPO_DIR/resources/data/ssb-1"
 fi
 
-# List of queries to run - 1, 3, 5, 6, 7, 8, 9
-# QUERIES=(1 3 5 6 7 9 13)
-# 3, 9, 18
-QUERIES=(1 3 4 5 6 7 8 9 10 12 13 14 16 17 18 19 20)
-# QUERIES=(1)
+# List of queries to run
+QUERIES=(11 12 13 21 22 23 31 32 33 34 41 42 43)
+# QUERIES=(11)
 
-pushd $SQL_PLAN_COMPILER_DIR/gpu-db/tpch
+pushd $SQL_PLAN_COMPILER_DIR/gpu-db/ssb
 MAKE_RUNTIME="make build-runtime CUCO_SRC_PATH=$CUCO_SRC_PATH"
 echo $MAKE_RUNTIME
 $MAKE_RUNTIME
 popd
 
-OUTPUT_FILE=$SCRIPT_DIR/tpch-crystal-nocount-perf.csv
+OUTPUT_FILE=$SCRIPT_DIR/ssb-crystal-perf.csv
 echo "Output file: $OUTPUT_FILE"
 
 # Empty the output file
@@ -56,18 +54,18 @@ echo -n "" > $OUTPUT_FILE
 # Iterate over the queries
 for QUERY in "${QUERIES[@]}"; do
   # First run the run-sql tool to generate CUDA and get reference output
-  COMPILE_SQL="$BUILD_DIR/run-sql $TPCH_DIR/$QUERY.sql $TPCH_DATA_DIR --gen-cuda-crystal-code-no-count --gen-kernel-timing"
+  COMPILE_SQL="$BUILD_DIR/run-sql $SSB_DIR/$QUERY.sql $SSB_DATA_DIR --gen-cuda-crystal-code --ssb --gen-kernel-timing"
   echo $COMPILE_SQL
   $COMPILE_SQL
 
-  NOCOUNT="$QUERY.crystal.nocount"
+  NOCOUNT="$QUERY.crystal"
 
   # Now run the generated CUDA code
-  CP_CMD="cp output.cu $SQL_PLAN_COMPILER_DIR/gpu-db/tpch/q$NOCOUNT.codegen.cu"
+  CP_CMD="cp output.cu $SQL_PLAN_COMPILER_DIR/gpu-db/ssb/q$NOCOUNT.codegen.cu"
   echo $CP_CMD
   $CP_CMD
 
-  CD_CMD="cd $SQL_PLAN_COMPILER_DIR/gpu-db/tpch"
+  CD_CMD="cd $SQL_PLAN_COMPILER_DIR/gpu-db/ssb"
   echo $CD_CMD
   $CD_CMD
 
@@ -77,12 +75,13 @@ for QUERY in "${QUERIES[@]}"; do
 
   # Append the query number to the output file
   echo "---" >> $OUTPUT_FILE
-  echo "tpch-q$NOCOUNT" >> $OUTPUT_FILE
+  echo "ssb-q$NOCOUNT" >> $OUTPUT_FILE
 
-  RUN_QUERY_CMD="build/dbruntime --data_dir $TPCH_DATA_DIR/ --query_num $NOCOUNT"
+  RUN_QUERY_CMD="build/dbruntime --data_dir $SSB_DATA_DIR/ --query_num $NOCOUNT"
   echo $RUN_QUERY_CMD
   $RUN_QUERY_CMD >> $OUTPUT_FILE
 
   cd -
 
 done
+
