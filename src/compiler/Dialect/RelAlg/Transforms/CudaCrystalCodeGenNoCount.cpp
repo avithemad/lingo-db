@@ -33,6 +33,7 @@ bool isPrimaryKey(const std::set<std::string>& keysSet);
 std::vector<std::string> split(std::string s, std::string delimiter);
 
 bool generateKernelTimingCode();
+bool generatePerOperationProfile();
 
 namespace {
 using namespace lingodb::compiler::dialect;
@@ -250,6 +251,7 @@ class TupleStreamCode {
    std::set<std::string> loadedColumns;
    std::set<std::string> deviceFrees;
    std::set<std::string> hostFrees;
+   std::vector<std::pair<mlir::Operation*, std::string>> profileInfo;
 
    std::map<std::string, std::string> mlirToGlobalSymbol; // used when launching the kernel.
 
@@ -279,7 +281,7 @@ class TupleStreamCode {
          args += fmt::format("{1}{0}", mlirToGlobalSymbol[p.first], sep);
          sep = ", ";
       }
-      return fmt::format("{0}_{1}<<<std::ceil((float){2}/(float)TILE_SIZE), TILE_SIZE/ITEMS_PER_THREAD>>>({3});", _kernelName, GetId((void*) this), size, args);
+      return fmt::format("{0}_{1}<<<std::ceil((float){2}/(float)TILE_SIZE), TB>>>({3});", _kernelName, GetId((void*) this), size, args);
    }
 
    void genLaunchKernel() {
@@ -303,6 +305,7 @@ class TupleStreamCode {
       std::string tableSize = tableName + "_size";
       mlirToGlobalSymbol[tableSize] = tableSize;
       mainArgs[tableSize] = "size_t";
+      appendKernel("int64_t start, stop, cycles_per_warp;");
 
       appendKernel("size_t tile_offset = blockIdx.x * TILE_SIZE;");
       appendKernel("size_t tid = tile_offset + threadIdx.x;");
@@ -338,6 +341,7 @@ class TupleStreamCode {
 
       mlirToGlobalSymbol[tableSize] = tableSize;
       mainArgs[tableSize] = "size_t";
+      appendKernel("int64_t start, stop, cycles_per_warp;");
 
       appendKernel("size_t tile_offset = blockIdx.x * TILE_SIZE;");
       appendKernel("size_t tid = tile_offset + threadIdx.x;");
@@ -388,6 +392,43 @@ class TupleStreamCode {
    }
    ~TupleStreamCode() {
       for (auto p : columnData) delete p.second;
+   }
+   // non materializing operators push to a vector for printing
+   void PushProfileInfo(mlir::Operation* op, std::string opName) {
+      profileInfo.push_back(std::make_pair(op, opName));
+   }
+   void AddOperationProfile(mlir::Operation* op, std::string opName) {
+      std::string profile_name = fmt::format("main_{0}_{1}_{2}", GetId((void*) this), opName, GetId((void*) op));
+      appendControl(fmt::format("int64_t* d_cycles_per_warp_{0};", profile_name));
+      appendControl(fmt::format("auto {0}_cpw_size = std::ceil((float){1}/(float)TILE_SIZE);", profile_name, getKernelSizeVariable()));
+      appendControl(fmt::format("cudaMalloc(&d_cycles_per_warp_{0}, sizeof(int64_t) * {0}_cpw_size);", profile_name));
+      appendControl(fmt::format("cudaMemset(d_cycles_per_warp_{0}, -1, sizeof(int64_t) * {0}_cpw_size);", profile_name));
+      mainArgs["cycles_per_warp_" + profile_name] = "int64_t*";
+      mlirToGlobalSymbol["cycles_per_warp_" + profile_name] = "d_cycles_per_warp_" + profile_name;
+   }
+   void BeginProfileKernel(mlir::Operation* op, std::string opName) {
+      std::string profile_name = fmt::format("main_{0}_{1}_{2}", GetId((void*) this), opName, GetId((void*) op));
+      appendKernel(fmt::format("if (threadIdx.x == 0) start = clock64();"));
+   }
+   void EndProfileKernel(mlir::Operation* op, std::string opName) {
+      std::string profile_name = fmt::format("main_{0}_{1}_{2}", GetId((void*) this), opName, GetId((void*) op));
+      appendKernel(fmt::format("if (threadIdx.x == 0) {{\
+            stop = clock64();\
+            cycles_per_warp = (stop - start);\
+            cycles_per_warp_{0}[blockIdx.x] = cycles_per_warp;}}",
+                               profile_name));
+   }
+   void PrintOperationProfile() {
+      for (auto p : profileInfo) {
+         mlir::Operation* op = p.first;
+         std::string opName = p.second;
+         std::string profile_name = fmt::format("main_{0}_{1}_{2}", GetId((void*) this), opName, GetId((void*) op));
+         appendControl(fmt::format("int64_t* cycles_per_warp_{0} = (int64_t*)malloc(sizeof(int64_t) * {0}_cpw_size);", profile_name));
+         appendControl(fmt::format("cudaMemcpy(cycles_per_warp_{0}, d_cycles_per_warp_{0}, sizeof(int64_t) * {0}_cpw_size, cudaMemcpyDeviceToHost);", profile_name));
+         appendControl("std::cout << \"" + profile_name + " \";");
+         appendControl(fmt::format("for (auto i=0ull; i < {0}_cpw_size; i++) std::cout << cycles_per_warp_{0}[i] << \" \";", profile_name));
+         appendControl("std::cout << std::endl;");
+      }
    }
    void RenamingOp(relalg::RenamingOp renamingOp) {
       for (mlir::Attribute attr : renamingOp.getColumns()) {
@@ -1142,12 +1183,13 @@ class TupleStreamCode {
       // Only append the print statements if we are not generating kernel timing code
       // We want to be able to parse the timing info and don't want unnecessary print statements
       // when we're timing kernels
-      if (!generateKernelTimingCode()) {
+      if (generateKernelTimingCode()) {
+         appendControl("std::cout << \"total_query, \" << duration.count() / 1000. << std::endl;\n");
+      } else if (!generatePerOperationProfile()) {
+
          appendControl(fmt::format("std::clog << \"Query execution time: \" << duration.count() / 1000. << \" milliseconds.\" << std::endl;\n"));
          appendControl(fmt::format("for (auto i=0ull; i < {0}; i++) {{ {1}std::cout << std::endl; }}",
                                    MATCOUNT(op), printStmts));
-      } else {
-         appendControl("std::cout << \"total_query, \" << duration.count() / 1000. << std::endl;\n");
       }
    }
 
@@ -1427,7 +1469,17 @@ class CudaCrystalCodeGenNoCount : public mlir::PassWrapper<CudaCrystalCodeGenNoC
             }
 
             mlir::Region& predicate = selection.getPredicate();
-            streamCode->AddSelectionPredicate(predicate);
+            if (generatePerOperationProfile()) {
+               std::string opname = "selection";
+               streamCode->AddOperationProfile(op, opname);
+               streamCode->BeginProfileKernel(op, opname);
+               streamCode->AddSelectionPredicate(predicate);
+               streamCode->EndProfileKernel(op, opname);
+               streamCode->PushProfileInfo(op, opname);
+            } else {
+               streamCode->AddSelectionPredicate(predicate);
+            }
+            
             streamCodeMap[op] = streamCode;
          } else if (auto joinOp = llvm::dyn_cast<relalg::InnerJoinOp>(op)) {
             auto leftStream = joinOp.getLeftMutable().get().getDefiningOp();
@@ -1478,11 +1530,40 @@ class CudaCrystalCodeGenNoCount : public mlir::PassWrapper<CudaCrystalCodeGenNoC
                   right = true;
                }
             }
-            auto leftCols = leftStreamCode->BuildHashTable(op, right); // main of left
+
+            std::map<std::string, ColumnMetadata*> leftCols;
+            if (generatePerOperationProfile()) {
+
+               std::string opname = "join_build";
+               leftStreamCode->AddOperationProfile(op, opname);
+               leftStreamCode->BeginProfileKernel(op, opname);
+               leftCols = leftStreamCode->BuildHashTable(op, right); // main of left
+               leftStreamCode->EndProfileKernel(op, opname);
+               leftStreamCode->PushProfileInfo(op, opname);
+               leftStreamCode->PrintOperationProfile();
+            } else {
+               leftCols = leftStreamCode->BuildHashTable(op, right);
+            }
+            
             kernelSchedule.push_back(leftStreamCode);
-            rightStreamCode->ProbeHashTable(op, leftCols, right);
-            mlir::Region& predicate = joinOp.getPredicate();
-            rightStreamCode->AddSelectionPredicate(predicate);
+
+            if (generatePerOperationProfile()) {
+
+               std::string opname = "join_probe";
+               rightStreamCode->AddOperationProfile(op, opname);
+               rightStreamCode->BeginProfileKernel(op, opname);
+   
+               rightStreamCode->ProbeHashTable(op, leftCols, right);
+               mlir::Region& predicate = joinOp.getPredicate();
+               rightStreamCode->AddSelectionPredicate(predicate);
+   
+               rightStreamCode->EndProfileKernel(op, opname);
+               rightStreamCode->PushProfileInfo(op, opname);
+            } else {
+               rightStreamCode->ProbeHashTable(op, leftCols, right);
+               mlir::Region& predicate = joinOp.getPredicate();
+               rightStreamCode->AddSelectionPredicate(predicate);
+            }
 
             streamCodeMap[op] = rightStreamCode;
          } else if (auto aggregationOp = llvm::dyn_cast<relalg::AggregationOp>(op)) {
@@ -1493,9 +1574,20 @@ class CudaCrystalCodeGenNoCount : public mlir::PassWrapper<CudaCrystalCodeGenNoC
                assert(false && "No downstream operation for aggregation found");
             }
 
-            streamCode->AggregateInHashTable(op); // main part
-            kernelSchedule.push_back(streamCode);
+            if (generatePerOperationProfile()) {
 
+               std::string opname = "aggregation";
+               streamCode->AddOperationProfile(op, opname);
+               streamCode->BeginProfileKernel(op, opname);
+   
+               streamCode->AggregateInHashTable(op); // main part
+               streamCode->EndProfileKernel(op, opname);
+               streamCode->PushProfileInfo(op, opname);
+               streamCode->PrintOperationProfile();
+            } else {
+               streamCode->AggregateInHashTable(op); // main part
+            }
+            kernelSchedule.push_back(streamCode);
             auto newStreamCode = new TupleStreamCode(op);
             streamCodeMap[op] = newStreamCode;
          } else if (auto scanOp = llvm::dyn_cast<relalg::BaseTableOp>(op)) {
@@ -1510,8 +1602,17 @@ class CudaCrystalCodeGenNoCount : public mlir::PassWrapper<CudaCrystalCodeGenNoC
                stream->dump();
                assert(false && "No downstream operation for map op found");
             }
+            if (generatePerOperationProfile()) {
 
-            streamCode->TranslateMapOp(op);
+               std::string opname = "map";
+               streamCode->AddOperationProfile(op, opname);
+               streamCode->BeginProfileKernel(op, opname);
+               streamCode->TranslateMapOp(op);
+               streamCode->EndProfileKernel(op, opname);
+               streamCode->PushProfileInfo(op, opname);
+            } else {
+               streamCode->TranslateMapOp(op);
+            }
             streamCodeMap[op] = streamCode;
          } else if (auto materializeOp = llvm::dyn_cast<relalg::MaterializeOp>(op)) {
             auto stream = materializeOp.getRelMutable().get().getDefiningOp();
@@ -1521,7 +1622,20 @@ class CudaCrystalCodeGenNoCount : public mlir::PassWrapper<CudaCrystalCodeGenNoC
                assert(false && "No downstream operation for materialize found");
             }
 
-            streamCode->MaterializeBuffers(op);
+            if (generatePerOperationProfile()) {
+
+               std::string opname = "materialize";
+               streamCode->AddOperationProfile(op, opname);
+               streamCode->BeginProfileKernel(op, opname);
+               streamCode->MaterializeBuffers(op);
+               streamCode->EndProfileKernel(op, opname);
+               streamCode->PushProfileInfo(op, opname);
+               streamCode->PrintOperationProfile();
+            } else {
+               streamCode->MaterializeBuffers(op);
+            }
+            
+
             kernelSchedule.push_back(streamCode);
          } else if (auto sortOp = llvm::dyn_cast<relalg::SortOp>(op)) {
             std::clog << "WARNING: This operator has not been implemented, bypassing it.\n";
@@ -1550,11 +1664,32 @@ class CudaCrystalCodeGenNoCount : public mlir::PassWrapper<CudaCrystalCodeGenNoC
                rightStream->dump();
                assert(false && "No downstream operation right side of hash join found");
             }
-            rightStreamCode->BuildHashTableSemiJoin(op); // main of left
+            if (generatePerOperationProfile()) {
+               std::string opname = "semi_join_build";
+               rightStreamCode->AddOperationProfile(op, opname);
+               rightStreamCode->BeginProfileKernel(op, opname);
+               rightStreamCode->BuildHashTableSemiJoin(op); // main of left
+               rightStreamCode->EndProfileKernel(op, opname);
+               rightStreamCode->PushProfileInfo(op, opname);
+            } else {
+               rightStreamCode->BuildHashTableSemiJoin(op); // main of left
+            }
             kernelSchedule.push_back(rightStreamCode);
-            leftStreamCode->ProbeHashTableSemiJoin(op);
-            mlir::Region& predicate = semiJoinOp.getPredicate();
-            leftStreamCode->AddSelectionPredicate(predicate);
+            if (generatePerOperationProfile()) {
+               std::string opname = "semi_join_probe";
+               leftStreamCode->AddOperationProfile(op, opname);
+               leftStreamCode->BeginProfileKernel(op, opname);
+               leftStreamCode->ProbeHashTableSemiJoin(op);
+               mlir::Region& predicate = semiJoinOp.getPredicate();
+               leftStreamCode->AddSelectionPredicate(predicate);
+               leftStreamCode->EndProfileKernel(op, opname);
+               leftStreamCode->PushProfileInfo(op, opname);
+            } else {
+               leftStreamCode->ProbeHashTableSemiJoin(op);
+               mlir::Region& predicate = semiJoinOp.getPredicate();
+               leftStreamCode->AddSelectionPredicate(predicate);
+            }
+
 
             streamCodeMap[op] = leftStreamCode;
          } else if (auto antiSemiJoinOp = llvm::dyn_cast<relalg::AntiSemiJoinOp>(op)) {
@@ -1570,12 +1705,31 @@ class CudaCrystalCodeGenNoCount : public mlir::PassWrapper<CudaCrystalCodeGenNoC
                rightStream->dump();
                assert(false && "No downstream operation right side of hash join found");
             }
-            rightStreamCode->BuildHashTableAntiSemiJoin(op); // main of left
+            if (generatePerOperationProfile()) {
+               std::string opname = "anti_semi_join_build";
+               rightStreamCode->AddOperationProfile(op, opname);
+               rightStreamCode->BeginProfileKernel(op, opname);
+               rightStreamCode->BuildHashTableAntiSemiJoin(op); // main of left
+               rightStreamCode->EndProfileKernel(op, opname);
+               rightStreamCode->PushProfileInfo(op, opname);
+            } else {
+               rightStreamCode->BuildHashTableAntiSemiJoin(op); // main of left
+            }
             kernelSchedule.push_back(rightStreamCode);
-            leftStreamCode->ProbeHashTableAntiSemiJoin(op);
-            mlir::Region& predicate = antiSemiJoinOp.getPredicate();
-            leftStreamCode->AddSelectionPredicate(predicate);
-
+            if (generatePerOperationProfile()) {
+               std::string opname = "anti_semi_join_probe";
+               leftStreamCode->AddOperationProfile(op, opname);
+               leftStreamCode->BeginProfileKernel(op, opname);
+               leftStreamCode->ProbeHashTableAntiSemiJoin(op);
+               mlir::Region& predicate = antiSemiJoinOp.getPredicate();
+               leftStreamCode->AddSelectionPredicate(predicate);
+               leftStreamCode->EndProfileKernel(op, opname);
+               leftStreamCode->PushProfileInfo(op, opname);
+            } else {
+               leftStreamCode->ProbeHashTableAntiSemiJoin(op);
+               mlir::Region& predicate = antiSemiJoinOp.getPredicate();
+               leftStreamCode->AddSelectionPredicate(predicate);
+            }
             streamCodeMap[op] = leftStreamCode;
          }
       });

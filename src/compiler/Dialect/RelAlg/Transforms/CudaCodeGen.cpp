@@ -51,11 +51,12 @@ static bool gCudaCodeGenNoCountEnabled = false;
 static bool gCudaCrystalCodeGenEnabled = false;
 static bool gCudaCrystalCodeGenNoCountEnabled = false;
 static bool gCompilingSSB = false;
+static bool gGenPerOperationProfile = false;
 
 bool gGenKernelTimingCode = false;
 
 bool generateKernelTimingCode() { return gGenKernelTimingCode; }
-
+bool generatePerOperationProfile() { return gGenPerOperationProfile; }
 namespace {
 using namespace lingodb::compiler::dialect;
 
@@ -1762,6 +1763,17 @@ void checkForGenKernelTimingCodeSwith(int& argc, char** argv) {
       }
 }
 
+void checkForGenPerOperationProfileSwitch(int& argc, char** argv) {
+   for (int i = 0; i < argc; i++) {
+      if (std::string(argv[i]) == "--gen-per-operation-profile") {
+         std::clog << "Enabled generation of per operation profile code\n";
+         gGenPerOperationProfile = true;
+         removeCodeGenSwitch(argc, argv, i);
+         break;
+      }
+   }
+}
+
 void relalg::conditionallyEnableCudaCodeGen(int& argc, char** argv) {
    for (int i = 0; i < argc; i++) {
       if (std::string(argv[i]) == "--gen-cuda-code") {
@@ -1785,4 +1797,5 @@ void relalg::conditionallyEnableCudaCodeGen(int& argc, char** argv) {
    checkForBenchmarkSwitch(argc, argv);
    checkForStaticMapOnlySwitch(argc, argv);
    checkForGenKernelTimingCodeSwith(argc, argv);
+   checkForGenPerOperationProfileSwitch(argc, argv);
 }
