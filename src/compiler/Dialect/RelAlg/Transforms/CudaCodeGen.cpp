@@ -533,8 +533,10 @@ class TupleStreamCode {
          if (auto returnOp = mlir::dyn_cast_or_null<tuples::ReturnOp>(predicateBlock.getTerminator())) {
             mlir::Value matched = returnOp.getResults()[0];
             std::string condition = SelectionOpDfs(matched.getDefiningOp());
-            appendKernel(fmt::format("if (!({0})) return;", condition), KernelType::Count);
-            appendKernel(fmt::format("if (!({0})) return;", condition), KernelType::Main);
+            if (condition != "!(false)") {
+               appendKernel(fmt::format("if (!({0})) return;", condition), KernelType::Count);
+               appendKernel(fmt::format("if (!({0})) return;", condition), KernelType::Main);
+            }
             return;
          } else {
             assert(false && "expected return op to be in the end of the predicate region");
