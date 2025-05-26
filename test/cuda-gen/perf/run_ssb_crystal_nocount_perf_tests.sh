@@ -45,7 +45,7 @@ echo $MAKE_RUNTIME
 $MAKE_RUNTIME
 popd
 
-OUTPUT_FILE=$SCRIPT_DIR/ssb-crystal-perf.csv
+OUTPUT_FILE=$SCRIPT_DIR/ssb-crystal-nocount-perf.csv
 echo "Output file: $OUTPUT_FILE"
 
 # Empty the output file

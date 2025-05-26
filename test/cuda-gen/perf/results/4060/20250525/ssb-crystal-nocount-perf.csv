@@ -1,0 +1,101 @@
+---
+ssb-q11.crystal.nocount
+main_1, 0.0143999997526
+main_3, 0.497664004564
+main_5, 0.0104639995843
+total_query, 1.043
+---
+ssb-q12.crystal.nocount
+main_1, 0.011264000088
+main_3, 0.49561598897
+main_5, 0.00927999988198
+total_query, 1.022
+---
+ssb-q13.crystal.nocount
+main_1, 0.0122880004346
+main_3, 0.493824005127
+main_5, 0.0102399997413
+total_query, 1.046
+---
+ssb-q21.crystal.nocount
+main_1, 0.019455999136
+main_3, 0.018432000652
+main_5, 0.0296960007399
+main_7, 0.53248000145
+main_9, 0.00937599968165
+total_query, 1.368
+---
+ssb-q22.crystal.nocount
+main_1, 0.0266239997
+main_3, 0.019455999136
+main_5, 0.0296960007399
+main_7, 0.514047980309
+main_9, 0.011264000088
+total_query, 1.297
+---
+ssb-q23.crystal.nocount
+main_1, 0.022528000176
+main_3, 0.020640000701
+main_5, 0.0307199992239
+main_7, 0.513023972511
+main_9, 0.0101439999416
+total_query, 1.302
+---
+ssb-q31.crystal.nocount
+main_1, 0.018432000652
+main_3, 0.019104000181
+main_5, 0.0245760008693
+main_7, 0.573440015316
+main_9, 0.0102399997413
+total_query, 1.384
+---
+ssb-q32.crystal.nocount
+main_1, 0.018112000078
+main_3, 0.019455999136
+main_5, 0.0264960005879
+main_7, 0.521215975285
+main_9, 0.0102399997413
+total_query, 1.244
+---
+ssb-q33.crystal.nocount
+main_1, 0.018432000652
+main_3, 0.0204799994826
+main_5, 0.023744000122
+main_7, 0.517311990261
+main_9, 0.0102399997413
+total_query, 1.246
+---
+ssb-q34.crystal.nocount
+main_1, 0.0317439995706
+main_3, 0.0215039998293
+main_5, 0.0163839999586
+main_7, 0.5171200037
+main_9, 0.0102399997413
+total_query, 1.307
+---
+ssb-q41.crystal.nocount
+main_1, 0.0174080003053
+main_3, 0.0208320003003
+main_5, 0.0370559990406
+main_7, 0.0319360010326
+main_9, 0.86630398035
+main_11, 0.00992000009865
+total_query, 1.87
+---
+ssb-q42.crystal.nocount
+main_1, 0.0192639995366
+main_3, 0.0216320008039
+main_5, 0.017440000549
+main_7, 0.0368640013039
+main_9, 0.847872018814
+main_11, 0.010432000272
+total_query, 1.749
+---
+ssb-q43.crystal.nocount
+main_1, 0.019455999136
+main_3, 0.0187199991196
+main_5, 0.0171840004623
+main_7, 0.0368640013039
+main_9, 0.815104007721
+main_11, 0.011040000245
+total_query, 1.736
