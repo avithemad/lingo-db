@@ -25,6 +25,7 @@
 #include <fmt/core.h>
 
 void emitControlFunctionSignature(std::ostream& outputFile);
+bool gGeneratingShuffle = true;
 
 namespace {
 using namespace lingodb::compiler::dialect;
@@ -90,12 +91,12 @@ static std::string MAT_IDX(const void* op) {
 static std::string mat_idx(const void* op) {
    return "mat_idx" + GetId(op);
 }
-static std::string slot_first(const void* op) {
-   return "slot_first" + GetId(op);
-}
-static std::string slot_second(const void* op) {
-   return "slot_second" + GetId(op);
-}
+// static std::string slot_first(const void* op) {
+//    return "slot_first" + GetId(op);
+// }
+// static std::string slot_second(const void* op) {
+//    return "slot_second" + GetId(op);
+// }
 
 template <typename ColumnAttrTy>
 std::string getColumnName(const ColumnAttrTy& colAttr) {
@@ -244,6 +245,8 @@ class TupleStreamCode {
 
    std::map<std::string, std::string> mainArgs;
    std::map<std::string, std::string> countArgs;
+   std::map<KernelType, size_t> m_threadActiveScopeCount;
+
    int id;
    void appendKernel(std::string stmt, KernelType ty) {
       if (ty == KernelType::Main)
@@ -288,8 +291,11 @@ class TupleStreamCode {
 
       appendKernel("size_t tid = blockIdx.x * blockDim.x + threadIdx.x;", KernelType::Main);
       appendKernel(fmt::format("if (tid >= {}) return;", tableSize), KernelType::Main);
+      appendKernel("bool threadActive = true;", KernelType::Main);
       appendKernel("size_t tid = blockIdx.x * blockDim.x + threadIdx.x;", KernelType::Count);
       appendKernel(fmt::format("if (tid >= {}) return;", tableSize), KernelType::Count);
+      appendKernel("bool threadActive = true;", KernelType::Count);
+      
       for (auto namedAttr : baseTableOp.getColumns().getValue()) {
          auto columnName = namedAttr.getName().str();
          ColumnDetail detail(mlir::cast<tuples::ColumnDefAttr>(namedAttr.getValue()));
@@ -533,11 +539,18 @@ class TupleStreamCode {
          if (auto returnOp = mlir::dyn_cast_or_null<tuples::ReturnOp>(predicateBlock.getTerminator())) {
             mlir::Value matched = returnOp.getResults()[0];
             std::string condition = SelectionOpDfs(matched.getDefiningOp());
-            if (condition != "!(false)") {
+            if (condition == "!(false)")
+               return; // This is a null check op. No-op for now
+            if (gGeneratingShuffle)
+            {
+               appendKernel(fmt::format("threadActive = threadActive && ({0});", condition), KernelType::Count);
+               appendKernel(fmt::format("threadActive = threadActive && ({0});", condition), KernelType::Main);
+               return;
+            } else {
                appendKernel(fmt::format("if (!({0})) return;", condition), KernelType::Count);
                appendKernel(fmt::format("if (!({0})) return;", condition), KernelType::Main);
+               return;
             }
-            return;
          } else {
             assert(false && "expected return op to be in the end of the predicate region");
          }
@@ -550,6 +563,9 @@ class TupleStreamCode {
       countArgs[COUNT(op)] = "uint64_t*";
       mlirToGlobalSymbol[COUNT(op)] = fmt::format("d_{}", COUNT(op));
       appendKernel("//Materialize count", KernelType::Count);
+      
+      if (!mlir::isa<relalg::MaterializeOp>(op))
+         startThreadActiveScope(KernelType::Count);
       appendKernel(fmt::format("atomicAdd((int*){0}, 1);", COUNT(op)), KernelType::Count);
 
       appendControl("//Materialize count");
@@ -627,6 +643,7 @@ class TupleStreamCode {
       auto joinOp = mlir::dyn_cast_or_null<relalg::InnerJoinOp>(op);
       if (!joinOp) assert(false && "Insert hash table accepts only inner join operation.");
       op->dump();
+      startThreadActiveScope(KernelType::Main);
       auto keys = joinOp->getAttrOfType<mlir::ArrayAttr>("leftHash");
       auto key = MakeKeys(op, keys, KernelType::Main);
       appendKernel("// Insert hash table kernel;", KernelType::Main);
@@ -669,6 +686,8 @@ class TupleStreamCode {
    void ProbeHashTable(mlir::Operation* op, const std::map<std::string, ColumnMetadata*>& leftColumnData) {
       auto joinOp = mlir::dyn_cast_or_null<relalg::InnerJoinOp>(op);
       if (!joinOp) assert(false && "Probe hash table accepts only inner join operation.");
+      startThreadActiveScope(KernelType::Count);
+      startThreadActiveScope(KernelType::Main);
       auto keys = joinOp->getAttrOfType<mlir::ArrayAttr>("rightHash");
       MakeKeys(op, keys, KernelType::Count);
       auto key = MakeKeys(op, keys, KernelType::Main);
@@ -676,8 +695,16 @@ class TupleStreamCode {
       appendKernel("//Probe Hash table", KernelType::Count);
       appendKernel(fmt::format("auto {0} = {1}.find({2});", SLOT(op), HT(op), key), KernelType::Main);
       appendKernel(fmt::format("auto {0} = {1}.find({2});", SLOT(op), HT(op), key), KernelType::Count);
-      appendKernel(fmt::format("if ({0} == {1}.end()) return;", SLOT(op), HT(op)), KernelType::Main);
-      appendKernel(fmt::format("if ({0} == {1}.end()) return;", SLOT(op), HT(op)), KernelType::Count);
+      if (gGeneratingShuffle)
+      {
+         appendKernel(fmt::format("if ({0} == {1}.end()) {{ threadActive = false; }}", SLOT(op), HT(op)), KernelType::Main);
+         appendKernel(fmt::format("if ({0} == {1}.end()) {{ threadActive = false; }}", SLOT(op), HT(op)), KernelType::Count);
+
+      } else
+      {
+         appendKernel(fmt::format("if ({0} == {1}.end()) return;", SLOT(op), HT(op)), KernelType::Main);
+         appendKernel(fmt::format("if ({0} == {1}.end()) return;", SLOT(op), HT(op)), KernelType::Count);
+      }
       // appendKernel(fmt::format("{0}.for_each({1}, [&] __device__ (auto const {2}) {{", HT(op), key, SLOT(op)), KernelType::Main);
       // appendKernel(fmt::format("auto const [{0}, {1}] = {2};", slot_first(op), slot_second(op), SLOT(op)), KernelType::Main);
       // appendKernel(fmt::format("{0}.for_each({1}, [&] __device__ (auto const {2}) {{\n", HT(op), key, SLOT(op)), KernelType::Count);
@@ -723,6 +750,7 @@ class TupleStreamCode {
    void CreateAggregationHashTable(mlir::Operation* op) {
       auto aggOp = mlir::dyn_cast_or_null<relalg::AggregationOp>(op);
       if (!aggOp) assert(false && "CreateAggregationHashTable expects aggregation op as a parameter!");
+      startThreadActiveScope(KernelType::Count);
       mlir::ArrayAttr groupByKeys = aggOp.getGroupByCols();
       auto key = MakeKeys(op, groupByKeys, KernelType::Count);
       appendKernel("//Create aggregation hash table", KernelType::Count);
@@ -762,6 +790,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
    void AggregateInHashTable(mlir::Operation* op) {
       auto aggOp = mlir::dyn_cast_or_null<relalg::AggregationOp>(op);
       if (!aggOp) assert(false && "CreateAggregationHashTable expects aggregation op as a parameter!");
+      startThreadActiveScope(KernelType::Main);
       mlir::ArrayAttr groupByKeys = aggOp.getGroupByCols();
       auto key = MakeKeys(op, groupByKeys, KernelType::Main);
       mainArgs[HT(op)] = "HASHTABLE_FIND";
@@ -990,6 +1019,25 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
          assert(false && "No return op found for the map operation region");
       }
    }
+
+   void startThreadActiveScope(KernelType kernelType) {
+      appendKernel("if (threadActive) {", kernelType);
+      if (m_threadActiveScopeCount.find(kernelType) == m_threadActiveScopeCount.end()) {
+         m_threadActiveScopeCount[kernelType] = 1;
+      } else {
+         m_threadActiveScopeCount[kernelType]++;
+      }
+   }
+
+   void writeThreadActiveScopeEndingBraces() {
+      for (const auto& [key, count] : m_threadActiveScopeCount) {
+         for (size_t i = 0; i < count; i++) {
+            appendKernel("}", key);
+         }
+      }
+      m_threadActiveScopeCount.clear();
+   }
+
    void printKernel(KernelType ty, std::ostream& stream) {
       std::map<std::string, std::string> _args;
       std::string _kernelName;
@@ -1170,6 +1218,7 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
 #include \"db_types.h\"\n\
 #include \"dbruntime.h\"\n";
       for (auto code : kernelSchedule) {
+         code->writeThreadActiveScopeEndingBraces();
          code->printKernel(KernelType::Count, outputFile);
          code->printKernel(KernelType::Main, outputFile);
       }
