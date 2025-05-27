@@ -544,7 +544,9 @@ class TupleStreamCode {
             if (gGeneratingShuffle)
             {
                appendKernel(fmt::format("threadActive = threadActive && ({0});", condition), KernelType::Count);
+               startThreadActiveScope(KernelType::Main);
                appendKernel(fmt::format("threadActive = threadActive && ({0});", condition), KernelType::Main);
+               startThreadActiveScope(KernelType::Count);
                return;
             } else {
                appendKernel(fmt::format("if (!({0})) return;", condition), KernelType::Count);
