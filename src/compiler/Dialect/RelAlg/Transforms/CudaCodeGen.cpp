@@ -25,7 +25,8 @@
 #include <fmt/core.h>
 
 void emitControlFunctionSignature(std::ostream& outputFile);
-bool gGeneratingShuffle = true;
+bool gGeneratingNestedCode = true;
+bool gGeneratingShuffles = false;
 
 namespace {
 using namespace lingodb::compiler::dialect;
@@ -281,6 +282,12 @@ class TupleStreamCode {
       return fmt::format("{0}_{1}<<<std::ceil((float){2}/128.), 128>>>({3});", _kernelName, GetId((void*) this), size, args);
    }
 
+   void appendShuffleInit(KernelType kernelType)
+   {
+      if (!gGeneratingShuffles) return;
+      appendKernel("SHUFFLE_BUFFER_INIT(128);", kernelType);
+   }
+
    public:
    TupleStreamCode(relalg::BaseTableOp& baseTableOp) {
       std::string tableName = baseTableOp.getTableIdentifier().data();
@@ -289,12 +296,16 @@ class TupleStreamCode {
       mainArgs[tableSize] = "size_t";
       countArgs[tableSize] = "size_t"; // make sure this type is reserved for kernel size only
 
+      appendShuffleInit(KernelType::Main);
       appendKernel("size_t tid = blockIdx.x * blockDim.x + threadIdx.x;", KernelType::Main);
       appendKernel(fmt::format("if (tid >= {}) return;", tableSize), KernelType::Main);
-      appendKernel("bool threadActive = true;", KernelType::Main);
+      if (gGeneratingNestedCode)
+         appendKernel("bool threadActive = true;", KernelType::Main);
+
       appendKernel("size_t tid = blockIdx.x * blockDim.x + threadIdx.x;", KernelType::Count);
       appendKernel(fmt::format("if (tid >= {}) return;", tableSize), KernelType::Count);
-      appendKernel("bool threadActive = true;", KernelType::Count);
+      if (gGeneratingNestedCode)
+         appendKernel("bool threadActive = true;", KernelType::Count);
       
       for (auto namedAttr : baseTableOp.getColumns().getValue()) {
          auto columnName = namedAttr.getName().str();
@@ -539,14 +550,14 @@ class TupleStreamCode {
          if (auto returnOp = mlir::dyn_cast_or_null<tuples::ReturnOp>(predicateBlock.getTerminator())) {
             mlir::Value matched = returnOp.getResults()[0];
             std::string condition = SelectionOpDfs(matched.getDefiningOp());
-            if (condition == "!(false)")
+            if (condition == "!(false)" || condition == "true")
                return; // This is a null check op. No-op for now
-            if (gGeneratingShuffle)
+            if (gGeneratingNestedCode)
             {
                appendKernel(fmt::format("threadActive = threadActive && ({0});", condition), KernelType::Count);
-               startThreadActiveScope(KernelType::Main);
-               appendKernel(fmt::format("threadActive = threadActive && ({0});", condition), KernelType::Main);
                startThreadActiveScope(KernelType::Count);
+               appendKernel(fmt::format("threadActive = threadActive && ({0});", condition), KernelType::Main);
+               startThreadActiveScope(KernelType::Main);
                return;
             } else {
                appendKernel(fmt::format("if (!({0})) return;", condition), KernelType::Count);
@@ -566,8 +577,6 @@ class TupleStreamCode {
       mlirToGlobalSymbol[COUNT(op)] = fmt::format("d_{}", COUNT(op));
       appendKernel("//Materialize count", KernelType::Count);
       
-      if (!mlir::isa<relalg::MaterializeOp>(op))
-         startThreadActiveScope(KernelType::Count);
       appendKernel(fmt::format("atomicAdd((int*){0}, 1);", COUNT(op)), KernelType::Count);
 
       appendControl("//Materialize count");
@@ -645,7 +654,6 @@ class TupleStreamCode {
       auto joinOp = mlir::dyn_cast_or_null<relalg::InnerJoinOp>(op);
       if (!joinOp) assert(false && "Insert hash table accepts only inner join operation.");
       op->dump();
-      startThreadActiveScope(KernelType::Main);
       auto keys = joinOp->getAttrOfType<mlir::ArrayAttr>("leftHash");
       auto key = MakeKeys(op, keys, KernelType::Main);
       appendKernel("// Insert hash table kernel;", KernelType::Main);
@@ -688,8 +696,8 @@ class TupleStreamCode {
    void ProbeHashTable(mlir::Operation* op, const std::map<std::string, ColumnMetadata*>& leftColumnData) {
       auto joinOp = mlir::dyn_cast_or_null<relalg::InnerJoinOp>(op);
       if (!joinOp) assert(false && "Probe hash table accepts only inner join operation.");
-      startThreadActiveScope(KernelType::Count);
-      startThreadActiveScope(KernelType::Main);
+      bool shouldShuffleAtThisOp = true; // TODO: Get this from the join operator
+      
       auto keys = joinOp->getAttrOfType<mlir::ArrayAttr>("rightHash");
       MakeKeys(op, keys, KernelType::Count);
       auto key = MakeKeys(op, keys, KernelType::Main);
@@ -697,11 +705,17 @@ class TupleStreamCode {
       appendKernel("//Probe Hash table", KernelType::Count);
       appendKernel(fmt::format("auto {0} = {1}.find({2});", SLOT(op), HT(op), key), KernelType::Main);
       appendKernel(fmt::format("auto {0} = {1}.find({2});", SLOT(op), HT(op), key), KernelType::Count);
-      if (gGeneratingShuffle)
+      if (gGeneratingNestedCode)
       {
          appendKernel(fmt::format("if ({0} == {1}.end()) {{ threadActive = false; }}", SLOT(op), HT(op)), KernelType::Main);
          appendKernel(fmt::format("if ({0} == {1}.end()) {{ threadActive = false; }}", SLOT(op), HT(op)), KernelType::Count);
-
+         if (gGeneratingShuffles && shouldShuffleAtThisOp) {
+           writeThreadActiveScopeEndingBraces(); // TODO: should we do it per kernelType?
+         } 
+         else {
+            startThreadActiveScope(KernelType::Main);
+            startThreadActiveScope(KernelType::Count);
+         }
       } else
       {
          appendKernel(fmt::format("if ({0} == {1}.end()) return;", SLOT(op), HT(op)), KernelType::Main);
@@ -752,7 +766,6 @@ class TupleStreamCode {
    void CreateAggregationHashTable(mlir::Operation* op) {
       auto aggOp = mlir::dyn_cast_or_null<relalg::AggregationOp>(op);
       if (!aggOp) assert(false && "CreateAggregationHashTable expects aggregation op as a parameter!");
-      startThreadActiveScope(KernelType::Count);
       mlir::ArrayAttr groupByKeys = aggOp.getGroupByCols();
       auto key = MakeKeys(op, groupByKeys, KernelType::Count);
       appendKernel("//Create aggregation hash table", KernelType::Count);
@@ -792,7 +805,6 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
    void AggregateInHashTable(mlir::Operation* op) {
       auto aggOp = mlir::dyn_cast_or_null<relalg::AggregationOp>(op);
       if (!aggOp) assert(false && "CreateAggregationHashTable expects aggregation op as a parameter!");
-      startThreadActiveScope(KernelType::Main);
       mlir::ArrayAttr groupByKeys = aggOp.getGroupByCols();
       auto key = MakeKeys(op, groupByKeys, KernelType::Main);
       mainArgs[HT(op)] = "HASHTABLE_FIND";
