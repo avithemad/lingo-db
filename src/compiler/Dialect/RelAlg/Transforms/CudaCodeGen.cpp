@@ -26,7 +26,7 @@
 
 void emitControlFunctionSignature(std::ostream& outputFile);
 bool gGeneratingNestedCode = true;
-bool gGeneratingShuffles = false;
+bool gGeneratingShuffles = true;
 
 namespace {
 using namespace lingodb::compiler::dialect;
@@ -710,7 +710,10 @@ class TupleStreamCode {
          appendKernel(fmt::format("if ({0} == {1}.end()) {{ threadActive = false; }}", SLOT(op), HT(op)), KernelType::Main);
          appendKernel(fmt::format("if ({0} == {1}.end()) {{ threadActive = false; }}", SLOT(op), HT(op)), KernelType::Count);
          if (gGeneratingShuffles && shouldShuffleAtThisOp) {
-           writeThreadActiveScopeEndingBraces(); // TODO: should we do it per kernelType?
+            startThreadActiveScope(KernelType::Main);
+            startThreadActiveScope(KernelType::Count);
+            appendKernel(fmt::format("save_to_shuffle_buffer(tid, {0}->second, &shuffle_buf_idx, &shuffle_buf[0]);", SLOT(op)), KernelType::Main);
+            writeThreadActiveScopeEndingBraces(); // TODO: should we do it per kernelType?
          } 
          else {
             startThreadActiveScope(KernelType::Main);

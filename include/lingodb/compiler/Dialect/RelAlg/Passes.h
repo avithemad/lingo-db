@@ -36,6 +36,9 @@ std::unique_ptr<mlir::Pass> createCudaCodeGenNoCountPass();
 std::unique_ptr<mlir::Pass> createCudaCrystalCodeGenPass();
 std::unique_ptr<mlir::Pass> createCudaCrystalCodeGenNoCountPass();
 void addCudaCodeGenPass(mlir::OpPassManager& pm);
+
+std::unique_ptr<mlir::Pass> createShuffleAnalysisPass();
+
 void conditionallyEnableCudaCodeGen(int& argc, char** argv);
 
 std::unique_ptr<mlir::Pass> createTrackTuplesPass();
