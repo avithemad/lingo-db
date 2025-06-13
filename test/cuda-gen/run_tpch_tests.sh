@@ -81,10 +81,10 @@ for QUERY in "${QUERIES[@]}"; do
 
   # If the comparison fails, add query to the failed list
   if [ $? -ne 0 ]; then
-    echo "Query $QUERY failed"
+    echo -e "\033[0;31mQuery $QUERY failed\033[0m"
     FAILED_QUERIES+=($QUERY)
   else
-    echo "Query $QUERY passed"
+    echo -e "\033[0;32mQuery $QUERY passed\033[0m"
     PASSED_QUERIES+=($QUERY)
   fi
 done
