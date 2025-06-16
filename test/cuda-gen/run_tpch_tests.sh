@@ -7,7 +7,6 @@ if [ -z "$SCALE_FACTOR" ]; then
   exit 1
 fi
 
-# The second argument is the directory where sql-plan-compiler is
 # Check if SQL_PLAN_COMPILER_DIR environment variable is set
 if [ -n "$SQL_PLAN_COMPILER_DIR" ]; then
   echo "Using SQL_PLAN_COMPILER_DIR from environment variable: $SQL_PLAN_COMPILER_DIR"
@@ -16,7 +15,6 @@ else
   exit 1
 fi
 
-# third argument is the CUCO source path
 # Check if CUCO_SRC_PATH environment variable is set
 if [ -n "$CUCO_SRC_PATH" ]; then
   echo "Using CUCO_SRC_PATH from environment variable: $CUCO_SRC_PATH"
@@ -45,11 +43,8 @@ if [ -z "$TPCH_DATA_DIR" ]; then
   TPCH_DATA_DIR="$REPO_DIR/resources/data/tpch-$SCALE_FACTOR"
 fi
 
-# List of queries to run - 1, 3, 5, 6, 7, 8, 9
-# QUERIES=(1 3 5 6 7 9 13)
-# 3, 9, 18
+
 QUERIES=(1 3 4 5 6 7 8 9 10 12 13 14 16 17 18 19 20)
-# QUERIES=(16)
 
 TPCH_CUDA_GEN_DIR="$SQL_PLAN_COMPILER_DIR/gpu-db/tpch-$SCALE_FACTOR"
 echo "TPCH_CUDA_GEN_DIR: $TPCH_CUDA_GEN_DIR"
