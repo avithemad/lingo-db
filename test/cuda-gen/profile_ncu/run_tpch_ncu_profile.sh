@@ -21,6 +21,19 @@ if [ -z "$SCALE_FACTOR" ]; then
   exit 1
 fi
 
+# Check if --crystal flag is present in command line arguments
+CRYSTAL_FLAG=false
+CRYSTAL_SUFFIX=""
+QUERY_SUFFIX=""
+for arg in "$@"; do
+  if [ "$arg" == "--crystal" ]; then
+    CRYSTAL_FLAG=true
+    CRYSTAL_SUFFIX="-crystal"
+    QUERY_SUFFIX=".crystal"
+    break
+  fi
+done
+
 # Set build name variable if not already set
 if [ -z "$BUILD_NAME" ]; then
   BUILD_NAME="lingodb-debug"
@@ -52,13 +65,13 @@ for QUERY in "${QUERIES[@]}"; do
   $CD_CMD
 
   REPORT_BASE_FOLDER="$SQL_PLAN_COMPILER_DIR/reports/ncu"
-  REPORT_FOLDER="$REPORT_BASE_FOLDER/$CUR_GPU/tpch-$SCALE_FACTOR" # TODO: Get this from the data-dir
+  REPORT_FOLDER="$REPORT_BASE_FOLDER/$CUR_GPU/tpch-$SCALE_FACTOR$CRYSTAL_SUFFIX"
 
   MAKE_REPORT_FOLDER="mkdir -p $REPORT_FOLDER"
   echo $MAKE_REPORT_FOLDER
   $MAKE_REPORT_FOLDER
 
-  RUN_PROFILE_CMD="ncu --set full -f --export $REPORT_FOLDER/q$QUERY-tpch-$SCALE_FACTOR.ncu-rep ./build/dbruntime --data_dir $TPCH_DATA_DIR/ --query_num $QUERY"
+  RUN_PROFILE_CMD="ncu --set full -f --export $REPORT_FOLDER/q$QUERY-tpch-$SCALE_FACTOR$CRYSTAL_SUFFIX.ncu-rep ./build/dbruntime --data_dir $TPCH_DATA_DIR/ --query_num $QUERY$QUERY_SUFFIX"
   echo $RUN_PROFILE_CMD
   $RUN_PROFILE_CMD # > op | tee 2>&1
 
