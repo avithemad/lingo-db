@@ -317,7 +317,8 @@ class TupleStreamCode {
       mainArgs[tableSize] = "size_t";
       countArgs[tableSize] = "size_t"; // make sure this type is reserved for kernel size only
 
-      appendKernel("int64_t start, stop, cycles_per_warp;", KernelType::Main);
+      if (generatePerOperationProfile())
+         appendKernel("int64_t start, stop, cycles_per_warp;", KernelType::Main);
       appendKernel("size_t tile_offset = blockIdx.x * TILE_SIZE;", KernelType::Main);
       appendKernel("size_t tid = tile_offset + threadIdx.x;", KernelType::Main);
       appendKernel("int selection_flags[ITEMS_PER_THREAD];", KernelType::Main);
@@ -357,7 +358,8 @@ class TupleStreamCode {
       mainArgs[tableSize] = "size_t";
       countArgs[tableSize] = "size_t"; // make sure this type is reserved for kernel size only
 
-      appendKernel("int64_t start, stop, cycles_per_warp;", KernelType::Main);
+      if (generatePerOperationProfile())
+         appendKernel("int64_t start, stop, cycles_per_warp;", KernelType::Main);
       appendKernel("size_t tile_offset = blockIdx.x * TILE_SIZE;", KernelType::Main);
       appendKernel("size_t tid = tile_offset + threadIdx.x;", KernelType::Main);
       appendKernel("int selection_flags[ITEMS_PER_THREAD];", KernelType::Main);
@@ -1249,7 +1251,10 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
 
             appendControl(fmt::format("cudaMemcpy({0}, d_{0}, sizeof({1}) * {2}, cudaMemcpyDeviceToHost);",
                                       newBuffer, type, COUNT(op)));
-            printStmts += fmt::format("std::cout << \"{0}\" << {1}[i];\n", first ? "" : delimiter, newBuffer);
+            if (type == "DBDateType")
+               printStmts += fmt::format("std::cout << \"{0}\" << Date32ScalarToString({1}[i]);\n", first ? "" : delimiter, newBuffer);
+            else
+               printStmts += fmt::format("std::cout << \"{0}\" << {1}[i];\n", first ? "" : delimiter, newBuffer);
          }
          first = false;
       }
