@@ -54,6 +54,7 @@ static bool gCompilingSSB = false;
 static bool gGenPerOperationProfile = false;
 
 bool gGenKernelTimingCode = false;
+static bool gPrintAllocationSizes = true;
 
 bool generateKernelTimingCode() { return gGenKernelTimingCode; }
 bool generatePerOperationProfile() { return gGenPerOperationProfile; }
@@ -842,6 +843,7 @@ class TupleStreamCode {
       appendControl(fmt::format("cudaMemset(d_{0}, 0, sizeof(uint64_t));", BUF_IDX(op)));
       appendControl(fmt::format("uint64_t* d_{0};", BUF(op)));
       appendControl(fmt::format("cudaMalloc(&d_{0}, sizeof(uint64_t) * {1} * {2});", BUF(op), COUNT(op), baseRelations.size()));
+      if (gPrintAllocationSizes) appendControl(fmt::format("tableSizesFile << \"[Buffer Allocation Size]: \" << sizeof(uint64_t) * {0} * {1} << \" bytes\\n\";", COUNT(op), baseRelations.size()));
       deviceFrees.insert(fmt::format("d_{0}", BUF(op)));
       // #ifdef MULTIMAP
       if (!pk)
@@ -851,6 +853,7 @@ class TupleStreamCode {
       else
          appendControl(fmt::format("auto d_{0} = cuco::static_map{{ (int){1}*2, cuco::empty_key{{(int64_t)-1}},cuco::empty_value{{(int64_t)-1}},thrust::equal_to<int64_t>{{}},cuco::linear_probing<1, cuco::default_hash_function<int64_t>>() }};",
                                    HT(op), COUNT(op)));
+      if (gPrintAllocationSizes) appendControl(fmt::format("tableSizesFile << \"[Hash Table Allocation Size]: \" << sizeof(uint64_t) * {0} * {1} << \" bytes\\n\";", COUNT(op), baseRelations.size()));
       // #endif
       genLaunchKernel(KernelType::Main);
       // appendControl(fmt::format("cudaFree(d_{0});", BUF_IDX(op)));
@@ -967,6 +970,7 @@ cuco::empty_value{{(int64_t)-1}},\
 thrust::equal_to<int64_t>{{}},\
 cuco::linear_probing<1, cuco::default_hash_function<int64_t>>() }};",
                                 HT(op), ht_size));
+      if (gPrintAllocationSizes) appendControl(fmt::format("tableSizesFile << \"[Aggregation Hash Table Allocation Size]: \" << sizeof(uint64_t) * {0} * 2 << \" bytes\\n\";", ht_size));
       genLaunchKernel(KernelType::Count);
       appendControl(fmt::format("size_t {0} = d_{1}.size();", COUNT(op), HT(op)));
       // TODO(avinash): deallocate the old hash table and create a new one to save space in gpu when estimations are way off
@@ -1627,6 +1631,7 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
       outputFile << "#include \"cudautils.cuh\"\n\
 #include \"db_types.h\"\n\
 #include \"dbruntime.h\"\n\
+#include <fstream>\n\
 #include <chrono>\n";
 
          if (generateKernelTimingCode()) {
@@ -1643,6 +1648,7 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
 
       outputFile << "size_t used_mem = usedGpuMem();\n";
       outputFile << "auto startTime = std::chrono::high_resolution_clock::now();\n";
+      if (gPrintAllocationSizes) outputFile << "std::ofstream tableSizesFile(\"tablesizes.txt\", std::ios::app);" << std::endl;;
       for (auto code : kernelSchedule) {
          code->printControl(outputFile);
       }

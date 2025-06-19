@@ -83,6 +83,8 @@ for QUERY in "${QUERIES[@]}"; do
     continue
   fi
 
+  echo "Allocation sizes for query $QUERY" >> tablesizes.txt
+
   RUN_QUERY_CMD="build/dbruntime --data_dir $TPCH_DATA_DIR/ --query_num $QUERY"
   echo $RUN_QUERY_CMD
   $RUN_QUERY_CMD > "cuda-tpch-$QUERY.csv" 2> "cuda-tpch-$QUERY.log"
