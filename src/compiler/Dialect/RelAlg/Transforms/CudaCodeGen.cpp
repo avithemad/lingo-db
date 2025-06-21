@@ -52,6 +52,18 @@ static bool gCudaCrystalCodeGenEnabled = false;
 static bool gCudaCrystalCodeGenNoCountEnabled = false;
 static bool gCompilingSSB = false;
 static bool gGenPerOperationProfile = false;
+static bool gDifferentSizedHashTables = true;
+
+static std::string getHTKeyType(mlir::ArrayAttr keys) {
+   if (keys.size() > 1)
+      return "int64_t";
+   else
+      return "int32_t"; 
+}
+
+static std::string getHTValueType() {
+   return "int32_t";
+}
 
 bool gGenKernelTimingCode = false;
 
@@ -677,7 +689,8 @@ class TupleStreamCode {
    }
    std::string MakeKeys(mlir::Operation* op, const mlir::ArrayAttr& keys, KernelType kernelType) {
       //TODO(avinash, p3): figure a way out for double keys
-      appendKernel(fmt::format("uint64_t {0} = 0;", KEY(op)), kernelType);
+      auto keyType = getHTKeyType(keys);
+      appendKernel(fmt::format("{1} {0} = 0;", KEY(op), keyType), kernelType);
       std::map<std::string, int> allowedKeysToSize;
       allowedKeysToSize["DBCharType"] = 1;
       allowedKeysToSize["DBStringType"] = 2;
@@ -751,8 +764,8 @@ class TupleStreamCode {
       mainArgs[HT(op)] = "HASHTABLE_INSERT_SJ";
       mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::insert)", HT(op));
       appendControl("// Insert hash table control;");
-      appendControl(fmt::format("auto d_{0} = cuco::static_map{{ (int){1}*2, cuco::empty_key{{(int64_t)-1}},cuco::empty_value{{(int64_t)-1}},thrust::equal_to<int64_t>{{}},cuco::linear_probing<1, cuco::default_hash_function<int64_t>>() }};",
-                                HT(op), COUNT(op)));
+      appendControl(fmt::format("auto d_{0} = cuco::static_map{{ (int){1}*2, cuco::empty_key{{({2})-1}},cuco::empty_value{{({3})-1}},thrust::equal_to<{2}>{{}},cuco::linear_probing<1, cuco::default_hash_function<{2}>>() }};",
+                                HT(op), COUNT(op), getHTKeyType(keys), getHTValueType()));
       genLaunchKernel(KernelType::Main);
    }
    void BuildHashTableAntiSemiJoin(mlir::Operation* op) {
@@ -766,8 +779,8 @@ class TupleStreamCode {
       mainArgs[HT(op)] = "HASHTABLE_INSERT_SJ";
       mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::insert)", HT(op));
       appendControl("// Insert hash table control;");
-      appendControl(fmt::format("auto d_{0} = cuco::static_map{{ (int){1}*2, cuco::empty_key{{(int64_t)-1}},cuco::empty_value{{(int64_t)-1}},thrust::equal_to<int64_t>{{}},cuco::linear_probing<1, cuco::default_hash_function<int64_t>>() }};",
-                                HT(op), COUNT(op)));
+      appendControl(fmt::format("auto d_{0} = cuco::static_map{{ (int){1}*2, cuco::empty_key{{({2})-1}},cuco::empty_value{{({3})-1}},thrust::equal_to<{2}>{{}},cuco::linear_probing<1, cuco::default_hash_function<{2}>>() }};",
+                                HT(op), COUNT(op), getHTKeyType(keys), getHTValueType()));
       genLaunchKernel(KernelType::Main);
    }
    void ProbeHashTableSemiJoin(mlir::Operation* op) {
@@ -826,22 +839,22 @@ class TupleStreamCode {
                       KernelType::Main);
       }
 
-      mainArgs[BUF_IDX(op)] = "uint64_t*";
+      mainArgs[BUF_IDX(op)] = "uint32_t*";
       if (pk)
          mainArgs[HT(op)] = "HASHTABLE_INSERT_PK";
       else
          mainArgs[HT(op)] = "HASHTABLE_INSERT";
-      mainArgs[BUF(op)] = "uint64_t*";
+      mainArgs[BUF(op)] = "uint32_t*";
       mlirToGlobalSymbol[BUF_IDX(op)] = fmt::format("d_{}", BUF_IDX(op));
       mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::insert)", HT(op));
       mlirToGlobalSymbol[BUF(op)] = fmt::format("d_{}", BUF(op));
       appendControl("// Insert hash table control;");
-      appendControl(fmt::format("uint64_t* d_{0};", BUF_IDX(op)));
-      appendControl(fmt::format("cudaMalloc(&d_{0}, sizeof(uint64_t));", BUF_IDX(op)));
+      appendControl(fmt::format("uint32_t* d_{0};", BUF_IDX(op)));
+      appendControl(fmt::format("cudaMalloc(&d_{0}, sizeof(uint32_t));", BUF_IDX(op)));
       deviceFrees.insert(fmt::format("d_{0}", BUF_IDX(op)));
-      appendControl(fmt::format("cudaMemset(d_{0}, 0, sizeof(uint64_t));", BUF_IDX(op)));
-      appendControl(fmt::format("uint64_t* d_{0};", BUF(op)));
-      appendControl(fmt::format("cudaMalloc(&d_{0}, sizeof(uint64_t) * {1} * {2});", BUF(op), COUNT(op), baseRelations.size()));
+      appendControl(fmt::format("cudaMemset(d_{0}, 0, sizeof(uint32_t));", BUF_IDX(op)));
+      appendControl(fmt::format("uint32_t* d_{0};", BUF(op)));
+      appendControl(fmt::format("cudaMalloc(&d_{0}, sizeof(uint32_t) * {1} * {2});", BUF(op), COUNT(op), baseRelations.size()));
       deviceFrees.insert(fmt::format("d_{0}", BUF(op)));
       // #ifdef MULTIMAP
       if (!pk)
@@ -849,8 +862,8 @@ class TupleStreamCode {
                                    HT(op), COUNT(op)));
       // #else
       else
-         appendControl(fmt::format("auto d_{0} = cuco::static_map{{ (int){1}*2, cuco::empty_key{{(int64_t)-1}},cuco::empty_value{{(int64_t)-1}},thrust::equal_to<int64_t>{{}},cuco::linear_probing<1, cuco::default_hash_function<int64_t>>() }};",
-                                   HT(op), COUNT(op)));
+         appendControl(fmt::format("auto d_{0} = cuco::static_map{{ (int){1}*2, cuco::empty_key{{({2})-1}},cuco::empty_value{{({3})-1}},thrust::equal_to<{2}>{{}},cuco::linear_probing<1, cuco::default_hash_function<{2}>>() }};",
+                                   HT(op), COUNT(op), getHTKeyType(keys), getHTValueType()));
       // #endif
       genLaunchKernel(KernelType::Main);
       // appendControl(fmt::format("cudaFree(d_{0});", BUF_IDX(op)));
@@ -920,14 +933,14 @@ class TupleStreamCode {
       }
       if (pk) {
          mainArgs[HT(op)] = "HASHTABLE_PROBE_PK";
-         mainArgs[BUF(op)] = "uint64_t*";
+         mainArgs[BUF(op)] = "uint32_t*";
          countArgs[HT(op)] = "HASHTABLE_PROBE_PK";
-         countArgs[BUF(op)] = "uint64_t*";
+         countArgs[BUF(op)] = "uint32_t*";
       } else {
          mainArgs[HT(op)] = "HASHTABLE_PROBE";
-         mainArgs[BUF(op)] = "uint64_t*";
+         mainArgs[BUF(op)] = "uint32_t*";
          countArgs[HT(op)] = "HASHTABLE_PROBE";
-         countArgs[BUF(op)] = "uint64_t*";
+         countArgs[BUF(op)] = "uint32_t*";
       }
       // #ifdef MULTIMAP
       if (!pk)
@@ -962,18 +975,18 @@ class TupleStreamCode {
       }
       assert(ht_size != "0" && "hash table for aggregation is sizing to be 0!!");
       appendControl("//Create aggregation hash table");
-      appendControl(fmt::format("auto d_{0} = cuco::static_map{{ (int){1}*2, cuco::empty_key{{(int64_t)-1}},\
-cuco::empty_value{{(int64_t)-1}},\
-thrust::equal_to<int64_t>{{}},\
-cuco::linear_probing<1, cuco::default_hash_function<int64_t>>() }};",
-                                HT(op), ht_size));
+      appendControl(fmt::format("auto d_{0} = cuco::static_map{{ (int){1}*2, cuco::empty_key{{({2})-1}},\
+cuco::empty_value{{({3})-1}},\
+thrust::equal_to<{2}>{{}},\
+cuco::linear_probing<1, cuco::default_hash_function<{2}>>() }};",
+                                HT(op), ht_size, getHTKeyType(groupByKeys), getHTValueType()));
       genLaunchKernel(KernelType::Count);
       appendControl(fmt::format("size_t {0} = d_{1}.size();", COUNT(op), HT(op)));
       // TODO(avinash): deallocate the old hash table and create a new one to save space in gpu when estimations are way off
-      appendControl(fmt::format("thrust::device_vector<int64_t> keys_{0}({2}), vals_{0}({2});\n\
+      appendControl(fmt::format("thrust::device_vector<int32_t> keys_{0}({2}), vals_{0}({2});\n\
 d_{1}.retrieve_all(keys_{0}.begin(), vals_{0}.begin());\n\
 d_{1}.clear();\n\
-int64_t* raw_keys{0} = thrust::raw_pointer_cast(keys_{0}.data());\n\
+int32_t* raw_keys{0} = thrust::raw_pointer_cast(keys_{0}.data());\n\
 insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::insert), {2});",
                                 GetId(op), HT(op), COUNT(op)));
    }
@@ -1371,43 +1384,60 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       bool hasHash = false;
       for (auto p : _args) hasHash |= (p.second == "HASHTABLE_FIND" || p.second == "HASHTABLE_INSERT" || p.second == "HASHTABLE_PROBE" || p.second == "HASHTABLE_INSERT_SJ" || p.second == "HASHTABLE_PROBE_SJ" || p.second == "HASHTABLE_INSERT_PK" || p.second == "HASHTABLE_PROBE_PK");
       if (hasHash) {
-         stream << "template<";
-         bool find = false, insert = false, probe = false;
-         bool insertSJ = false, probeSJ = false;
-         bool insertPK = false, probePK = false;
-         std::string sep = "";
-         for (auto p : _args) {
-            if (p.second == "HASHTABLE_FIND" && !find) {
-               find = true;
-               stream << sep + "typename " + p.second;
-               sep = ", ";
-            } else if (p.second == "HASHTABLE_INSERT" && !insert) {
-               insert = true;
-               stream << sep + "typename " + p.second;
-               sep = ", ";
-            } else if (p.second == "HASHTABLE_PROBE" && !probe) {
-               probe = true;
-               stream << sep + "typename " + p.second;
-               sep = ", ";
-            } else if (p.second == "HASHTABLE_INSERT_SJ" && !insertSJ) {
-               insertSJ = true;
-               stream << sep + "typename " + p.second;
-               sep = ", ";
-            } else if (p.second == "HASHTABLE_PROBE_SJ" && !probeSJ) {
-               probeSJ = true;
-               stream << sep + "typename " + p.second;
-               sep = ", ";
-            } else if (p.second == "HASHTABLE_INSERT_PK" && !insertPK) {
-               insertPK = true;
-               stream << sep + "typename " + p.second;
-               sep = ", ";
-            } else if (p.second == "HASHTABLE_PROBE_PK" && !probePK) {
-               probePK = true;
-               stream << sep + "typename " + p.second;
-               sep = ", ";
+         if (gDifferentSizedHashTables) {
+            // The hash tables can be different sized (e.g., one hash table can have a 32-bit key and another can have a 64-bit key)
+            // In this case, we just get a different template typename for each hash table
+            stream << "template<";
+            auto id = 0;
+            std::string sep = "";
+            for (auto p : _args) {
+               if (p.second == "HASHTABLE_FIND" || p.second == "HASHTABLE_INSERT" || p.second == "HASHTABLE_PROBE" || p.second == "HASHTABLE_INSERT_SJ" || p.second == "HASHTABLE_PROBE_SJ" || p.second == "HASHTABLE_INSERT_PK" || p.second == "HASHTABLE_PROBE_PK") {
+                  p.second = fmt::format("{}_{}", p.second, id++);
+                  stream << fmt::format("{}typename {}", sep, p.second);
+                  _args[p.first] = p.second;
+                  sep = ", ";
+               }
             }
+            stream << ">\n";
+         } else {
+            stream << "template<";
+            bool find = false, insert = false, probe = false;
+            bool insertSJ = false, probeSJ = false;
+            bool insertPK = false, probePK = false;
+            std::string sep = "";
+            for (auto p : _args) {
+               if (p.second == "HASHTABLE_FIND" && !find) {
+                  find = true;
+                  stream << sep + "typename " + p.second;
+                  sep = ", ";
+               } else if (p.second == "HASHTABLE_INSERT" && !insert) {
+                  insert = true;
+                  stream << sep + "typename " + p.second;
+                  sep = ", ";
+               } else if (p.second == "HASHTABLE_PROBE" && !probe) {
+                  probe = true;
+                  stream << sep + "typename " + p.second;
+                  sep = ", ";
+               } else if (p.second == "HASHTABLE_INSERT_SJ" && !insertSJ) {
+                  insertSJ = true;
+                  stream << sep + "typename " + p.second;
+                  sep = ", ";
+               } else if (p.second == "HASHTABLE_PROBE_SJ" && !probeSJ) {
+                  probeSJ = true;
+                  stream << sep + "typename " + p.second;
+                  sep = ", ";
+               } else if (p.second == "HASHTABLE_INSERT_PK" && !insertPK) {
+                  insertPK = true;
+                  stream << sep + "typename " + p.second;
+                  sep = ", ";
+               } else if (p.second == "HASHTABLE_PROBE_PK" && !probePK) {
+                  probePK = true;
+                  stream << sep + "typename " + p.second;
+                  sep = ", ";
+               }
+            }
+            stream << ">\n";
          }
-         stream << ">\n";
       }
       stream << fmt::format("__global__ void {0}_{1}(", _kernelName, GetId((void*) this));
       std::string sep = "";
