@@ -55,14 +55,17 @@ static bool gGenPerOperationProfile = false;
 static bool gDifferentSizedHashTables = true;
 
 static std::string getHTKeyType(mlir::ArrayAttr keys) {
-   if (keys.size() > 1)
+   if (!gDifferentSizedHashTables || keys.size() > 1)
       return "int64_t";
    else
       return "int32_t"; 
 }
 
 static std::string getHTValueType() {
-   return "int32_t";
+   if (!gDifferentSizedHashTables)
+      return "int64_t";
+   else
+      return "int32_t";
 }
 
 bool gGenKernelTimingCode = false;
@@ -983,12 +986,12 @@ cuco::linear_probing<1, cuco::default_hash_function<{2}>>() }};",
       genLaunchKernel(KernelType::Count);
       appendControl(fmt::format("size_t {0} = d_{1}.size();", COUNT(op), HT(op)));
       // TODO(avinash): deallocate the old hash table and create a new one to save space in gpu when estimations are way off
-      appendControl(fmt::format("thrust::device_vector<int32_t> keys_{0}({2}), vals_{0}({2});\n\
+      appendControl(fmt::format("thrust::device_vector<{3}> keys_{0}({2}), vals_{0}({2});\n\
 d_{1}.retrieve_all(keys_{0}.begin(), vals_{0}.begin());\n\
 d_{1}.clear();\n\
-int32_t* raw_keys{0} = thrust::raw_pointer_cast(keys_{0}.data());\n\
+{3}* raw_keys{0} = thrust::raw_pointer_cast(keys_{0}.data());\n\
 insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::insert), {2});",
-                                GetId(op), HT(op), COUNT(op)));
+                                GetId(op), HT(op), COUNT(op), getHTKeyType(groupByKeys)));
    }
    void AggregateInHashTable(mlir::Operation* op) {
       auto aggOp = mlir::dyn_cast_or_null<relalg::AggregationOp>(op);
