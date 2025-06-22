@@ -2,23 +2,20 @@
 
 # The first argument is the directory where sql-plan-compiler is
 CUR_GPU="A6000" # TODO: Change this when you change GPUs
-# SQL_PLAN_COMPILER_DIR="$1"
-# if [ -z "$SQL_PLAN_COMPILER_DIR" ]; then
-#   echo "Usage: $0 <sql-plan-compiler-dir> <cuco-src-path>"
-#   exit 1
-# fi
-
-# # Second argument is the CUCO source path
-# CUCO_SRC_PATH="$2"
-# if [ -z "$CUCO_SRC_PATH" ]; then
-#   echo "Usage: $0 <sql-plan-compiler-dir> <cuco-src-path>"
-#   exit 1
-# fi
-
 SCALE_FACTOR=$1
 if [ -z "$SCALE_FACTOR" ]; then
-  echo "Usage: $0 <scale_factor>"
+  echo "Usage: $0 <scale_factor> [<sub_folder>] [<qualifier>] [--crystal] "
   exit 1
+fi
+
+SUB_FOLDER="$2"
+if [ -z "$SUB_FOLDER" ]; then
+  SUB_FOLDER="."
+fi
+
+QUALIFIER="$3"
+if [ -z "$QUALIFIER" ]; then
+  QUALIFIER=""
 fi
 
 # Check if --crystal flag is present in command line arguments
@@ -65,13 +62,13 @@ for QUERY in "${QUERIES[@]}"; do
   $CD_CMD
 
   REPORT_BASE_FOLDER="$SQL_PLAN_COMPILER_DIR/reports/ncu"
-  REPORT_FOLDER="$REPORT_BASE_FOLDER/$CUR_GPU/tpch-$SCALE_FACTOR$CRYSTAL_SUFFIX"
+  REPORT_FOLDER="$REPORT_BASE_FOLDER/$CUR_GPU/tpch-$SCALE_FACTOR$CRYSTAL_SUFFIX/$SUB_FOLDER"
 
   MAKE_REPORT_FOLDER="mkdir -p $REPORT_FOLDER"
   echo $MAKE_REPORT_FOLDER
   $MAKE_REPORT_FOLDER
 
-  RUN_PROFILE_CMD="ncu --set full -f --export $REPORT_FOLDER/q$QUERY-tpch-$SCALE_FACTOR$CRYSTAL_SUFFIX.ncu-rep ./build/dbruntime --data_dir $TPCH_DATA_DIR/ --query_num $QUERY$QUERY_SUFFIX"
+  RUN_PROFILE_CMD="ncu --set full -f --export $REPORT_FOLDER/q$QUERY-tpch-$SCALE_FACTOR$CRYSTAL_SUFFIX$QUALIFIER.ncu-rep ./build/dbruntime --data_dir $TPCH_DATA_DIR/ --query_num $QUERY$QUERY_SUFFIX"
   echo $RUN_PROFILE_CMD
   $RUN_PROFILE_CMD # > op | tee 2>&1
 
