@@ -52,20 +52,39 @@ static bool gCudaCrystalCodeGenEnabled = false;
 static bool gCudaCrystalCodeGenNoCountEnabled = false;
 static bool gCompilingSSB = false;
 static bool gGenPerOperationProfile = false;
-static bool gDifferentSizedHashTables = true;
+bool gDifferentSizedHashTables = true;
 
-static std::string getHTKeyType(mlir::ArrayAttr keys) {
+std::string getHTKeyType(mlir::ArrayAttr keys) {
    if (!gDifferentSizedHashTables || keys.size() > 1)
       return "int64_t";
    else
       return "int32_t"; 
 }
 
-static std::string getHTValueType() {
+std::string getHTValueType() {
    if (!gDifferentSizedHashTables)
       return "int64_t";
    else
       return "int32_t";
+}
+
+std::string getBufEltType() {
+   if (!gDifferentSizedHashTables)
+      return "uint64_t";
+   else
+      return "uint32_t";
+}
+
+std::string getBufIdxType() {
+   return getBufEltType();
+}
+
+std::string getBufIdxPtrType() {
+   return getBufIdxType() + "*";
+}
+
+std::string getBufPtrType() {
+   return getBufEltType() + "*";
 }
 
 bool gGenKernelTimingCode = false;
@@ -842,22 +861,22 @@ class TupleStreamCode {
                       KernelType::Main);
       }
 
-      mainArgs[BUF_IDX(op)] = "uint32_t*";
+      mainArgs[BUF_IDX(op)] = getBufIdxPtrType();
       if (pk)
          mainArgs[HT(op)] = "HASHTABLE_INSERT_PK";
       else
          mainArgs[HT(op)] = "HASHTABLE_INSERT";
-      mainArgs[BUF(op)] = "uint32_t*";
+      mainArgs[BUF(op)] = getBufPtrType();
       mlirToGlobalSymbol[BUF_IDX(op)] = fmt::format("d_{}", BUF_IDX(op));
       mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::insert)", HT(op));
       mlirToGlobalSymbol[BUF(op)] = fmt::format("d_{}", BUF(op));
       appendControl("// Insert hash table control;");
-      appendControl(fmt::format("uint32_t* d_{0};", BUF_IDX(op)));
-      appendControl(fmt::format("cudaMalloc(&d_{0}, sizeof(uint32_t));", BUF_IDX(op)));
+      appendControl(fmt::format("{1} d_{0};", BUF_IDX(op), getBufIdxPtrType()));
+      appendControl(fmt::format("cudaMalloc(&d_{0}, sizeof({1}));", BUF_IDX(op), getBufIdxType()));
       deviceFrees.insert(fmt::format("d_{0}", BUF_IDX(op)));
-      appendControl(fmt::format("cudaMemset(d_{0}, 0, sizeof(uint32_t));", BUF_IDX(op)));
-      appendControl(fmt::format("uint32_t* d_{0};", BUF(op)));
-      appendControl(fmt::format("cudaMalloc(&d_{0}, sizeof(uint32_t) * {1} * {2});", BUF(op), COUNT(op), baseRelations.size()));
+      appendControl(fmt::format("cudaMemset(d_{0}, 0, sizeof({1}));", BUF_IDX(op), getBufIdxType()));
+      appendControl(fmt::format("{1} d_{0};", BUF(op), getBufPtrType()));
+      appendControl(fmt::format("cudaMalloc(&d_{0}, sizeof({3}) * {1} * {2});", BUF(op), COUNT(op), baseRelations.size(), getBufEltType()));
       deviceFrees.insert(fmt::format("d_{0}", BUF(op)));
       // #ifdef MULTIMAP
       if (!pk)
@@ -936,14 +955,14 @@ class TupleStreamCode {
       }
       if (pk) {
          mainArgs[HT(op)] = "HASHTABLE_PROBE_PK";
-         mainArgs[BUF(op)] = "uint32_t*";
+         mainArgs[BUF(op)] = getBufPtrType();
          countArgs[HT(op)] = "HASHTABLE_PROBE_PK";
-         countArgs[BUF(op)] = "uint32_t*";
+         countArgs[BUF(op)] = getBufPtrType();
       } else {
          mainArgs[HT(op)] = "HASHTABLE_PROBE";
-         mainArgs[BUF(op)] = "uint32_t*";
+         mainArgs[BUF(op)] = getBufPtrType();
          countArgs[HT(op)] = "HASHTABLE_PROBE";
-         countArgs[BUF(op)] = "uint32_t*";
+         countArgs[BUF(op)] = getBufPtrType();
       }
       // #ifdef MULTIMAP
       if (!pk)
