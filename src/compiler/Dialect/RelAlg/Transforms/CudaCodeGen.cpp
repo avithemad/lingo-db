@@ -53,6 +53,9 @@ static bool gCudaCrystalCodeGenNoCountEnabled = false;
 static bool gCompilingSSB = false;
 static bool gGenPerOperationProfile = false;
 bool gDifferentSizedHashTables = true;
+bool gUseBloomFiltersForJoin = true;
+
+// --- [start] different sized hash tables helpers ---
 
 std::string getHTKeyType(mlir::ArrayAttr keys) {
    if (!gDifferentSizedHashTables || keys.size() > 1)
@@ -86,6 +89,8 @@ std::string getBufIdxPtrType() {
 std::string getBufPtrType() {
    return getBufEltType() + "*";
 }
+
+// --- [end] different sized hash tables helpers ---
 
 bool gGenKernelTimingCode = false;
 
@@ -161,6 +166,9 @@ static std::string slot_first(const void* op) {
 }
 static std::string slot_second(const void* op) {
    return "slot_second" + GetId(op);
+}
+static std::string BF(const void* op) {
+   return "BF_" + GetId(op);
 }
 
 template <typename ColumnAttrTy>
@@ -888,6 +896,16 @@ class TupleStreamCode {
                                    HT(op), COUNT(op), getHTKeyType(keys), getHTValueType()));
       // #endif
       genLaunchKernel(KernelType::Main);
+      
+      if (gUseBloomFiltersForJoin) {
+         appendControl(fmt::format("thrust::device_vector<{0}> keys_{1}(d_{2}.size()), vals_{1}(d_{2}.size());", getHTKeyType(keys), GetId(op), HT(op)));
+         appendControl(fmt::format("d_{0}.retrieve_all(keys_{1}.begin(), vals_{1}.begin());", HT(op), GetId(op))); // retrieve all the keys from the hash table into the keys vector
+
+         // create a bloom filter
+         appendControl(fmt::format("auto d_{0} = cuco::bloom_filter<{1}>(d_{2}.size()/32);", BF(op), getHTKeyType(keys), HT(op))); // 32 is an arbitrary constant. We need to fix this.
+         appendControl(fmt::format("d_{0}.add(keys_{1}.begin(), keys_{1}.end());", BF(op), GetId(op))); // insert all the keys into the bloom filter         
+      }
+
       // appendControl(fmt::format("cudaFree(d_{0});", BUF_IDX(op)));
       return columnData;
    }
@@ -911,6 +929,13 @@ class TupleStreamCode {
       }
       // #else
       else {
+
+         // check the bloom filter first, before probing the hash table
+         if (gUseBloomFiltersForJoin) {
+            appendKernel(fmt::format("if (!{0}.contains({1})) return;", BF(op), key), KernelType::Count);
+            appendKernel(fmt::format("if (!{0}.contains({1})) return;", BF(op), key), KernelType::Main);
+         }
+
          appendKernel(fmt::format("auto {0} = {1}.find({2});", SLOT(op), HT(op), key), KernelType::Main);
          appendKernel(fmt::format("auto {0} = {1}.find({2});", SLOT(op), HT(op), key), KernelType::Count);
          appendKernel(fmt::format("if ({0} == {1}.end()) return;", SLOT(op), HT(op)), KernelType::Main);
@@ -958,6 +983,11 @@ class TupleStreamCode {
          mainArgs[BUF(op)] = getBufPtrType();
          countArgs[HT(op)] = "HASHTABLE_PROBE_PK";
          countArgs[BUF(op)] = getBufPtrType();
+         if (gUseBloomFiltersForJoin) {
+            mainArgs[BF(op)] = "BLOOM_FILTER_CONTAINS";
+            countArgs[BF(op)] = "BLOOM_FILTER_CONTAINS";
+            mlirToGlobalSymbol[BF(op)] = fmt::format("d_{}.ref()", BF(op));
+         }
       } else {
          mainArgs[HT(op)] = "HASHTABLE_PROBE";
          mainArgs[BUF(op)] = getBufPtrType();
@@ -1404,7 +1434,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
          _kernelName = "count";
       }
       bool hasHash = false;
-      for (auto p : _args) hasHash |= (p.second == "HASHTABLE_FIND" || p.second == "HASHTABLE_INSERT" || p.second == "HASHTABLE_PROBE" || p.second == "HASHTABLE_INSERT_SJ" || p.second == "HASHTABLE_PROBE_SJ" || p.second == "HASHTABLE_INSERT_PK" || p.second == "HASHTABLE_PROBE_PK");
+      for (auto p : _args) hasHash |= (p.second == "HASHTABLE_FIND" || p.second == "HASHTABLE_INSERT" || p.second == "HASHTABLE_PROBE" || p.second == "HASHTABLE_INSERT_SJ" || p.second == "HASHTABLE_PROBE_SJ" || p.second == "HASHTABLE_INSERT_PK" || p.second == "HASHTABLE_PROBE_PK" || p.second == "BLOOM_FILTER_CONTAINS");
       if (hasHash) {
          if (gDifferentSizedHashTables) {
             // The hash tables can be different sized (e.g., one hash table can have a 32-bit key and another can have a 64-bit key)
@@ -1413,7 +1443,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
             auto id = 0;
             std::string sep = "";
             for (auto p : _args) {
-               if (p.second == "HASHTABLE_FIND" || p.second == "HASHTABLE_INSERT" || p.second == "HASHTABLE_PROBE" || p.second == "HASHTABLE_INSERT_SJ" || p.second == "HASHTABLE_PROBE_SJ" || p.second == "HASHTABLE_INSERT_PK" || p.second == "HASHTABLE_PROBE_PK") {
+               if (p.second == "HASHTABLE_FIND" || p.second == "HASHTABLE_INSERT" || p.second == "HASHTABLE_PROBE" || p.second == "HASHTABLE_INSERT_SJ" || p.second == "HASHTABLE_PROBE_SJ" || p.second == "HASHTABLE_INSERT_PK" || p.second == "HASHTABLE_PROBE_PK" || p.second == "BLOOM_FILTER_CONTAINS") {
                   p.second = fmt::format("{}_{}", p.second, id++);
                   stream << fmt::format("{}typename {}", sep, p.second);
                   _args[p.first] = p.second;
@@ -1422,6 +1452,8 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
             }
             stream << ">\n";
          } else {
+            if (gUseBloomFiltersForJoin)
+               stream << "#error \"Bloom filter is not yet implemented for this case! Disable gUseBloomFiltersForJoin in code generation.\"";
             stream << "template<";
             bool find = false, insert = false, probe = false;
             bool insertSJ = false, probeSJ = false;
@@ -1684,6 +1716,7 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
          if (generateKernelTimingCode()) {
          outputFile << "#include <cuda_runtime.h>\n";
       }
+      if (gUseBloomFiltersForJoin) outputFile << "#include <cuco/bloom_filter.cuh>\n";
 
       for (auto code : kernelSchedule) {
          code->printKernel(KernelType::Count, outputFile);
