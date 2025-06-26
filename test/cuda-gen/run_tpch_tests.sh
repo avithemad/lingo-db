@@ -63,6 +63,11 @@ for QUERY in "${QUERIES[@]}"; do
   echo $RUN_SQL
   $RUN_SQL > $OUTPUT_FILE
 
+  # format the generated cuda code
+  FORMAT_CMD="clang-format -i output.cu -style=Microsoft"
+  echo $FORMAT_CMD
+  $FORMAT_CMD
+
   # Now run the generated CUDA code
   CP_CMD="cp output.cu $TPCH_CUDA_GEN_DIR/q$QUERY.codegen.cu"
   echo $CP_CMD
