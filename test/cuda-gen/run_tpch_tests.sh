@@ -65,7 +65,7 @@ CD_CMD="cd $TPCH_CUDA_GEN_DIR"
 echo $CD_CMD
 $CD_CMD
 
-# Iterate over the queries
+# generate the cuda files
 for QUERY in "${QUERIES[@]}"; do
   # First run the run-sql tool to generate CUDA and get reference output
   OUTPUT_FILE=$SCRIPT_DIR/"tpch-$QUERY-ref.csv"
@@ -82,18 +82,26 @@ for QUERY in "${QUERIES[@]}"; do
   CP_CMD="cp output.cu $TPCH_CUDA_GEN_DIR/q$QUERY.codegen.cu"
   echo $CP_CMD
   $CP_CMD
+done
 
+# generate the cuda files
+for QUERY in "${QUERIES[@]}"; do
+  rm -f build/q$QUERY.codegen.so
   MAKE_QUERY="make query Q=$QUERY CUCO_SRC_PATH=$CUCO_SRC_PATH"
   echo $MAKE_QUERY
-  $MAKE_QUERY
+  $MAKE_QUERY &
   
   # Check if the make command was successful
-  if [ $? -ne 0 ]; then
+done
+
+wait
+
+FAILED_QUERIES=()
+for QUERY in "${QUERIES[@]}"; do
+  if [ ! -f build/q$QUERY.codegen.so ]; then
     echo -e "\033[0;31mError compiling Query $QUERY\033[0m"
     FAILED_QUERIES+=($QUERY)
-    continue
   fi
-
 done
 
 # run all the queries
