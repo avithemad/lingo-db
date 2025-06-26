@@ -902,7 +902,7 @@ class TupleStreamCode {
          appendControl(fmt::format("d_{0}.retrieve_all(keys_{1}.begin(), vals_{1}.begin());", HT(op), GetId(op))); // retrieve all the keys from the hash table into the keys vector
 
          // create a bloom filter
-         appendControl(fmt::format("auto d_{0} = cuco::bloom_filter<{1}>(d_{2}.size()/32);", BF(op), getHTKeyType(keys), HT(op))); // 32 is an arbitrary constant. We need to fix this.
+         appendControl(fmt::format("auto d_{0} = cuco::bloom_filter<{1}>(max(d_{2}.size()/32, 1));", BF(op), getHTKeyType(keys), HT(op))); // 32 is an arbitrary constant. We need to fix this.
          appendControl(fmt::format("d_{0}.add(keys_{1}.begin(), keys_{1}.end());", BF(op), GetId(op))); // insert all the keys into the bloom filter         
       }
 
