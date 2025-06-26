@@ -52,13 +52,23 @@ pushd $TPCH_CUDA_GEN_DIR
 MAKE_RUNTIME="make build-runtime CUCO_SRC_PATH=$CUCO_SRC_PATH"
 echo $MAKE_RUNTIME
 $MAKE_RUNTIME
+
+# Check if the make command was successful
+if [ $? -ne 0 ]; then
+  echo -e "\033[0;31mError building runtime!\033[0m"
+  exit 1
+fi
+
 popd
 
+CD_CMD="cd $TPCH_CUDA_GEN_DIR"
+echo $CD_CMD
+$CD_CMD
 
 # Iterate over the queries
 for QUERY in "${QUERIES[@]}"; do
   # First run the run-sql tool to generate CUDA and get reference output
-  OUTPUT_FILE="tpch-$QUERY-ref.csv"
+  OUTPUT_FILE=$SCRIPT_DIR/"tpch-$QUERY-ref.csv"
   RUN_SQL="$BUILD_DIR/run-sql $TPCH_DIR/$QUERY.sql $TPCH_DATA_DIR --gen-cuda-code"
   echo $RUN_SQL
   $RUN_SQL > $OUTPUT_FILE
@@ -73,10 +83,6 @@ for QUERY in "${QUERIES[@]}"; do
   echo $CP_CMD
   $CP_CMD
 
-  CD_CMD="cd $TPCH_CUDA_GEN_DIR"
-  echo $CD_CMD
-  $CD_CMD
-
   MAKE_QUERY="make query Q=$QUERY CUCO_SRC_PATH=$CUCO_SRC_PATH"
   echo $MAKE_QUERY
   $MAKE_QUERY
@@ -88,13 +94,21 @@ for QUERY in "${QUERIES[@]}"; do
     continue
   fi
 
-  RUN_QUERY_CMD="build/dbruntime --data_dir $TPCH_DATA_DIR/ --query_num $QUERY"
-  echo $RUN_QUERY_CMD
-  $RUN_QUERY_CMD > "cuda-tpch-$QUERY.csv" 2> "cuda-tpch-$QUERY.log"
+done
 
-  cd -
+# run all the queries
+# Convert QUERIES array to comma-separated string
+QUERIES_STR=$(IFS=,; echo "${QUERIES[*]}")
 
-  PYTHON_CMD="python $SCRIPT_DIR/compare_tpch_outputs.py $OUTPUT_FILE $TPCH_CUDA_GEN_DIR/cuda-tpch-$QUERY.csv"
+RUN_QUERY_CMD="build/dbruntime --data_dir $TPCH_DATA_DIR/ --query_num $QUERIES_STR"
+echo $RUN_QUERY_CMD
+$RUN_QUERY_CMD
+
+cd -
+
+for QUERY in "${QUERIES[@]}"; do
+  OUTPUT_FILE="tpch-$QUERY-ref.csv"
+  PYTHON_CMD="python $SCRIPT_DIR/compare_tpch_outputs.py $SCRIPT_DIR/$OUTPUT_FILE $TPCH_CUDA_GEN_DIR/cuda-tpch-$QUERY.csv"
   echo $PYTHON_CMD
   $PYTHON_CMD
 
