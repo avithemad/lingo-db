@@ -79,9 +79,10 @@ for QUERY in "${QUERIES[@]}"; do
   $CP_CMD
 done
 
+rm -f build/*.codegen.so # do this so that we don't run other queries by mistake
+
 # generate the cuda files
 for QUERY in "${QUERIES[@]}"; do
-  rm -f build/q$QUERY.codegen.so
   MAKE_QUERY="make query Q=$QUERY CUCO_SRC_PATH=$CUCO_SRC_PATH"
   echo $MAKE_QUERY
   $MAKE_QUERY &

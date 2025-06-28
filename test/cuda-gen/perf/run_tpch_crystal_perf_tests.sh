@@ -7,6 +7,8 @@ if [ -z "$SCALE_FACTOR" ]; then
   exit 1
 fi
 
+SUFFIX="$2"
+
 # Check if SQL_PLAN_COMPILER_DIR environment variable is set
 if [ -n "$SQL_PLAN_COMPILER_DIR" ]; then
   echo "Using SQL_PLAN_COMPILER_DIR from environment variable: $SQL_PLAN_COMPILER_DIR"
@@ -60,7 +62,7 @@ if [ $? -ne 0 ]; then
   exit 1
 fi
 
-OUTPUT_FILE=$SCRIPT_DIR/tpch-$SCALE_FACTOR-crystal-perf.csv
+OUTPUT_FILE=$SCRIPT_DIR/tpch-$SCALE_FACTOR-crystal-$SUFFIX-perf.csv
 echo "Output file: $OUTPUT_FILE"
 
 # Empty the output file
@@ -73,18 +75,17 @@ for QUERY in "${QUERIES[@]}"; do
   echo $RUN_SQL
   $RUN_SQL > /dev/null # ignore the output. We are not comparing the results.
 
-  NOCOUNT="$QUERY.crystal"
-
   # Now run the generated CUDA code
-  CP_CMD="cp output.cu $TPCH_CUDA_GEN_DIR/q$NOCOUNT.codegen.cu"
+  CP_CMD="cp output.cu $TPCH_CUDA_GEN_DIR/q$QUERY.crystal.codegen.cu"
   echo $CP_CMD
   $CP_CMD
 done
 
+rm -f build/*.codegen.so # do this so that we don't run other queries by mistake
+
 # generate the cuda files
 for QUERY in "${QUERIES[@]}"; do
-  rm -f build/q$NOCOUNT.codegen.so
-  MAKE_QUERY="make query Q=$NOCOUNT CUCO_SRC_PATH=$CUCO_SRC_PATH"
+  MAKE_QUERY="make query Q=$QUERY.crystal CUCO_SRC_PATH=$CUCO_SRC_PATH"
   echo $MAKE_QUERY
   $MAKE_QUERY &
   
@@ -95,6 +96,7 @@ wait
 
 FAILED_QUERIES=()
 for QUERY in "${QUERIES[@]}"; do
+  NOCOUNT="$QUERY.crystal"
   if [ ! -f build/q$NOCOUNT.codegen.so ]; then
     echo -e "\033[0;31mError compiling Query $QUERY\033[0m"
     FAILED_QUERIES+=($QUERY)
@@ -103,7 +105,12 @@ done
 
 # run all the queries
 # Convert QUERIES array to comma-separated string
-QUERIES_STR=$(IFS=,; echo "${QUERIES[*]}")
+QUERIES_STR=""
+for i in "${QUERIES[@]}"; do
+  QUERIES_STR+="$i.crystal,"
+done
+QUERIES_STR="${QUERIES_STR%,*}" # remove trailing comma
+echo "QUERIES_STR: $QUERIES_STR"
 
 RUN_QUERY_CMD="build/dbruntime --data_dir $TPCH_DATA_DIR/ --query_num $QUERIES_STR --op_file $OUTPUT_FILE --scale_factor $SCALE_FACTOR"
 echo $RUN_QUERY_CMD
