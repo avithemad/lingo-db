@@ -7,6 +7,8 @@ if [ -z "$SCALE_FACTOR" ]; then
   exit 1
 fi
 
+SUFFIX=$2
+
 # Check if SQL_PLAN_COMPILER_DIR environment variable is set
 if [ -n "$SQL_PLAN_COMPILER_DIR" ]; then
   echo "Using SQL_PLAN_COMPILER_DIR from environment variable: $SQL_PLAN_COMPILER_DIR"
@@ -60,7 +62,7 @@ if [ $? -ne 0 ]; then
   exit 1
 fi
 
-OUTPUT_FILE=$SCRIPT_DIR/tpch-$SCALE_FACTOR-hyper-perf.csv
+OUTPUT_FILE=$SCRIPT_DIR/tpch-$SCALE_FACTOR-hyper$SUFFIX-perf.csv
 echo "Output file: $OUTPUT_FILE"
 
 # Empty the output file
