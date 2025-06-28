@@ -53,7 +53,12 @@ pushd $TPCH_CUDA_GEN_DIR
 MAKE_RUNTIME="make build-runtime CUCO_SRC_PATH=$CUCO_SRC_PATH"
 echo $MAKE_RUNTIME
 $MAKE_RUNTIME
-popd
+
+# Check if the make command was successful
+if [ $? -ne 0 ]; then
+  echo -e "\033[0;31mError building runtime!\033[0m"
+  exit 1
+fi
 
 OUTPUT_FILE=$SCRIPT_DIR/tpch-$SCALE_FACTOR-crystal-perf.csv
 echo "Output file: $OUTPUT_FILE"
@@ -61,48 +66,48 @@ echo "Output file: $OUTPUT_FILE"
 # Empty the output file
 echo -n "" > $OUTPUT_FILE
 
-# Iterate over the queries
+# generate the cuda files
 for QUERY in "${QUERIES[@]}"; do
   # First run the run-sql tool to generate CUDA and get reference output
   RUN_SQL="$BUILD_DIR/run-sql $TPCH_DIR/$QUERY.sql $TPCH_DATA_DIR --gen-cuda-crystal-code --gen-kernel-timing"
   echo $RUN_SQL
-  $RUN_SQL
+  $RUN_SQL > /dev/null # ignore the output. We are not comparing the results.
 
   NOCOUNT="$QUERY.crystal"
-  
-  # format the generated cuda code
-  FORMAT_CMD="clang-format -i output.cu -style=Microsoft"
-  echo $FORMAT_CMD
-  $FORMAT_CMD
 
   # Now run the generated CUDA code
   CP_CMD="cp output.cu $TPCH_CUDA_GEN_DIR/q$NOCOUNT.codegen.cu"
   echo $CP_CMD
   $CP_CMD
+done
 
-  CD_CMD="cd $TPCH_CUDA_GEN_DIR"
-  echo $CD_CMD
-  $CD_CMD
-
+# generate the cuda files
+for QUERY in "${QUERIES[@]}"; do
+  rm -f build/q$NOCOUNT.codegen.so
   MAKE_QUERY="make query Q=$NOCOUNT CUCO_SRC_PATH=$CUCO_SRC_PATH"
   echo $MAKE_QUERY
-  $MAKE_QUERY
+  $MAKE_QUERY &
   
   # Check if the make command was successful
-  if [ $? -ne 0 ]; then
+done
+
+wait
+
+FAILED_QUERIES=()
+for QUERY in "${QUERIES[@]}"; do
+  if [ ! -f build/q$NOCOUNT.codegen.so ]; then
     echo -e "\033[0;31mError compiling Query $QUERY\033[0m"
     FAILED_QUERIES+=($QUERY)
-    continue
   fi
-
-  # Append the query number to the output file
-  echo "---" >> $OUTPUT_FILE
-  echo "tpch-q$NOCOUNT" >> $OUTPUT_FILE
-
-  RUN_QUERY_CMD="build/dbruntime --data_dir $TPCH_DATA_DIR/ --query_num $NOCOUNT"
-  echo $RUN_QUERY_CMD
-  $RUN_QUERY_CMD >> $OUTPUT_FILE
-
-  cd -
-
 done
+
+# run all the queries
+# Convert QUERIES array to comma-separated string
+QUERIES_STR=$(IFS=,; echo "${QUERIES[*]}")
+
+RUN_QUERY_CMD="build/dbruntime --data_dir $TPCH_DATA_DIR/ --query_num $QUERIES_STR --op_file $OUTPUT_FILE --scale_factor $SCALE_FACTOR"
+echo $RUN_QUERY_CMD
+$RUN_QUERY_CMD
+
+cd -
+
