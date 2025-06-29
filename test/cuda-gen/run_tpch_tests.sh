@@ -84,9 +84,15 @@ for QUERY in "${QUERIES[@]}"; do
   $CP_CMD
 done
 
+# cleanup the result files, built shared objects
+rm -f build/*.codegen.so # do this so that we don't run other queries by mistake
+rm -f $SCRIPT_DIR/*.csv
+rm -f $TPCH_CUDA_GEN_DIR/*.codegen.cu
+rm -f $TPCH_CUDA_GEN_DIR/*.csv
+rm -f $TPCH_CUDA_GEN_DIR/*.log
+
 # generate the cuda files
 for QUERY in "${QUERIES[@]}"; do
-  rm -f build/q$QUERY.codegen.so
   MAKE_QUERY="make query Q=$QUERY CUCO_SRC_PATH=$CUCO_SRC_PATH"
   echo $MAKE_QUERY
   $MAKE_QUERY &

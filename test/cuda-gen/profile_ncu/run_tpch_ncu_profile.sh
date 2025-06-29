@@ -8,6 +8,20 @@ if [ -z "$SCALE_FACTOR" ]; then
   exit 1
 fi
 
+# Check if --crystal flag is present in command line arguments
+CRYSTAL_FLAG=false
+CRYSTAL_SUFFIX=""
+QUERY_SUFFIX=""
+for arg in "$@"; do
+  if [ "$arg" == "--crystal" ]; then
+    CRYSTAL_FLAG=true
+    CRYSTAL_SUFFIX="-crystal"
+    QUERY_SUFFIX=".crystal"
+    shift
+    break
+  fi
+done
+
 SUB_FOLDER="$2"
 if [ -z "$SUB_FOLDER" ]; then
   SUB_FOLDER="."
@@ -18,18 +32,6 @@ if [ -z "$QUALIFIER" ]; then
   QUALIFIER=""
 fi
 
-# Check if --crystal flag is present in command line arguments
-CRYSTAL_FLAG=false
-CRYSTAL_SUFFIX=""
-QUERY_SUFFIX=""
-for arg in "$@"; do
-  if [ "$arg" == "--crystal" ]; then
-    CRYSTAL_FLAG=true
-    CRYSTAL_SUFFIX="-crystal"
-    QUERY_SUFFIX=".crystal"
-    break
-  fi
-done
 
 # Set build name variable if not already set
 if [ -z "$BUILD_NAME" ]; then
