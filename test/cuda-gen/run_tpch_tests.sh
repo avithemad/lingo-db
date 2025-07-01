@@ -59,11 +59,12 @@ if [ $? -ne 0 ]; then
   exit 1
 fi
 
-popd
-
-CD_CMD="cd $TPCH_CUDA_GEN_DIR"
-echo $CD_CMD
-$CD_CMD
+# cleanup the result files, built shared objects
+rm -f build/*.codegen.so # do this so that we don't run other queries by mistake
+rm -f $SCRIPT_DIR/*.csv
+# rm -f $TPCH_CUDA_GEN_DIR/*.codegen.cu
+rm -f $TPCH_CUDA_GEN_DIR/*.csv
+rm -f $TPCH_CUDA_GEN_DIR/*.log
 
 # generate the cuda files
 for QUERY in "${QUERIES[@]}"; do
@@ -84,12 +85,6 @@ for QUERY in "${QUERIES[@]}"; do
   $CP_CMD
 done
 
-# cleanup the result files, built shared objects
-rm -f build/*.codegen.so # do this so that we don't run other queries by mistake
-rm -f $SCRIPT_DIR/*.csv
-rm -f $TPCH_CUDA_GEN_DIR/*.codegen.cu
-rm -f $TPCH_CUDA_GEN_DIR/*.csv
-rm -f $TPCH_CUDA_GEN_DIR/*.log
 
 # generate the cuda files
 for QUERY in "${QUERIES[@]}"; do
@@ -106,6 +101,7 @@ FAILED_QUERIES=()
 for QUERY in "${QUERIES[@]}"; do
   if [ ! -f build/q$QUERY.codegen.so ]; then
     echo -e "\033[0;31mError compiling Query $QUERY\033[0m"
+    exit 1
     FAILED_QUERIES+=($QUERY)
   fi
 done
