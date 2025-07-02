@@ -888,8 +888,8 @@ class TupleStreamCode {
       deviceFrees.insert(fmt::format("d_{0}", BUF(op)));
       // #ifdef MULTIMAP
       if (!pk)
-         appendControl(fmt::format("auto d_{0} = cuco::experimental::static_multimap{{ (int){1}*2, cuco::empty_key{{(int64_t)-1}},cuco::empty_value{{(int64_t)-1}},thrust::equal_to<int64_t>{{}},cuco::linear_probing<1, cuco::default_hash_function<int64_t>>() }};",
-                                   HT(op), COUNT(op)));
+         appendControl(fmt::format("auto d_{0} = cuco::experimental::static_multimap{{ (int){1}*2, cuco::empty_key{{({2})-1}},cuco::empty_value{{({3})-1}},thrust::equal_to<{2}>{{}},cuco::linear_probing<1, cuco::default_hash_function<{2}>>() }};",
+                                   HT(op), COUNT(op), getHTKeyType(keys), getHTValueType()));
       // #else
       else
          appendControl(fmt::format("auto d_{0} = cuco::static_map{{ (int){1}*2, cuco::empty_key{{({2})-1}},cuco::empty_value{{({3})-1}},thrust::equal_to<{2}>{{}},cuco::linear_probing<1, cuco::default_hash_function<{2}>>() }};",
