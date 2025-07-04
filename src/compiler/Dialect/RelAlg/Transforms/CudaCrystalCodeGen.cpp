@@ -261,6 +261,8 @@ class TupleStreamCode {
 
    std::map<std::string, std::string> mainArgs;
    std::map<std::string, std::string> countArgs;
+   bool m_hasInsertedSelection = false;
+   bool m_genSelectionCheckUniversally = true;
    int id;
    void appendKernel(std::string stmt, KernelType ty) {
       if (ty == KernelType::Main)
@@ -517,7 +519,7 @@ class TupleStreamCode {
       std::string kernelSize = getKernelSizeVariable();
       appendKernel("#pragma unroll", ty);
       appendKernel(fmt::format("for (int ITEM = 0; ITEM < ITEMS_PER_THREAD && (ITEM*TB + tid < {0}); ++ITEM) {{", kernelSize), ty);
-      if (!(colData->rid == "ITEM*TB + tid")) {
+      if (!(colData->rid == "ITEM*TB + tid") || m_hasInsertedSelection) {
          appendKernel("if (!selection_flags[ITEM]) continue;", ty);
       }
       appendKernel(fmt::format("{0}[ITEM] = {1};", cudaId, colData->loadExpression + (colData->type == ColumnType::Direct ? "[" + colData->rid + "]" : "")), ty);
@@ -581,6 +583,7 @@ class TupleStreamCode {
                assert(false && "Predicate not handled");
                break;
          }
+         m_hasInsertedSelection = true;
          return fmt::format("evaluatePredicate({0}, {1}, {2})", leftOperand, rightOperand, predicate);
       } else if (auto runtimeOp = mlir::dyn_cast_or_null<db::RuntimeCall>(op)) { // or a like operation
          // TODO(avinash, p1): handle runtime predicate like operator
@@ -631,6 +634,7 @@ class TupleStreamCode {
 
          std::string lpred = betweenOp.getLowerInclusive() ? "Predicate::gte" : "Predicate::gt";
          std::string rpred = betweenOp.getUpperInclusive() ? "Predicate::lte" : "Predicate::lt";
+         m_hasInsertedSelection = true;
          return fmt::format("evaluatePredicate({0}, {1}, {2}) && evaluatePredicate({0}, {3}, {4})",
                             operand, lower, lpred, upper, rpred);
       } else if (auto andOp = mlir::dyn_cast_or_null<db::AndOp>(op)) {
@@ -674,6 +678,7 @@ class TupleStreamCode {
          std::string sep = "";
          std::string val = SelectionOpDfs(oneOfOp.getVal().getDefiningOp());
          for (auto v : oneOfOp.getVals()) {
+            m_hasInsertedSelection = true;
             res += sep + fmt::format("evaluatePredicate({0}, {1}, Predicate::eq)", val, SelectionOpDfs(v.getDefiningOp()));
             sep = " || (";
             res += ")";
@@ -760,7 +765,8 @@ class TupleStreamCode {
       std::string kernelSize = getKernelSizeVariable();
       appendKernel("#pragma unroll", kernelType);
       appendKernel(fmt::format("for (int ITEM = 0; ITEM < ITEMS_PER_THREAD && (ITEM*TB + tid < {0}); ++ITEM) {{", kernelSize), kernelType);
-      appendKernel("if (!selection_flags[ITEM]) continue;", kernelType);
+      if (m_genSelectionCheckUniversally || m_hasInsertedSelection )
+         appendKernel("if (!selection_flags[ITEM]) continue;", kernelType);
       appendKernel(fmt::format("{0}[ITEM] = 0;", KEY(op)), kernelType);
       int totalKeySize = 0;
       int j = 0;
@@ -863,14 +869,16 @@ class TupleStreamCode {
       std::string kernelSize = getKernelSizeVariable();
       appendKernel("#pragma unroll", KernelType::Main);
       appendKernel(fmt::format("for (int ITEM = 0; ITEM < ITEMS_PER_THREAD && (ITEM*TB + tid < {0}); ++ITEM) {{", kernelSize), KernelType::Main);
-      appendKernel("if (!selection_flags[ITEM]) continue;", KernelType::Main);
+      if (m_genSelectionCheckUniversally || m_hasInsertedSelection )
+         appendKernel("if (!selection_flags[ITEM]) continue;", KernelType::Main);
       appendKernel(fmt::format("auto {0} = {1}.find({2}[ITEM]);", SLOT(op), HT(op), key), KernelType::Main);
       appendKernel(fmt::format("if ({0} == {1}.end()) {{selection_flags[ITEM] = 0;}}", SLOT(op), HT(op)), KernelType::Main);
       appendKernel("}", KernelType::Main);
       appendKernel("//Probe Hash table", KernelType::Count);
       appendKernel("#pragma unroll", KernelType::Count);
       appendKernel(fmt::format("for (int ITEM = 0; ITEM < ITEMS_PER_THREAD && (ITEM*TB + tid < {0}); ++ITEM) {{", kernelSize), KernelType::Count);
-      appendKernel("if (!selection_flags[ITEM]) continue;", KernelType::Count);
+      if (m_genSelectionCheckUniversally || m_hasInsertedSelection )
+         appendKernel("if (!selection_flags[ITEM]) continue;", KernelType::Count);
       appendKernel(fmt::format("auto {0} = {1}.find({2}[ITEM]);", SLOT(op), HT(op), key), KernelType::Count);
       appendKernel(fmt::format("if ({0} == {1}.end()) {{selection_flags[ITEM] = 0;}}", SLOT(op), HT(op)), KernelType::Count);
       appendKernel("}", KernelType::Count);
@@ -889,14 +897,16 @@ class TupleStreamCode {
       std::string kernelSize = getKernelSizeVariable();
       appendKernel("#pragma unroll", KernelType::Main);
       appendKernel(fmt::format("for (int ITEM = 0; ITEM < ITEMS_PER_THREAD && (ITEM*TB + tid < {0}); ++ITEM) {{", kernelSize), KernelType::Main);
-      appendKernel("if (!selection_flags[ITEM]) continue;", KernelType::Main);
+      if (m_genSelectionCheckUniversally || m_hasInsertedSelection )
+         appendKernel("if (!selection_flags[ITEM]) continue;", KernelType::Main);
       appendKernel(fmt::format("auto {0} = {1}.find({2}[ITEM]);", SLOT(op), HT(op), key), KernelType::Main);
       appendKernel(fmt::format("if (!({0} == {1}.end())) {{selection_flags[ITEM] = 0;}}", SLOT(op), HT(op)), KernelType::Main);
       appendKernel("}", KernelType::Main);
       appendKernel("//Probe Hash table", KernelType::Count);
       appendKernel("#pragma unroll", KernelType::Count);
       appendKernel(fmt::format("for (int ITEM = 0; ITEM < ITEMS_PER_THREAD && (ITEM*TB + tid < {0}); ++ITEM) {{", kernelSize), KernelType::Count);
-      appendKernel("if (!selection_flags[ITEM]) continue;", KernelType::Count);
+      if (m_genSelectionCheckUniversally || m_hasInsertedSelection )
+         appendKernel("if (!selection_flags[ITEM]) continue;", KernelType::Count);
       appendKernel(fmt::format("auto {0} = {1}.find({2}[ITEM]);", SLOT(op), HT(op), key), KernelType::Count);
       appendKernel(fmt::format("if (!({0} == {1}.end())) {{selection_flags[ITEM] = 0;}}", SLOT(op), HT(op)), KernelType::Count);
       appendKernel("}", KernelType::Count);
@@ -963,7 +973,8 @@ class TupleStreamCode {
       appendKernel(fmt::format("int64_t {0}[ITEMS_PER_THREAD];", slot_second(op)), KernelType::Main);
       appendKernel("#pragma unroll", KernelType::Main);
       appendKernel(fmt::format("for (int ITEM = 0; ITEM < ITEMS_PER_THREAD && (ITEM*TB + tid < {0}); ++ITEM) {{", kernelSize), KernelType::Main);
-      appendKernel("if (!selection_flags[ITEM]) continue;", KernelType::Main);
+      if (m_genSelectionCheckUniversally || m_hasInsertedSelection )
+         appendKernel("if (!selection_flags[ITEM]) continue;", KernelType::Main);
       appendKernel(fmt::format("auto {0} = {1}.find({2}[ITEM]);", SLOT(op), HT(op), key), KernelType::Main);
       appendKernel(fmt::format("if ({0} == {1}.end()) {{selection_flags[ITEM] = 0; continue;}}", SLOT(op), HT(op)), KernelType::Main);
       appendKernel(fmt::format("{0}[ITEM] = {1}->second;", slot_second(op), SLOT(op)), KernelType::Main);
@@ -971,7 +982,8 @@ class TupleStreamCode {
       appendKernel(fmt::format("int64_t {0}[ITEMS_PER_THREAD];", slot_second(op)), KernelType::Count);
       appendKernel("#pragma unroll", KernelType::Count);
       appendKernel(fmt::format("for (int ITEM = 0; ITEM < ITEMS_PER_THREAD && (ITEM*TB + tid < {0}); ++ITEM) {{", kernelSize), KernelType::Count);
-      appendKernel("if (!selection_flags[ITEM]) continue;", KernelType::Count);
+      if (m_genSelectionCheckUniversally || m_hasInsertedSelection )
+         appendKernel("if (!selection_flags[ITEM]) continue;", KernelType::Count);
       appendKernel(fmt::format("auto {0} = {1}.find({2}[ITEM]);", SLOT(op), HT(op), key), KernelType::Count);
       appendKernel(fmt::format("if ({0} == {1}.end()) {{selection_flags[ITEM] = 0; continue;}}", SLOT(op), HT(op)), KernelType::Count);
       appendKernel(fmt::format("{0}[ITEM] = {1}->second;", slot_second(op), SLOT(op)), KernelType::Count);
@@ -1078,7 +1090,8 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       std::string kernelSize = getKernelSizeVariable();
       appendKernel("#pragma unroll", KernelType::Main);
       appendKernel(fmt::format("for (int ITEM = 0; ITEM < ITEMS_PER_THREAD && (ITEM*TB + tid < {0}); ++ITEM) {{", kernelSize), KernelType::Main);
-      appendKernel(fmt::format("if (!selection_flags[ITEM]) continue;"), KernelType::Main);
+      if (m_genSelectionCheckUniversally || m_hasInsertedSelection )
+         appendKernel(fmt::format("if (!selection_flags[ITEM]) continue;"), KernelType::Main);
       appendKernel(fmt::format("auto {0} = {1}.find({2}[ITEM])->second;", buf_idx(op), HT(op), key), KernelType::Main);
       if (auto returnOp = mlir::dyn_cast_or_null<tuples::ReturnOp>(aggRgn.front().getTerminator())) {
          int i = 0;
@@ -1402,6 +1415,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
                assert(false && "Predicate not handled");
                break;
          }
+         m_hasInsertedSelection = true;
          return fmt::format("evaluatePredicate({0}, {1}, {2})", leftOperand, rightOperand, predicate);
       } else if (auto yieldOp = mlir::dyn_cast_or_null<mlir::scf::YieldOp>(op)) {
          std::string expr = "";
