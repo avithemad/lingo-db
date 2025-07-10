@@ -52,8 +52,8 @@ static bool gCudaCrystalCodeGenEnabled = false;
 static bool gCudaCrystalCodeGenNoCountEnabled = false;
 static bool gCompilingSSB = false;
 static bool gGenPerOperationProfile = false;
-bool gDifferentSizedHashTables = true;
-bool gUseBloomFiltersForJoin = true;
+bool gDifferentSizedHashTables = false;
+bool gUseBloomFiltersForJoin = false;
 
 // --- [start] different sized hash tables helpers ---
 
@@ -1862,6 +1862,27 @@ void checkForGenPerOperationProfileSwitch(int& argc, char** argv) {
    }
 }
 
+void checkForHashTableSizeSwitch(int& argc, char** argv) {
+   for (int i = 0; i < argc; i++) {
+      if (std::string(argv[i]) == "--smaller-hash-tables") {
+         std::clog << "Enabled smaller hash tables\n";
+         gDifferentSizedHashTables = true;
+         removeCodeGenSwitch(argc, argv, i);
+         break;
+      }
+   }
+}
+void checkForBloomFilterSwitch(int& argc, char** argv) {
+   for (int i = 0; i < argc; i++) {
+      if (std::string(argv[i]) == "--use-bloom-filters") {
+         std::clog << "Enabled bloom filters for join\n";
+         gUseBloomFiltersForJoin = true;
+         removeCodeGenSwitch(argc, argv, i);
+         break;
+      }
+   }
+}
+
 void relalg::conditionallyEnableCudaCodeGen(int& argc, char** argv) {
    for (int i = 0; i < argc; i++) {
       if (std::string(argv[i]) == "--gen-cuda-code") {
@@ -1886,4 +1907,6 @@ void relalg::conditionallyEnableCudaCodeGen(int& argc, char** argv) {
    checkForStaticMapOnlySwitch(argc, argv);
    checkForGenKernelTimingCodeSwith(argc, argv);
    checkForGenPerOperationProfileSwitch(argc, argv);
+   checkForHashTableSizeSwitch(argc, argv);
+   checkForBloomFilterSwitch(argc, argv);
 }

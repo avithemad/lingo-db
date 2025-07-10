@@ -1,5 +1,22 @@
 #!/bin/bash
 
+CODEGEN_OPTIONS="--smaller-hash-tables"
+# for each arg in args
+for arg in "$@"; do
+  case $arg in
+    --smaller-hash-tables)
+      # CODEGEN_OPTIONS="$CODEGEN_OPTIONS --smaller-hash-tables" # make this default for now
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      ;;
+    --use-bloom-filters)
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --use-bloom-filters"
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      ;; 
+  esac
+done
+
 # The first argument is the scale factor
 SCALE_FACTOR="$1"
 if [ -z "$SCALE_FACTOR" ]; then
@@ -44,7 +61,7 @@ if [ -z "$TPCH_DATA_DIR" ]; then
 fi
 
 
-QUERIES=(1 3 4 5 6 7 8 9 10 12 13 14 16 17 18 19 20)
+QUERIES=(3) # (1 3 4 5 6 7 8 9 10 12 13 14 16 17 18 19 20)
 
 TPCH_CUDA_GEN_DIR="$SQL_PLAN_COMPILER_DIR/gpu-db/tpch-$SCALE_FACTOR"
 echo "TPCH_CUDA_GEN_DIR: $TPCH_CUDA_GEN_DIR"
@@ -70,7 +87,7 @@ rm -f $TPCH_CUDA_GEN_DIR/*.log
 for QUERY in "${QUERIES[@]}"; do
   # First run the run-sql tool to generate CUDA and get reference output
   OUTPUT_FILE=$SCRIPT_DIR/"tpch-$QUERY-ref.csv"
-  RUN_SQL="$BUILD_DIR/run-sql $TPCH_DIR/$QUERY.sql $TPCH_DATA_DIR --gen-cuda-code"
+  RUN_SQL="$BUILD_DIR/run-sql $TPCH_DIR/$QUERY.sql $TPCH_DATA_DIR --gen-cuda-code $CODEGEN_OPTIONS"
   echo $RUN_SQL
   $RUN_SQL > $OUTPUT_FILE
 
