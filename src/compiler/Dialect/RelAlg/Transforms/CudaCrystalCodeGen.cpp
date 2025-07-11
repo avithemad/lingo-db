@@ -39,14 +39,10 @@ class CrystalTupleStreamCode : public TupleStreamCode {
 
       if (generatePerOperationProfile())
          appendKernel("int64_t start, stop, cycles_per_warp;", KernelType::Main);
-      appendKernel("size_t tile_offset = blockIdx.x * TILE_SIZE;", KernelType::Main);
-      appendKernel("size_t tid = tile_offset + threadIdx.x;", KernelType::Main);
-      appendKernel("int selection_flags[ITEMS_PER_THREAD];", KernelType::Main);
-      appendKernel("for (int i=0; i<ITEMS_PER_THREAD; i++) selection_flags[i] = 1;", KernelType::Main);
-      appendKernel("size_t tile_offset = blockIdx.x * TILE_SIZE;", KernelType::Count);
-      appendKernel("size_t tid = tile_offset + threadIdx.x;", KernelType::Count);
-      appendKernel("int selection_flags[ITEMS_PER_THREAD];", KernelType::Count);
-      appendKernel("for (int i=0; i<ITEMS_PER_THREAD; i++) selection_flags[i] = 1;", KernelType::Count);
+      appendKernel("size_t tile_offset = blockIdx.x * TILE_SIZE;");
+      appendKernel("size_t tid = tile_offset + threadIdx.x;");
+      appendKernel("int selection_flags[ITEMS_PER_THREAD];");
+      appendKernel("for (int i=0; i<ITEMS_PER_THREAD; i++) selection_flags[i] = 1;");
 
       for (auto namedAttr : baseTableOp.getColumns().getValue()) {
          auto columnName = namedAttr.getName().str();
@@ -80,14 +76,10 @@ class CrystalTupleStreamCode : public TupleStreamCode {
 
       if (generatePerOperationProfile())
          appendKernel("int64_t start, stop, cycles_per_warp;", KernelType::Main);
-      appendKernel("size_t tile_offset = blockIdx.x * TILE_SIZE;", KernelType::Main);
-      appendKernel("size_t tid = tile_offset + threadIdx.x;", KernelType::Main);
-      appendKernel("int selection_flags[ITEMS_PER_THREAD];", KernelType::Main);
-      appendKernel("for (int i=0; i<ITEMS_PER_THREAD; i++) selection_flags[i] = 1;", KernelType::Main);
-      appendKernel("size_t tile_offset = blockIdx.x * TILE_SIZE;", KernelType::Count);
-      appendKernel("size_t tid = tile_offset + threadIdx.x;", KernelType::Count);
-      appendKernel("int selection_flags[ITEMS_PER_THREAD];", KernelType::Count);
-      appendKernel("for (int i=0; i<ITEMS_PER_THREAD; i++) selection_flags[i] = 1;", KernelType::Count);
+      appendKernel("size_t tile_offset = blockIdx.x * TILE_SIZE;");
+      appendKernel("size_t tid = tile_offset + threadIdx.x;");
+      appendKernel("int selection_flags[ITEMS_PER_THREAD];");
+      appendKernel("for (int i=0; i<ITEMS_PER_THREAD; i++) selection_flags[i] = 1;");
 
       auto groupByKeys = aggOp.getGroupByCols();
       auto computedCols = aggOp.getComputedCols();
@@ -410,16 +402,11 @@ class CrystalTupleStreamCode : public TupleStreamCode {
             mlir::Value matched = returnOp.getResults()[0];
             std::string condition = SelectionOpDfs(matched.getDefiningOp());
             std::string kernelSize = getKernelSizeVariable();
-            appendKernel("#pragma unroll", KernelType::Main);
-            appendKernel(fmt::format("for (int ITEM = 0; ITEM < ITEMS_PER_THREAD && (ITEM*TB + tid < {0}); ++ITEM) {{", kernelSize), KernelType::Main);
-            appendKernel("if (!selection_flags[ITEM]) continue;", KernelType::Main);
-            appendKernel(fmt::format("selection_flags[ITEM] &= {0};", condition), KernelType::Main);
-            appendKernel("}", KernelType::Main);
-            appendKernel("#pragma unroll", KernelType::Count);
-            appendKernel(fmt::format("for (int ITEM = 0; ITEM < ITEMS_PER_THREAD && (ITEM*TB + tid < {0}); ++ITEM) {{", kernelSize), KernelType::Count);
-            appendKernel("if (!selection_flags[ITEM]) continue;", KernelType::Count);
-            appendKernel(fmt::format("selection_flags[ITEM] &= {0};", condition), KernelType::Count);
-            appendKernel("}", KernelType::Count);
+            appendKernel("#pragma unroll");
+            appendKernel(fmt::format("for (int ITEM = 0; ITEM < ITEMS_PER_THREAD && (ITEM*TB + tid < {0}); ++ITEM) {{", kernelSize));
+            appendKernel("if (!selection_flags[ITEM]) continue;");
+            appendKernel(fmt::format("selection_flags[ITEM] &= {0};", condition));
+            appendKernel("}");
             return;
          } else {
             assert(false && "expected return op to be in the end of the predicate region");
@@ -575,23 +562,15 @@ class CrystalTupleStreamCode : public TupleStreamCode {
       auto keys = joinOp->getAttrOfType<mlir::ArrayAttr>("leftHash");
       MakeKeys(op, keys, KernelType::Count);
       auto key = MakeKeys(op, keys, KernelType::Main);
-      appendKernel("//Probe Hash table", KernelType::Main);
+      appendKernel("//Probe Hash table");
       std::string kernelSize = getKernelSizeVariable();
-      appendKernel("#pragma unroll", KernelType::Main);
-      appendKernel(fmt::format("for (int ITEM = 0; ITEM < ITEMS_PER_THREAD && (ITEM*TB + tid < {0}); ++ITEM) {{", kernelSize), KernelType::Main);
+      appendKernel("#pragma unroll");
+      appendKernel(fmt::format("for (int ITEM = 0; ITEM < ITEMS_PER_THREAD && (ITEM*TB + tid < {0}); ++ITEM) {{", kernelSize));
       if (m_genSelectionCheckUniversally || m_hasInsertedSelection )
-         appendKernel("if (!selection_flags[ITEM]) continue;", KernelType::Main);
-      appendKernel(fmt::format("auto {0} = {1}.find({2}[ITEM]);", SLOT(op), HT(op), key), KernelType::Main);
-      appendKernel(fmt::format("if ({0} == {1}.end()) {{selection_flags[ITEM] = 0;}}", SLOT(op), HT(op)), KernelType::Main);
-      appendKernel("}", KernelType::Main);
-      appendKernel("//Probe Hash table", KernelType::Count);
-      appendKernel("#pragma unroll", KernelType::Count);
-      appendKernel(fmt::format("for (int ITEM = 0; ITEM < ITEMS_PER_THREAD && (ITEM*TB + tid < {0}); ++ITEM) {{", kernelSize), KernelType::Count);
-      if (m_genSelectionCheckUniversally || m_hasInsertedSelection )
-         appendKernel("if (!selection_flags[ITEM]) continue;", KernelType::Count);
-      appendKernel(fmt::format("auto {0} = {1}.find({2}[ITEM]);", SLOT(op), HT(op), key), KernelType::Count);
-      appendKernel(fmt::format("if ({0} == {1}.end()) {{selection_flags[ITEM] = 0;}}", SLOT(op), HT(op)), KernelType::Count);
-      appendKernel("}", KernelType::Count);
+         appendKernel("if (!selection_flags[ITEM]) continue;");
+      appendKernel(fmt::format("auto {0} = {1}.find({2}[ITEM]);", SLOT(op), HT(op), key));
+      appendKernel(fmt::format("if ({0} == {1}.end()) {{selection_flags[ITEM] = 0;}}", SLOT(op), HT(op)));
+      appendKernel("}");
 
       mainArgs[HT(op)] = "HASHTABLE_PROBE_SJ";
       countArgs[HT(op)] = "HASHTABLE_PROBE_SJ";
@@ -603,23 +582,15 @@ class CrystalTupleStreamCode : public TupleStreamCode {
       auto keys = joinOp->getAttrOfType<mlir::ArrayAttr>("leftHash");
       MakeKeys(op, keys, KernelType::Count);
       auto key = MakeKeys(op, keys, KernelType::Main);
-      appendKernel("//Probe Hash table", KernelType::Main);
+      appendKernel("//Probe Hash table");
       std::string kernelSize = getKernelSizeVariable();
-      appendKernel("#pragma unroll", KernelType::Main);
-      appendKernel(fmt::format("for (int ITEM = 0; ITEM < ITEMS_PER_THREAD && (ITEM*TB + tid < {0}); ++ITEM) {{", kernelSize), KernelType::Main);
+      appendKernel("#pragma unroll");
+      appendKernel(fmt::format("for (int ITEM = 0; ITEM < ITEMS_PER_THREAD && (ITEM*TB + tid < {0}); ++ITEM) {{", kernelSize));
       if (m_genSelectionCheckUniversally || m_hasInsertedSelection )
-         appendKernel("if (!selection_flags[ITEM]) continue;", KernelType::Main);
-      appendKernel(fmt::format("auto {0} = {1}.find({2}[ITEM]);", SLOT(op), HT(op), key), KernelType::Main);
-      appendKernel(fmt::format("if (!({0} == {1}.end())) {{selection_flags[ITEM] = 0;}}", SLOT(op), HT(op)), KernelType::Main);
-      appendKernel("}", KernelType::Main);
-      appendKernel("//Probe Hash table", KernelType::Count);
-      appendKernel("#pragma unroll", KernelType::Count);
-      appendKernel(fmt::format("for (int ITEM = 0; ITEM < ITEMS_PER_THREAD && (ITEM*TB + tid < {0}); ++ITEM) {{", kernelSize), KernelType::Count);
-      if (m_genSelectionCheckUniversally || m_hasInsertedSelection )
-         appendKernel("if (!selection_flags[ITEM]) continue;", KernelType::Count);
-      appendKernel(fmt::format("auto {0} = {1}.find({2}[ITEM]);", SLOT(op), HT(op), key), KernelType::Count);
-      appendKernel(fmt::format("if (!({0} == {1}.end())) {{selection_flags[ITEM] = 0;}}", SLOT(op), HT(op)), KernelType::Count);
-      appendKernel("}", KernelType::Count);
+         appendKernel("if (!selection_flags[ITEM]) continue;");
+      appendKernel(fmt::format("auto {0} = {1}.find({2}[ITEM]);", SLOT(op), HT(op), key));
+      appendKernel(fmt::format("if (!({0} == {1}.end())) {{selection_flags[ITEM] = 0;}}", SLOT(op), HT(op)));
+      appendKernel("}");
 
       mainArgs[HT(op)] = "HASHTABLE_PROBE_SJ";
       countArgs[HT(op)] = "HASHTABLE_PROBE_SJ";
@@ -680,24 +651,15 @@ class CrystalTupleStreamCode : public TupleStreamCode {
       auto key = MakeKeys(op, keys, KernelType::Main);
 
       std::string kernelSize = getKernelSizeVariable();
-      appendKernel(fmt::format("int64_t {0}[ITEMS_PER_THREAD];", slot_second(op)), KernelType::Main);
-      appendKernel("#pragma unroll", KernelType::Main);
-      appendKernel(fmt::format("for (int ITEM = 0; ITEM < ITEMS_PER_THREAD && (ITEM*TB + tid < {0}); ++ITEM) {{", kernelSize), KernelType::Main);
+      appendKernel(fmt::format("int64_t {0}[ITEMS_PER_THREAD];", slot_second(op)));
+      appendKernel("#pragma unroll");
+      appendKernel(fmt::format("for (int ITEM = 0; ITEM < ITEMS_PER_THREAD && (ITEM*TB + tid < {0}); ++ITEM) {{", kernelSize));
       if (m_genSelectionCheckUniversally || m_hasInsertedSelection )
-         appendKernel("if (!selection_flags[ITEM]) continue;", KernelType::Main);
-      appendKernel(fmt::format("auto {0} = {1}.find({2}[ITEM]);", SLOT(op), HT(op), key), KernelType::Main);
-      appendKernel(fmt::format("if ({0} == {1}.end()) {{selection_flags[ITEM] = 0; continue;}}", SLOT(op), HT(op)), KernelType::Main);
-      appendKernel(fmt::format("{0}[ITEM] = {1}->second;", slot_second(op), SLOT(op)), KernelType::Main);
-      appendKernel("}", KernelType::Main);
-      appendKernel(fmt::format("int64_t {0}[ITEMS_PER_THREAD];", slot_second(op)), KernelType::Count);
-      appendKernel("#pragma unroll", KernelType::Count);
-      appendKernel(fmt::format("for (int ITEM = 0; ITEM < ITEMS_PER_THREAD && (ITEM*TB + tid < {0}); ++ITEM) {{", kernelSize), KernelType::Count);
-      if (m_genSelectionCheckUniversally || m_hasInsertedSelection )
-         appendKernel("if (!selection_flags[ITEM]) continue;", KernelType::Count);
-      appendKernel(fmt::format("auto {0} = {1}.find({2}[ITEM]);", SLOT(op), HT(op), key), KernelType::Count);
-      appendKernel(fmt::format("if ({0} == {1}.end()) {{selection_flags[ITEM] = 0; continue;}}", SLOT(op), HT(op)), KernelType::Count);
-      appendKernel(fmt::format("{0}[ITEM] = {1}->second;", slot_second(op), SLOT(op)), KernelType::Count);
-      appendKernel("}", KernelType::Count);
+         appendKernel("if (!selection_flags[ITEM]) continue;");
+      appendKernel(fmt::format("auto {0} = {1}.find({2}[ITEM]);", SLOT(op), HT(op), key));
+      appendKernel(fmt::format("if ({0} == {1}.end()) {{selection_flags[ITEM] = 0; continue;}}", SLOT(op), HT(op)));
+      appendKernel(fmt::format("{0}[ITEM] = {1}->second;", slot_second(op), SLOT(op)));
+      appendKernel("}");
 
       // add all leftColumn data to this data
       auto baseRelations = getBaseRelations(leftColumnData);
