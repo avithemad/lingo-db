@@ -79,6 +79,11 @@ for QUERY in "${QUERIES[@]}"; do
   echo $RUN_SQL
   $RUN_SQL > $OUTPUT_FILE
 
+  if [ $? -ne 0 ]; then
+    echo -e "\033[0;31mError running run-sql for Query $QUERY\033[0m"
+    exit 1
+  fi
+
   # format the generated cuda code
   FORMAT_CMD="clang-format -i output.cu -style=Microsoft"
   echo $FORMAT_CMD
