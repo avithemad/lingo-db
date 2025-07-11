@@ -1,16 +1,25 @@
 #!/bin/bash
 
-# The first argument is the directory where sql-plan-compiler is
-SQL_PLAN_COMPILER_DIR="$1"
-if [ -z "$SQL_PLAN_COMPILER_DIR" ]; then
-  echo "Usage: $0 <sql-plan-compiler-dir> <cuco-src-path>"
+# The first argument is the scale factor
+SCALE_FACTOR="$1"
+if [ -z "$SCALE_FACTOR" ]; then
+  echo "Usage: $0 <scale_factor>"
   exit 1
 fi
 
-# Second argument is the CUCO source path
-CUCO_SRC_PATH="$2"
-if [ -z "$CUCO_SRC_PATH" ]; then
-  echo "Usage: $0 <sql-plan-compiler-dir> <cuco-src-path>"
+# Check if SQL_PLAN_COMPILER_DIR environment variable is set
+if [ -n "$SQL_PLAN_COMPILER_DIR" ]; then
+  echo "Using SQL_PLAN_COMPILER_DIR from environment variable: $SQL_PLAN_COMPILER_DIR"
+else
+  echo "SQL_PLAN_COMPILER_DIR environment variable is not set."
+  exit 1
+fi
+
+# Check if CUCO_SRC_PATH environment variable is set
+if [ -n "$CUCO_SRC_PATH" ]; then
+  echo "Using CUCO_SRC_PATH from environment variable: $CUCO_SRC_PATH"
+else
+  echo "CUCO_SRC_PATH environment variable is not set."
   exit 1
 fi
 
@@ -29,59 +38,103 @@ REPO_DIR="$(dirname "$TEST_DIR")"
 TPCH_DIR="$REPO_DIR/resources/sql/tpch"
 BUILD_DIR="$REPO_DIR/build/$BUILD_NAME"
 
-
 # Set the data directory if not already set
 if [ -z "$TPCH_DATA_DIR" ]; then
-  TPCH_DATA_DIR="$REPO_DIR/resources/data/tpch-1"
+  TPCH_DATA_DIR="$REPO_DIR/resources/data/tpch-$SCALE_FACTOR"
 fi
 
-# List of queries to run - 1, 3, 5, 6, 7, 8, 9
-QUERIES=(1 3 5 6 7 9 13)
-# QUERIES=(1)
+QUERIES=(1 3 4 5 6 7 8 9 10 12 13 14 16 17 18 19 20)
 
-# Iterate over the queries
+TPCH_CUDA_GEN_DIR="$SQL_PLAN_COMPILER_DIR/gpu-db/tpch-$SCALE_FACTOR"
+echo "TPCH_CUDA_GEN_DIR: $TPCH_CUDA_GEN_DIR"
+pushd $TPCH_CUDA_GEN_DIR
+MAKE_RUNTIME="make build-runtime CUCO_SRC_PATH=$CUCO_SRC_PATH"
+echo $MAKE_RUNTIME
+$MAKE_RUNTIME
+
+# cleanup the result files, built shared objects
+rm -f build/*.codegen.so # do this so that we don't run other queries by mistake
+rm -f $SCRIPT_DIR/*.csv
+rm -f $TPCH_CUDA_GEN_DIR/*.codegen.cu
+rm -f $TPCH_CUDA_GEN_DIR/*.csv
+rm -f $TPCH_CUDA_GEN_DIR/*.log
+
+# Check if the make command was successful
+if [ $? -ne 0 ]; then
+  echo -e "\033[0;31mError building runtime!\033[0m"
+  exit 1
+fi
+
+popd
+
+CD_CMD="cd $TPCH_CUDA_GEN_DIR"
+echo $CD_CMD
+$CD_CMD
+
+# generate the cuda files
 for QUERY in "${QUERIES[@]}"; do
   # First run the run-sql tool to generate CUDA and get reference output
+  OUTPUT_FILE=$SCRIPT_DIR/"tpch-$QUERY-ref.csv"
   RUN_SQL="$BUILD_DIR/run-sql $TPCH_DIR/$QUERY.sql $TPCH_DATA_DIR --gen-cuda-crystal-code"
-  OUTPUT_FILE="tpch-$QUERY-ref.csv"
   echo $RUN_SQL
   $RUN_SQL > $OUTPUT_FILE
 
-  NOCOUNT="$QUERY.crystal"
+  # format the generated cuda code
+  FORMAT_CMD="clang-format -i output.cu -style=Microsoft"
+  echo $FORMAT_CMD
+  $FORMAT_CMD
 
   # Now run the generated CUDA code
-  CP_CMD="cp output.cu $SQL_PLAN_COMPILER_DIR/gpu-db/tpch/q$NOCOUNT.codegen.cu"
+  CP_CMD="cp output.cu $TPCH_CUDA_GEN_DIR/q$QUERY.crystal.codegen.cu"
   echo $CP_CMD
   $CP_CMD
+done
 
-  CD_CMD="cd $SQL_PLAN_COMPILER_DIR/gpu-db/tpch"
-  echo $CD_CMD
-  $CD_CMD
-
-  MAKE_QUERY="make query Q=$NOCOUNT CUCO_SRC_PATH=$CUCO_SRC_PATH"
+# generate the cuda files
+for QUERY in "${QUERIES[@]}"; do
+  MAKE_QUERY="make query Q=$QUERY.crystal CUCO_SRC_PATH=$CUCO_SRC_PATH"
   echo $MAKE_QUERY
-  $MAKE_QUERY
+  $MAKE_QUERY &
+  
+  # Check if the make command was successful
+done
 
-  MAKE_RUNTIME="make build-runtime CUCO_SRC_PATH=$CUCO_SRC_PATH"
-  echo $MAKE_RUNTIME
-  $MAKE_RUNTIME
+wait
 
-  RUN_QUERY_CMD="build/dbruntime --data_dir $TPCH_DATA_DIR/ --query_num $NOCOUNT"
-  echo $RUN_QUERY_CMD
-  $RUN_QUERY_CMD > "cuda-tpch-$NOCOUNT.csv"
+FAILED_QUERIES=()
+for QUERY in "${QUERIES[@]}"; do
+  if [ ! -f build/q$QUERY.crystal.codegen.so ]; then
+    echo -e "\033[0;31mError compiling Query $QUERY\033[0m"
+    FAILED_QUERIES+=($QUERY)
+  fi
+done
 
-  cd -
+# run all the queries
+# Convert QUERIES array to comma-separated string
+QUERIES_STR=""
+for i in "${QUERIES[@]}"; do
+  QUERIES_STR+="$i.crystal,"
+done
+QUERIES_STR="${QUERIES_STR%,*}" # remove trailing comma
 
-  PYTHON_CMD="python $SCRIPT_DIR/compare_tpch_outputs.py $OUTPUT_FILE $SQL_PLAN_COMPILER_DIR/gpu-db/tpch/cuda-tpch-$NOCOUNT.csv"
+RUN_QUERY_CMD="build/dbruntime --data_dir $TPCH_DATA_DIR/ --query_num $QUERIES_STR"
+echo $RUN_QUERY_CMD
+$RUN_QUERY_CMD
+
+cd -
+
+for QUERY in "${QUERIES[@]}"; do
+  OUTPUT_FILE="tpch-$QUERY-ref.csv"
+  PYTHON_CMD="python $SCRIPT_DIR/compare_tpch_outputs.py $OUTPUT_FILE $TPCH_CUDA_GEN_DIR/cuda-tpch-$QUERY.crystal.csv"
   echo $PYTHON_CMD
   $PYTHON_CMD
 
   # If the comparison fails, add query to the failed list
   if [ $? -ne 0 ]; then
-    echo "Query $QUERY failed"
+    echo -e "\033[0;31mQuery $QUERY failed\033[0m"
     FAILED_QUERIES+=($QUERY)
   else
-    echo "Query $QUERY passed"
+    echo -e "\033[0;32mQuery $QUERY passed\033[0m"
     PASSED_QUERIES+=($QUERY)
   fi
 done

@@ -1,0 +1,131 @@
+---
+tpch-q1.crystal.nocount
+main_1, 11.7944316864
+main_3, 0.0163839999586
+total_query, 15.896
+---
+tpch-q3.crystal.nocount
+main_1, 0.0358400009573
+main_3, 0.318464010954
+main_5, 0.811007976532
+main_7, 0.0119679998606
+total_query, 2.429
+---
+tpch-q4.crystal.nocount
+main_1, 1.47334396839
+main_3, 0.122592002153
+main_5, 0.00918400008231
+total_query, 3.002
+---
+tpch-q5.crystal.nocount
+main_1, 0.0122880004346
+main_3, 0.019455999136
+main_5, 0.0255999993533
+main_7, 0.1842879951
+main_9, 0.0317439995706
+main_11, 0.962815999985
+main_13, 0.0102399997413
+total_query, 2.329
+---
+tpch-q6.crystal.nocount
+main_1, 0.684927999973
+main_3, 0.00921600032598
+total_query, 1.186
+---
+tpch-q7.crystal.nocount
+main_1, 0.0174080003053
+main_3, 0.0255999993533
+main_5, 0.0215039998293
+main_7, 0.278528004885
+main_9, 0.0204799994826
+main_11, 0.804863989353
+main_13, 0.0102399997413
+total_query, 2.239
+---
+tpch-q8.crystal.nocount
+main_1, 0.0235520005226
+main_3, 0.0143360001966
+main_5, 0.452607989311
+main_7, 0.0716800019145
+main_9, 0.0235520005226
+main_11, 0.0335359983146
+main_13, 0.0143360001966
+main_15, 0.811007976532
+main_17, 0.0111680002883
+total_query, 2.597
+---
+tpch-q9.crystal.nocount
+main_1, 0.0146239995956
+main_3, 0.0381439998746
+main_5, 1.26771199703
+main_7, 0.0798079967499
+main_9, 0.670560002327
+main_11, 9.98809623718
+main_13, 0.0121280001476
+total_query, 28.609
+---
+tpch-q10.crystal.nocount
+main_1, 0.0665600001812
+main_3, 0.015359999612
+main_5, 0.221184000373
+main_7, 0.730112016201
+main_9, 0.0143360001966
+total_query, 2.201
+---
+tpch-q12.crystal.nocount
+main_1, 1.27078402042
+main_3, 0.714752018452
+main_5, 0.010335999541
+total_query, 2.857
+---
+tpch-q13.crystal.nocount
+main_1, 0.0614399984479
+main_3, 0.816128015518
+main_5, 0.0583680011332
+main_7, 0.0102399997413
+total_query, 2.644
+---
+tpch-q14.crystal.nocount
+main_1, 0.0665600001812
+main_3, 0.664575994015
+main_5, 0.0111999996006
+total_query, 1.359
+---
+tpch-q16.crystal.nocount
+main_1, 0.0481280013919
+main_3, 0.0798719972372
+main_5, 0.0983040034771
+main_7, 0.0104000000283
+total_query, 1.06
+---
+tpch-q17.crystal.nocount
+main_1, 0.022528000176
+main_3, 0.391167998314
+main_5, 0.018432000652
+main_7, 0.497887998819
+main_9, 0.0111680002883
+total_query, 3.685
+---
+tpch-q18.crystal.nocount
+main_1, 2.24255990982
+main_3, 0.10342399776
+main_5, 0.0634879991412
+main_7, 0.61747199297
+main_9, 0.752640008926
+main_11, 0.0141759999096
+total_query, 9.012
+---
+tpch-q19.crystal.nocount
+main_1, 0.16908800602
+main_3, 1.50121605396
+main_5, 0.0102399997413
+total_query, 2.367
+---
+tpch-q20.crystal.nocount
+main_1, 0.0612480007112
+main_3, 0.0993279963732
+main_5, 0.694271981716
+main_7, 0.0143360001966
+main_9, 0.025407999754
+main_11, 0.0215039998293
+total_query, 2.174

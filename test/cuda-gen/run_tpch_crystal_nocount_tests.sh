@@ -36,18 +36,23 @@ if [ -z "$TPCH_DATA_DIR" ]; then
 fi
 
 # List of queries to run - 1, 3, 5, 6, 7, 8, 9
-QUERIES=(1 3 5 6 7 9 13)
+QUERIES=(1 3 4 5 6 7 8 9 10 12 13 14 16 17 18 19 20)
 # QUERIES=(1)
+pushd $SQL_PLAN_COMPILER_DIR/gpu-db/tpch
+MAKE_RUNTIME="make build-runtime CUCO_SRC_PATH=$CUCO_SRC_PATH"
+echo $MAKE_RUNTIME
+$MAKE_RUNTIME
+popd
 
 # Iterate over the queries
 for QUERY in "${QUERIES[@]}"; do
   # First run the run-sql tool to generate CUDA and get reference output
-  RUN_SQL="$BUILD_DIR/run-sql $TPCH_DIR/$QUERY.sql $TPCH_DATA_DIR --gen-cuda-crystal-code"
+  RUN_SQL="$BUILD_DIR/run-sql $TPCH_DIR/$QUERY.sql $TPCH_DATA_DIR --gen-cuda-crystal-code-no-count"
   OUTPUT_FILE="tpch-$QUERY-ref.csv"
   echo $RUN_SQL
   $RUN_SQL > $OUTPUT_FILE
 
-  NOCOUNT="$QUERY.crystal"
+  NOCOUNT="$QUERY.crystal.nocount"
 
   # Now run the generated CUDA code
   CP_CMD="cp output.cu $SQL_PLAN_COMPILER_DIR/gpu-db/tpch/q$NOCOUNT.codegen.cu"
@@ -62,13 +67,9 @@ for QUERY in "${QUERIES[@]}"; do
   echo $MAKE_QUERY
   $MAKE_QUERY
 
-  MAKE_RUNTIME="make build-runtime CUCO_SRC_PATH=$CUCO_SRC_PATH"
-  echo $MAKE_RUNTIME
-  $MAKE_RUNTIME
-
   RUN_QUERY_CMD="build/dbruntime --data_dir $TPCH_DATA_DIR/ --query_num $NOCOUNT"
   echo $RUN_QUERY_CMD
-  $RUN_QUERY_CMD > "cuda-tpch-$NOCOUNT.csv"
+  $RUN_QUERY_CMD > "cuda-tpch-$NOCOUNT.csv" 2> "cuda-tpch-$NOCOUNT.log"
 
   cd -
 

@@ -1,7 +1,6 @@
 -- TPC-H Query 18
 
 select
-        c_name,
         c_custkey,
         o_orderkey,
         o_orderdate,
@@ -24,7 +23,6 @@ where
         and c_custkey = o_custkey
         and o_orderkey = l_orderkey
 group by
-        c_name,
         c_custkey,
         o_orderkey,
         o_orderdate,
@@ -32,4 +30,3 @@ group by
 order by
         o_totalprice desc,
         o_orderdate
-limit 100

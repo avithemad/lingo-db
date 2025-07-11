@@ -38,11 +38,14 @@ fi
 # List of queries to run
 
 # following are the failed tests due to use of static_map for join
-# QUERIES=(23 33 42 43)
-# QUERIES=(11 12 13 21 22 31 32 34 41)
 QUERIES=(11 12 13 21 22 23 31 32 33 34 41 42 43)
 # QUERIES=(11)
 
+pushd $SQL_PLAN_COMPILER_DIR/gpu-db/ssb
+MAKE_RUNTIME="make build-runtime CUCO_SRC_PATH=$CUCO_SRC_PATH"
+echo $MAKE_RUNTIME
+$MAKE_RUNTIME
+popd
 # Iterate over the queries
 for QUERY in "${QUERIES[@]}"; do
   # First run the run-sql tool to generate CUDA and get reference output
@@ -65,13 +68,9 @@ for QUERY in "${QUERIES[@]}"; do
   echo $MAKE_QUERY
   $MAKE_QUERY
 
-  MAKE_RUNTIME="make build-runtime CUCO_SRC_PATH=$CUCO_SRC_PATH"
-  echo $MAKE_RUNTIME
-  $MAKE_RUNTIME
-
   RUN_QUERY_CMD="build/dbruntime --data_dir $SSB_DATA_DIR/ --query_num $NOCOUNT"
   echo $RUN_QUERY_CMD
-  $RUN_QUERY_CMD > "cuda-ssb-$NOCOUNT.csv"
+  $RUN_QUERY_CMD > "cuda-ssb-$NOCOUNT.csv" 2> "cuda-ssb-$NOCOUNT.log"
 
   cd -
 
