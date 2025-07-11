@@ -5,44 +5,9 @@ namespace cudacodegen {
 
 static int StreamId = 0;
 
-class CrystalTupleStreamCode {
-   std::vector<std::string> mainCode;
-   std::vector<std::string> countCode;
-   std::vector<std::string> controlCode;
-   int forEachScopes = 0;
-   std::map<std::string, ColumnMetadata*> columnData;
-   std::set<std::string> loadedColumns;
-   std::set<std::string> loadedCountColumns;
-   std::set<std::string> deviceFrees;
-   std::vector<std::pair<mlir::Operation*, std::string>> profileInfo;
-   std::set<std::string> hostFrees;
-
-   std::map<std::string, std::string> mlirToGlobalSymbol; // used when launching the kernel.
-
-   std::map<std::string, std::string> mainArgs;
-   std::map<std::string, std::string> countArgs;
-   bool m_hasInsertedSelection = false;
-   bool m_genSelectionCheckUniversally = true;
-   int id;
-   void appendKernel(std::string stmt, KernelType ty) {
-      if (ty == KernelType::Main)
-         mainCode.push_back(stmt);
-      else
-         countCode.push_back(stmt);
-   }
-
-   void appendControl(std::string stmt) {
-      controlCode.push_back(stmt);
-   }
-
-   std::string getKernelName(KernelType ty) {
-      if (ty == KernelType::Main)
-         return "main";
-      else
-         return "count";
-   }
-
-   std::string launchKernel(KernelType ty) {
+class CrystalTupleStreamCode : public TupleStreamCode {
+   
+   std::string launchKernel(KernelType ty) override {
       std::string _kernelName;
       std::map<std::string, std::string> _args;
       if (ty == KernelType::Main) {
@@ -62,21 +27,6 @@ class CrystalTupleStreamCode {
          sep = ", ";
       }
       return fmt::format("{0}_{1}<<<std::ceil((float){2}/(float)TILE_SIZE), TILE_SIZE/ITEMS_PER_THREAD>>>({3});", _kernelName, GetId((void*) this), size, args);
-   }
-
-   void genLaunchKernel(KernelType ty) {
-      if (generateKernelTimingCode())
-         appendControl("cudaEventRecord(start);");
-      appendControl(launchKernel(ty));
-      if (generateKernelTimingCode()) {
-         appendControl("cudaEventRecord(stop);");
-         auto kernelName = getKernelName(ty) + "_" + GetId((void*) this);
-         auto kernelTimeVarName = kernelName + "_time";
-         appendControl("float " + kernelTimeVarName + ";");
-         appendControl(fmt::format("cudaEventSynchronize(stop);"));
-         appendControl(fmt::format("cudaEventElapsedTime(&{0}, start, stop);", kernelTimeVarName));
-         appendControl(fmt::format("std::cout << \"{0}\" << \", \" << {1} << std::endl;", kernelName, kernelTimeVarName));
-      }
    }
 
    public:

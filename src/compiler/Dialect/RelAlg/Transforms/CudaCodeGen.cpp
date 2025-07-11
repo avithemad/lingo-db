@@ -7,54 +7,13 @@ static bool gCudaCrystalCodeGenEnabled = false;
 static bool gCudaCrystalCodeGenNoCountEnabled = false;
 
 namespace cudacodegen {
-using namespace lingodb::compiler::dialect;
 
 static int StreamId = 0;
 
-class TupleStreamCode {
-   std::vector<std::string> mainCode;
-   std::vector<std::string> countCode;
-   std::vector<std::string> controlCode;
-   int forEachScopes = 0;
-   std::map<std::string, ColumnMetadata*> columnData;
-   std::set<std::string> loadedColumns;
-   std::set<std::string> loadedCountColumns;
-   std::set<std::string> deviceFrees;
-   std::set<std::string> hostFrees;
-
-   std::map<std::string, std::string> mlirToGlobalSymbol; // used when launching the kernel.
-
-   std::map<std::string, std::string> mainArgs;
-   std::map<std::string, std::string> countArgs;
+class HyperTupleStreamCode : public TupleStreamCode {
    std::map<KernelType, size_t> m_threadActiveScopeCount;
 
-   int id;
-
-   void appendKernel(std::string stmt, KernelType ty = KernelType::Main_And_Count) {
-      if (ty == KernelType::Main)
-         mainCode.push_back(stmt);
-      else if (ty == KernelType::Count)
-         countCode.push_back(stmt);
-      else if (ty == KernelType::Main_And_Count) {
-         mainCode.push_back(stmt);
-         countCode.push_back(stmt);
-      } else {
-         assert(false && "Unknown kernel type");
-      }
-   }
-
-   void appendControl(std::string stmt) {
-      controlCode.push_back(stmt);
-   }
-
-   std::string getKernelName(KernelType ty) {
-      if (ty == KernelType::Main)
-         return "main";
-      else
-         return "count";
-   }
-
-   std::string launchKernel(KernelType ty) {
+   std::string launchKernel(KernelType ty) override {
       std::string _kernelName;
       std::map<std::string, std::string> _args;
       if (ty == KernelType::Main) {
@@ -82,23 +41,9 @@ class TupleStreamCode {
       appendKernel("SHUFFLE_BUFFER_INIT(128);", kernelType);
    }
 
-   void genLaunchKernel(KernelType ty) {
-      if (generateKernelTimingCode())
-         appendControl("cudaEventRecord(start);");
-      appendControl(launchKernel(ty));
-      if (generateKernelTimingCode()) {
-         appendControl("cudaEventRecord(stop);");
-         auto kernelName = getKernelName(ty) + "_" + GetId((void*) this);
-         auto kernelTimeVarName = kernelName + "_time";
-         appendControl("float " + kernelTimeVarName + ";");
-         appendControl(fmt::format("cudaEventSynchronize(stop);"));
-         appendControl(fmt::format("cudaEventElapsedTime(&{0}, start, stop);", kernelTimeVarName));
-         appendControl(fmt::format("std::cout << \"{0}\" << \", \" << {1} << std::endl;", kernelName, kernelTimeVarName));
-      }
-   }
 
    public:
-   TupleStreamCode(relalg::BaseTableOp& baseTableOp) {
+   HyperTupleStreamCode(relalg::BaseTableOp& baseTableOp) {
       std::string tableName = baseTableOp.getTableIdentifier().data();
       std::string tableSize = tableName + "_size";
       mlirToGlobalSymbol[tableSize] = tableSize;
@@ -132,7 +77,7 @@ class TupleStreamCode {
       StreamId++;
       return;
    }
-   TupleStreamCode(mlir::Operation* op) {
+   HyperTupleStreamCode(mlir::Operation* op) {
       auto aggOp = mlir::dyn_cast_or_null<relalg::AggregationOp>(op);
       if (!aggOp) assert(false && "Expected aggregation operation");
       std::string tableSize = COUNT(op);
@@ -186,7 +131,7 @@ class TupleStreamCode {
       StreamId++;
       return;
    }
-   ~TupleStreamCode() {
+   ~HyperTupleStreamCode() {
       for (auto p : columnData) delete p.second;
    }
    void RenamingOp(relalg::RenamingOp renamingOp) {
@@ -1289,8 +1234,8 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
    public:
    MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(CudaCodeGen)
 
-   std::map<mlir::Operation*, TupleStreamCode*> streamCodeMap;
-   std::vector<TupleStreamCode*> kernelSchedule;
+   std::map<mlir::Operation*, HyperTupleStreamCode*> streamCodeMap;
+   std::vector<HyperTupleStreamCode*> kernelSchedule;
 
    CudaCodeGen(bool compilingSSB)
       : m_compilingSSB(compilingSSB) {}
@@ -1299,7 +1244,7 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
       getOperation().walk([&](mlir::Operation* op) {
          if (auto selection = llvm::dyn_cast<relalg::SelectionOp>(op)) {
             mlir::Operation* stream = selection.getRelMutable().get().getDefiningOp();
-            TupleStreamCode* streamCode = streamCodeMap[stream];
+            HyperTupleStreamCode* streamCode = streamCodeMap[stream];
             if (!streamCode) {
                stream->dump();
                assert(false && "No downstream operation found for selection.");
@@ -1362,7 +1307,7 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
             streamCodeMap[op] = rightStreamCode;
          } else if (auto aggregationOp = llvm::dyn_cast<relalg::AggregationOp>(op)) {
             mlir::Operation* stream = aggregationOp.getRelMutable().get().getDefiningOp();
-            TupleStreamCode* streamCode = streamCodeMap[stream];
+            HyperTupleStreamCode* streamCode = streamCodeMap[stream];
             if (!streamCode) {
                stream->dump();
                assert(false && "No downstream operation for aggregation found");
@@ -1372,11 +1317,11 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
             streamCode->AggregateInHashTable(op); // main part
             kernelSchedule.push_back(streamCode);
 
-            auto newStreamCode = new TupleStreamCode(op);
+            auto newStreamCode = new HyperTupleStreamCode(op);
             streamCodeMap[op] = newStreamCode;
          } else if (auto scanOp = llvm::dyn_cast<relalg::BaseTableOp>(op)) {
             std::string tableName = scanOp.getTableIdentifier().data();
-            TupleStreamCode* streamCode = new TupleStreamCode(scanOp);
+            HyperTupleStreamCode* streamCode = new HyperTupleStreamCode(scanOp);
 
             streamCodeMap[op] = streamCode;
          } else if (auto mapOp = llvm::dyn_cast<relalg::MapOp>(op)) {
@@ -1406,7 +1351,7 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
             streamCodeMap[op] = streamCodeMap[sortOp.getRelMutable().get().getDefiningOp()];
          } else if (auto renamingOp = llvm::dyn_cast<relalg::RenamingOp>(op)) {
             mlir::Operation* stream = renamingOp.getRelMutable().get().getDefiningOp();
-            TupleStreamCode* streamCode = streamCodeMap[stream];
+            HyperTupleStreamCode* streamCode = streamCodeMap[stream];
             if (!streamCode) {
                stream->dump();
                assert(false && "No downstream operation for renaming operation found");
