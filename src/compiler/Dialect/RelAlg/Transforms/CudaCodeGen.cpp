@@ -971,8 +971,8 @@ class TupleStreamCode {
                appendKernel(fmt::format("if (!{0}.contains({1})) return;", BF(op), key));
 
             appendKernel(fmt::format("auto {0} = {1}.find({2});", SLOT(op), HT(op), key));
+            appendKernel(fmt::format("if ({0} == {1}.end()) return;", SLOT(op), HT(op)));
          }
-         appendKernel(fmt::format("if ({0} == {1}.end()) return;", SLOT(op), HT(op)));
       }
 
       // add all leftColumn data to this data
