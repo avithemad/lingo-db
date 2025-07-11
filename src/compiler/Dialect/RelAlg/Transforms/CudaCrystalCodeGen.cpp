@@ -5,7 +5,7 @@ namespace cudacodegen {
 
 static int StreamId = 0;
 
-class TupleStreamCode {
+class CrystalTupleStreamCode {
    std::vector<std::string> mainCode;
    std::vector<std::string> countCode;
    std::vector<std::string> controlCode;
@@ -80,7 +80,7 @@ class TupleStreamCode {
    }
 
    public:
-   TupleStreamCode(relalg::BaseTableOp& baseTableOp) {
+   CrystalTupleStreamCode(relalg::BaseTableOp& baseTableOp) {
       std::string tableName = baseTableOp.getTableIdentifier().data();
       std::string tableSize = tableName + "_size";
       mlirToGlobalSymbol[tableSize] = tableSize;
@@ -119,7 +119,7 @@ class TupleStreamCode {
       StreamId++;
       return;
    }
-   TupleStreamCode(mlir::Operation* op) {
+   CrystalTupleStreamCode(mlir::Operation* op) {
       auto aggOp = mlir::dyn_cast_or_null<relalg::AggregationOp>(op);
       if (!aggOp) assert(false && "Expected aggregation operation");
       std::string tableSize = COUNT(op);
@@ -181,7 +181,7 @@ class TupleStreamCode {
       StreamId++;
       return;
    }
-   ~TupleStreamCode() {
+   ~CrystalTupleStreamCode() {
       for (auto p : columnData) delete p.second;
    }
    void PushProfileInfo(mlir::Operation* op, std::string opName) {
@@ -1346,14 +1346,14 @@ class CudaCrystalCodeGen : public mlir::PassWrapper<CudaCrystalCodeGen, mlir::Op
    public:
    MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(CudaCrystalCodeGen)
 
-   std::map<mlir::Operation*, TupleStreamCode*> streamCodeMap;
-   std::vector<TupleStreamCode*> kernelSchedule;
+   std::map<mlir::Operation*, CrystalTupleStreamCode*> streamCodeMap;
+   std::vector<CrystalTupleStreamCode*> kernelSchedule;
 
    void runOnOperation() override {
       getOperation().walk([&](mlir::Operation* op) {
          if (auto selection = llvm::dyn_cast<relalg::SelectionOp>(op)) {
             mlir::Operation* stream = selection.getRelMutable().get().getDefiningOp();
-            TupleStreamCode* streamCode = streamCodeMap[stream];
+            CrystalTupleStreamCode* streamCode = streamCodeMap[stream];
             if (!streamCode) {
                stream->dump();
                assert(false && "No downstream operation found for selection.");
@@ -1459,7 +1459,7 @@ class CudaCrystalCodeGen : public mlir::PassWrapper<CudaCrystalCodeGen, mlir::Op
             streamCodeMap[op] = rightStreamCode;
          } else if (auto aggregationOp = llvm::dyn_cast<relalg::AggregationOp>(op)) {
             mlir::Operation* stream = aggregationOp.getRelMutable().get().getDefiningOp();
-            TupleStreamCode* streamCode = streamCodeMap[stream];
+            CrystalTupleStreamCode* streamCode = streamCodeMap[stream];
             if (!streamCode) {
                stream->dump();
                assert(false && "No downstream operation for aggregation found");
@@ -1482,11 +1482,11 @@ class CudaCrystalCodeGen : public mlir::PassWrapper<CudaCrystalCodeGen, mlir::Op
             }
             kernelSchedule.push_back(streamCode);
 
-            auto newStreamCode = new TupleStreamCode(op);
+            auto newStreamCode = new CrystalTupleStreamCode(op);
             streamCodeMap[op] = newStreamCode;
          } else if (auto scanOp = llvm::dyn_cast<relalg::BaseTableOp>(op)) {
             std::string tableName = scanOp.getTableIdentifier().data();
-            TupleStreamCode* streamCode = new TupleStreamCode(scanOp);
+            CrystalTupleStreamCode* streamCode = new CrystalTupleStreamCode(scanOp);
 
             streamCodeMap[op] = streamCode;
          } else if (auto mapOp = llvm::dyn_cast<relalg::MapOp>(op)) {
@@ -1537,7 +1537,7 @@ class CudaCrystalCodeGen : public mlir::PassWrapper<CudaCrystalCodeGen, mlir::Op
             streamCodeMap[op] = streamCodeMap[sortOp.getRelMutable().get().getDefiningOp()];
          } else if (auto renamingOp = llvm::dyn_cast<relalg::RenamingOp>(op)) {
             mlir::Operation* stream = renamingOp.getRelMutable().get().getDefiningOp();
-            TupleStreamCode* streamCode = streamCodeMap[stream];
+            CrystalTupleStreamCode* streamCode = streamCodeMap[stream];
             if (!streamCode) {
                stream->dump();
                assert(false && "No downstream operation for renaming operation found");
