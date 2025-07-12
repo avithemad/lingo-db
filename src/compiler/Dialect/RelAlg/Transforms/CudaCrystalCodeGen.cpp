@@ -1221,8 +1221,6 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
 class CudaCrystalCodeGen : public mlir::PassWrapper<CudaCrystalCodeGen, mlir::OperationPass<mlir::func::FuncOp>> {
    virtual llvm::StringRef getArgument() const override { return "relalg-cuda-code-gen-crystal"; }
 
-   bool m_compilingSSB;
-
    public:
    MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(CudaCrystalCodeGen)
 

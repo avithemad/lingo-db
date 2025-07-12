@@ -228,6 +228,14 @@ protected:
       return baseRelations;
    }
 
+   std::string getKernelSizeVariable() {
+      for (auto it : mainArgs)
+         if (it.second == "size_t") return it.first;
+      assert(false && "this kernel is supposed to have a size parameter");
+      return "";
+   }
+
+public:
    void printControl(std::ostream& stream) {
       for (auto line : controlCode) {
          stream << line << std::endl;
@@ -240,12 +248,6 @@ protected:
       for (auto hf : hostFrees) {
          stream << fmt::format("free({});\n", hf);
       }
-   }
-   std::string getKernelSizeVariable() {
-      for (auto it : mainArgs)
-         if (it.second == "size_t") return it.first;
-      assert(false && "this kernel is supposed to have a size parameter");
-      return "";
    }
 };
 

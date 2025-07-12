@@ -1204,16 +1204,13 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
 class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<mlir::func::FuncOp>> {
    virtual llvm::StringRef getArgument() const override { return "relalg-cuda-code-gen"; }
 
-   bool m_compilingSSB;
-
    public:
    MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(CudaCodeGen)
 
    std::map<mlir::Operation*, HyperTupleStreamCode*> streamCodeMap;
    std::vector<HyperTupleStreamCode*> kernelSchedule;
 
-   CudaCodeGen(bool compilingSSB)
-      : m_compilingSSB(compilingSSB) {}
+   CudaCodeGen() {}
 
    void runOnOperation() override {
       getOperation().walk([&](mlir::Operation* op) {
@@ -1422,7 +1419,7 @@ std::clog << \"Auxiliary memory: \" << aux_mem / (1024) << \" KB\" << std::endl;
 }
 
 std::unique_ptr<mlir::Pass> relalg::createCudaCodeGenPass() {
-   return std::make_unique<cudacodegen::CudaCodeGen>(gCompilingSSB);
+   return std::make_unique<cudacodegen::CudaCodeGen>();
 }
 
 void relalg::addCudaCodeGenPass(mlir::OpPassManager& pm) {
