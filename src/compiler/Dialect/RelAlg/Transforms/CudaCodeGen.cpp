@@ -674,6 +674,10 @@ class HyperTupleStreamCode : public TupleStreamCode {
       auto aggOp = mlir::dyn_cast_or_null<relalg::AggregationOp>(op);
       if (!aggOp) assert(false && "CreateAggregationHashTable expects aggregation op as a parameter!");
       mlir::ArrayAttr groupByKeys = aggOp.getGroupByCols();
+      if (groupByKeys.empty()){ // we are doing a global aggregation
+         appendControl(fmt::format("size_t {0} = 1;", COUNT(op))); // just create a count variable of 1
+         return;
+      }
       auto key = MakeKeys(op, groupByKeys, KernelType::Count);
       appendKernel("// Create aggregation hash table", KernelType::Count);
       appendKernel(fmt::format("{0}.insert(cuco::pair{{{1}, 1}});", HT(op), key), KernelType::Count);
@@ -713,11 +717,15 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       auto aggOp = mlir::dyn_cast_or_null<relalg::AggregationOp>(op);
       if (!aggOp) assert(false && "CreateAggregationHashTable expects aggregation op as a parameter!");
       mlir::ArrayAttr groupByKeys = aggOp.getGroupByCols();
-      auto key = MakeKeys(op, groupByKeys, KernelType::Main);
-      mainArgs[HT(op)] = "HASHTABLE_FIND";
-      mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::find)", HT(op));
-      appendKernel("// Aggregate in hashtable", KernelType::Main);
-      appendKernel(fmt::format("auto {0} = {1}.find({2})->second;", buf_idx(op), HT(op), key), KernelType::Main);
+      if (!groupByKeys.empty()) {
+         auto key = MakeKeys(op, groupByKeys, KernelType::Main);
+         mainArgs[HT(op)] = "HASHTABLE_FIND";
+         mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::find)", HT(op));
+         appendKernel("// Aggregate in hashtable", KernelType::Main);
+         appendKernel(fmt::format("auto {0} = {1}.find({2})->second;", buf_idx(op), HT(op), key), KernelType::Main);
+      } else {
+         appendKernel(fmt::format("auto {0} = 0;", buf_idx(op)), KernelType::Main);
+      }
       auto& aggRgn = aggOp.getAggrFunc();
       mlir::ArrayAttr computedCols = aggOp.getComputedCols(); // these are columndefs
       appendControl("//Aggregate in hashtable");

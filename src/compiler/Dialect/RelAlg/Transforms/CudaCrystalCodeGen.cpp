@@ -676,8 +676,12 @@ class CrystalTupleStreamCode : public TupleStreamCode {
       auto aggOp = mlir::dyn_cast_or_null<relalg::AggregationOp>(op);
       if (!aggOp) assert(false && "CreateAggregationHashTable expects aggregation op as a parameter!");
       mlir::ArrayAttr groupByKeys = aggOp.getGroupByCols();
+      if (groupByKeys.empty()){ // we are doing a global aggregation
+         appendControl(fmt::format("size_t {0} = 1;", COUNT(op))); // just create a count variable of 1
+         return;
+      }
       auto key = MakeKeys(op, groupByKeys, KernelType::Count);
-      appendKernel("//Create aggregation hash table", KernelType::Count);
+      appendKernel("// Create aggregation hash table", KernelType::Count);
       appendKernel("#pragma unroll", KernelType::Count);
       appendKernel(fmt::format("for (int ITEM = 0; ITEM < ITEMS_PER_THREAD && (ITEM*TB + tid < {0}); ++ITEM) {{", getKernelSizeVariable()), KernelType::Count);
       appendKernel("if (!selection_flags[ITEM]) continue;", KernelType::Count);
@@ -699,7 +703,7 @@ class CrystalTupleStreamCode : public TupleStreamCode {
          }
       }
       assert(ht_size != "0" && "hash table for aggregation is sizing to be 0!!");
-      appendControl("//Create aggregation hash table");
+      appendControl("// Create aggregation hash table");
       appendControl(fmt::format("auto d_{0} = cuco::static_map{{ (int){1}*2, cuco::empty_key{{({2})-1}},\
 cuco::empty_value{{({3})-1}},\
 thrust::equal_to<{2}>{{}},\
@@ -720,9 +724,13 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       if (!aggOp) assert(false && "CreateAggregationHashTable expects aggregation op as a parameter!");
       mlir::ArrayAttr groupByKeys = aggOp.getGroupByCols();
       auto key = MakeKeys(op, groupByKeys, KernelType::Main);
-      mainArgs[HT(op)] = "HASHTABLE_FIND";
-      mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::find)", HT(op));
-      appendKernel("//Aggregate in hashtable", KernelType::Main);
+      if (!groupByKeys.empty()) {
+         mainArgs[HT(op)] = "HASHTABLE_FIND";
+         mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::find)", HT(op));
+         appendKernel("// Aggregate in hashtable", KernelType::Main);
+      }else {
+         appendKernel(fmt::format("auto {0} = 0;", buf_idx(op)), KernelType::Main);
+      }
       auto& aggRgn = aggOp.getAggrFunc();
       mlir::ArrayAttr computedCols = aggOp.getComputedCols(); // these are columndefs
       appendControl("//Aggregate in hashtable");
@@ -745,7 +753,11 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       appendKernel(fmt::format("for (int ITEM = 0; ITEM < ITEMS_PER_THREAD && (ITEM*TB + tid < {0}); ++ITEM) {{", kernelSize), KernelType::Main);
       if (m_genSelectionCheckUniversally || m_hasInsertedSelection )
          appendKernel(fmt::format("if (!selection_flags[ITEM]) continue;"), KernelType::Main);
-      appendKernel(fmt::format("auto {0} = {1}.find({2}[ITEM])->second;", buf_idx(op), HT(op), key), KernelType::Main);
+      if (groupByKeys.empty()) {
+         appendKernel(fmt::format("auto {0} = 0;", buf_idx(op)), KernelType::Main); // all the keys are zero here
+      } else { 
+         appendKernel(fmt::format("auto {0} = {1}.find({2}[ITEM])->second;", buf_idx(op), HT(op), key), KernelType::Main);
+      }
       if (auto returnOp = mlir::dyn_cast_or_null<tuples::ReturnOp>(aggRgn.front().getTerminator())) {
          int i = 0;
          for (mlir::Value col : returnOp.getResults()) {

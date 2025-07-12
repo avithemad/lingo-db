@@ -266,7 +266,6 @@ extern bool gGeneratingShuffles; // TODO: Move to a getter
 extern bool gGeneratingNestedCode; // TODO: Move to a getter
 // -- [end] Pyper ---
 extern bool gUseBloomFiltersForJoin; // TODO: Move to a getter
-extern bool gCompilingSSB; // TODO: Move to a getter
 
 bool isPrimaryKey(const std::set<std::string>& keysSet);
 bool invertJoinIfPossible(std::set<std::string>& rightkeysSet, bool left_pk);
