@@ -214,6 +214,39 @@ protected:
          appendControl(fmt::format("std::cout << \"{0}\" << \", \" << {1} << std::endl;", kernelName, kernelTimeVarName));
       }
    }
+
+   std::vector<std::pair<int, std::string>> getBaseRelations(const std::map<std::string, ColumnMetadata*>& columnData) {
+      std::set<std::pair<int, std::string>> temp;
+      for (auto p : columnData) {
+         if (p.second == nullptr) continue;
+         auto metadata = p.second;
+         if (metadata->type == ColumnType::Direct)
+            temp.insert(std::make_pair(metadata->streamId, metadata->rid));
+      }
+      std::vector<std::pair<int, std::string>> baseRelations(temp.begin(), temp.end());
+      std::sort(baseRelations.begin(), baseRelations.end());
+      return baseRelations;
+   }
+
+   void printControl(std::ostream& stream) {
+      for (auto line : controlCode) {
+         stream << line << std::endl;
+      }
+   }
+   void printFrees(std::ostream& stream) {
+      for (auto df : deviceFrees) {
+         stream << fmt::format("cudaFree({});\n", df);
+      }
+      for (auto hf : hostFrees) {
+         stream << fmt::format("free({});\n", hf);
+      }
+   }
+   std::string getKernelSizeVariable() {
+      for (auto it : mainArgs)
+         if (it.second == "size_t") return it.first;
+      assert(false && "this kernel is supposed to have a size parameter");
+      return "";
+   }
 };
 
 }

@@ -183,12 +183,6 @@ class CrystalTupleStreamCode : public TupleStreamCode {
             new ColumnMetadata(colData);
       }
    }
-   std::string getKernelSizeVariable() {
-      for (auto it : mainArgs)
-         if (it.second == "size_t") return it.first;
-      assert(false && "this kernel is supposed to have a size parameter");
-      return "";
-   }
    template <int enc = 0>
    std::string LoadColumn(const tuples::ColumnRefAttr& attr, KernelType ty) {
       ColumnDetail detail(attr);
@@ -229,7 +223,6 @@ class CrystalTupleStreamCode : public TupleStreamCode {
       if (mlirSymbol != colData->loadExpression) {
          return cudaId;
       }
-
       if (colData->type == ColumnType::Direct) {
          auto cudaTy = mlirTypeToCudaType(detail.type);
          if (ty == KernelType::Main) {
@@ -504,18 +497,6 @@ class CrystalTupleStreamCode : public TupleStreamCode {
       return KEY(op);
    }
 
-   std::vector<std::pair<int, std::string>> getBaseRelations(const std::map<std::string, ColumnMetadata*>& columnData) {
-      std::set<std::pair<int, std::string>> temp;
-      for (auto p : columnData) {
-         if (p.second == nullptr) continue;
-         auto metadata = p.second;
-         if (metadata->type == ColumnType::Direct)
-            temp.insert(std::make_pair(metadata->streamId, metadata->rid));
-      }
-      std::vector<std::pair<int, std::string>> baseRelations(temp.begin(), temp.end());
-      std::sort(baseRelations.begin(), baseRelations.end());
-      return baseRelations;
-   }
    void BuildHashTableSemiJoin(mlir::Operation* op) {
       auto joinOp = mlir::dyn_cast_or_null<relalg::SemiJoinOp>(op);
       if (!joinOp) assert(false && "Build hash table accepts only semi join operation.");
@@ -1166,7 +1147,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       bool hasHash = false;
       for (auto p : _args) hasHash |= (p.second == "HASHTABLE_FIND" || p.second == "HASHTABLE_INSERT" || p.second == "HASHTABLE_PROBE" || p.second == "HASHTABLE_INSERT_SJ" || p.second == "HASHTABLE_PROBE_SJ" || p.second == "HASHTABLE_INSERT_PK" || p.second == "HASHTABLE_PROBE_PK");
       if (hasHash) {
-          if (shouldGenerateSmallerHashTables()) {
+         if (shouldGenerateSmallerHashTables()) {
             // The hash tables can be different sized (e.g., one hash table can have a 32-bit key and another can have a 64-bit key)
             // In this case, we just get a different template typename for each hash table
             stream << "template<";
@@ -1234,19 +1215,6 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
          for (auto line : countCode) { stream << line << std::endl; }
       }
       stream << "}\n";
-   }
-   void printControl(std::ostream& stream) {
-      for (auto line : controlCode) {
-         stream << line << std::endl;
-      }
-   }
-   void printFrees(std::ostream& stream) {
-      for (auto df : deviceFrees) {
-         stream << fmt::format("cudaFree({});\n", df);
-      }
-      for (auto hf : hostFrees) {
-         stream << fmt::format("free({});\n", hf);
-      }
    }
 };
 

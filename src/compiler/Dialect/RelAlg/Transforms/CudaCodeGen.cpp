@@ -444,18 +444,6 @@ class HyperTupleStreamCode : public TupleStreamCode {
       return KEY(op);
    }
 
-   std::vector<std::pair<int, std::string>> getBaseRelations(const std::map<std::string, ColumnMetadata*>& columnData) {
-      std::set<std::pair<int, std::string>> temp;
-      for (auto p : columnData) {
-         if (p.second == nullptr) continue;
-         auto metadata = p.second;
-         if (metadata->type == ColumnType::Direct)
-            temp.insert(std::make_pair(metadata->streamId, metadata->rid));
-      }
-      std::vector<std::pair<int, std::string>> baseRelations(temp.begin(), temp.end());
-      std::sort(baseRelations.begin(), baseRelations.end());
-      return baseRelations;
-   }
    void BuildHashTableSemiJoin(mlir::Operation* op) {
       auto joinOp = mlir::dyn_cast_or_null<relalg::SemiJoinOp>(op);
       if (!joinOp) assert(false && "Build hash table accepts only semi join operation.");
@@ -1210,19 +1198,6 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
          stream << "});\n";
       }
       stream << "}\n";
-   }
-   void printControl(std::ostream& stream) {
-      for (auto line : controlCode) {
-         stream << line << std::endl;
-      }
-   }
-   void printFrees(std::ostream& stream) {
-      for (auto df : deviceFrees) {
-         stream << fmt::format("cudaFree({});\n", df);
-      }
-      for (auto hf : hostFrees) {
-         stream << fmt::format("free({});\n", hf);
-      }
    }
 };
 
