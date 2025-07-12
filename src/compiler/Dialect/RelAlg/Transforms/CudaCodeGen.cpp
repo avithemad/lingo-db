@@ -53,7 +53,7 @@ class HyperTupleStreamCode : public TupleStreamCode {
       appendShuffleInit(KernelType::Main);
       appendKernel("size_t tid = blockIdx.x * blockDim.x + threadIdx.x;");
       appendKernel(fmt::format("if (tid >= {}) return;", tableSize));
-      if (gGeneratingNestedCode)
+      if (gThreadsAlwaysAlive)
          appendKernel("bool threadActive = true;");
 
       for (auto namedAttr : baseTableOp.getColumns().getValue()) {
@@ -80,6 +80,8 @@ class HyperTupleStreamCode : public TupleStreamCode {
    HyperTupleStreamCode(mlir::Operation* op) {
       auto aggOp = mlir::dyn_cast_or_null<relalg::AggregationOp>(op);
       if (!aggOp) assert(false && "Expected aggregation operation");
+      if (gThreadsAlwaysAlive)
+         appendKernel("bool threadActive = true;");
       std::string tableSize = COUNT(op);
 
       mlirToGlobalSymbol[tableSize] = tableSize;
@@ -356,7 +358,7 @@ class HyperTupleStreamCode : public TupleStreamCode {
             std::string condition = SelectionOpDfs(matched.getDefiningOp());
             if (condition == "!(false)" || condition == "true")
                return; // This is a null check op. No-op for now
-            if (gGeneratingNestedCode)
+            if (gThreadsAlwaysAlive)
             {
                appendKernel(fmt::format("threadActive = threadActive && ({0});", condition));
                startThreadActiveScope();
@@ -576,7 +578,7 @@ class HyperTupleStreamCode : public TupleStreamCode {
       auto key = MakeKeys(op, keys, KernelType::Main);
       appendKernel("// Probe Hash table");
       
-      if (gGeneratingNestedCode)
+      if (gThreadsAlwaysAlive)
       {
          if (gUseBloomFiltersForJoin) 
             appendKernel("#error \"Bloom filters not supported in nested code generation yet\"");
@@ -584,6 +586,7 @@ class HyperTupleStreamCode : public TupleStreamCode {
          if (!pk)
             appendKernel("#error \"Multi-map not supported in nested code generation yet\"");
 
+         appendKernel(fmt::format("auto {0} = {1}.find({2});", SLOT(op), HT(op), key));
          appendKernel(fmt::format("if ({0} == {1}.end()) {{ threadActive = false; }}", SLOT(op), HT(op)));
          if (gGeneratingShuffles && shouldShuffleAtThisOp) {
             startThreadActiveScope();
@@ -1099,7 +1102,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       }
    }
 
-   void startThreadActiveScope(KernelType kernelType = KernelType::Main) {
+   void startThreadActiveScope(KernelType kernelType = KernelType::Main_And_Count) {
       auto validKernelTypes = kernelType == KernelType::Main_And_Count  ? std::vector<KernelType>{KernelType::Main, KernelType::Count} : std::vector<KernelType>{kernelType};
       for (auto kt: validKernelTypes) {
          appendKernel("if (threadActive) {", kt);

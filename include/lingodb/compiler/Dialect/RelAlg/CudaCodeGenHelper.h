@@ -263,7 +263,7 @@ void checkForCodeGenSwitches(int& argc, char** argv);
 
 // --- [start] Pyper ---
 extern bool gGeneratingShuffles; // TODO: Move to a getter
-extern bool gGeneratingNestedCode; // TODO: Move to a getter
+extern bool gThreadsAlwaysAlive; // TODO: Move to a getter
 // -- [end] Pyper ---
 extern bool gUseBloomFiltersForJoin; // TODO: Move to a getter
 

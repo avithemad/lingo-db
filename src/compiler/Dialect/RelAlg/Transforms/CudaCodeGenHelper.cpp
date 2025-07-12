@@ -207,7 +207,7 @@ std::string translateConstantOp(db::ConstantOp& constantOp) {
 
 bool gStaticMapOnly = false;
 bool gUseBloomFiltersForJoin = false;
-bool gGeneratingNestedCode = false;
+bool gThreadsAlwaysAlive = false;
 bool gGeneratingShuffles = false;
 bool gCompilingSSB = false;
 
@@ -288,12 +288,24 @@ static void checkForBloomFilterSwitch(int& argc, char** argv) {
    }
 }
 
+static void checkForAlwaysAliveThreadsSwitch(int& argc, char** argv) {
+   for (int i = 0; i < argc; i++) {
+      if (std::string(argv[i]) == "--threads-always-alive") {
+         std::clog << "Enabled threads always alive\n";
+         gThreadsAlwaysAlive = true;
+         removeCodeGenSwitch(argc, argv, i);
+         break;
+      }
+   }
+}
+
 void checkForCodeGenSwitches(int& argc, char** argv) {
    checkForStaticMapOnlySwitch(argc, argv);
    checkForGenKernelTimingCodeSwitch(argc, argv);
    checkForGenPerOperationProfileSwitch(argc, argv);
    checkForHashTableSizeSwitch(argc, argv);
    checkForBloomFilterSwitch(argc, argv);
+   checkForAlwaysAliveThreadsSwitch(argc, argv);
 }
 
 // --- [end] code generation switches helpers ---
