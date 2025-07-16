@@ -349,6 +349,9 @@ class HyperTupleStreamCode : public TupleStreamCode {
       assert(false && "Selection predicate not handled");
       return "";
    }
+   bool shouldUseThreadsAliveCodeGen() {
+      return gThreadsAlwaysAlive && forEachScopes == 0; // we are not inside a forEach lambda of a multimap
+   }
    void AddSelectionPredicate(mlir::Region& predicate) {
       auto terminator = mlir::cast<tuples::ReturnOp>(predicate.front().getTerminator());
       if (!terminator.getResults().empty()) {
@@ -358,7 +361,7 @@ class HyperTupleStreamCode : public TupleStreamCode {
             std::string condition = SelectionOpDfs(matched.getDefiningOp());
             if (condition == "!(false)" || condition == "true")
                return; // This is a null check op. No-op for now
-            if (gThreadsAlwaysAlive)
+            if (shouldUseThreadsAliveCodeGen())
             {
                appendKernel(fmt::format("threadActive = threadActive && ({0});", condition));
                startThreadActiveScope();
@@ -567,6 +570,26 @@ class HyperTupleStreamCode : public TupleStreamCode {
       return columnData;
    }
 
+   void ProbeBloomFilter(mlir::Operation* op, std::string key, bool pk) {
+      if (!gUseBloomFiltersForJoin) 
+         return;
+      appendKernel("// Probe Bloom filter");
+      if (pk) {
+         if (shouldUseThreadsAliveCodeGen()) {
+            appendKernel(fmt::format("threadActive = threadActive && {0}.contains({1});", BF(op), key));
+            startThreadActiveScope();
+         }
+         else
+            appendKernel(fmt::format("if (!{0}.contains({1})) return;", BF(op), key));
+
+         mainArgs[BF(op)] = "BLOOM_FILTER_CONTAINS";
+         countArgs[BF(op)] = "BLOOM_FILTER_CONTAINS";
+         mlirToGlobalSymbol[BF(op)] = fmt::format("d_{}.ref()", BF(op));
+      } else {
+         assert(false && "Bloom filter for multi-map not implemented yet.");
+      }
+   }
+
    void ProbeHashTable(mlir::Operation* op, const std::map<std::string, ColumnMetadata*>& leftColumnData, bool pk, bool right) {
       auto joinOp = mlir::dyn_cast_or_null<relalg::InnerJoinOp>(op);
       if (!joinOp) assert(false && "Probe hash table accepts only inner join operation.");
@@ -576,43 +599,30 @@ class HyperTupleStreamCode : public TupleStreamCode {
       auto keys = joinOp->getAttrOfType<mlir::ArrayAttr>(hash);
       MakeKeys(op, keys, KernelType::Count);
       auto key = MakeKeys(op, keys, KernelType::Main);
+
+      // check the bloom filter first, before probing the hash table, if bloom filters are enabled
+      ProbeBloomFilter(op, key, pk);
+
       appendKernel("// Probe Hash table");
-      
-      if (gThreadsAlwaysAlive)
-      {
-         if (gUseBloomFiltersForJoin) 
-            appendKernel("#error \"Bloom filters not supported in nested code generation yet\"");
-         
-         if (!pk)
-            appendKernel("#error \"Multi-map not supported in nested code generation yet\"");
 
-         appendKernel(fmt::format("auto {0} = {1}.find({2});", SLOT(op), HT(op), key));
-         appendKernel(fmt::format("if ({0} == {1}.end()) {{ threadActive = false; }}", SLOT(op), HT(op)));
-         if (gGeneratingShuffles && shouldShuffleAtThisOp) {
-            startThreadActiveScope();
-            appendKernel(fmt::format("save_to_shuffle_buffer(tid, {0}->second, &shuffle_buf_idx, &shuffle_buf[0]);", SLOT(op)), KernelType::Main);
-            writeThreadActiveScopeEndingBraces();
-         }
-         else {
-            startThreadActiveScope();
-         }
-      } else
-      {
-         if (!pk) {
-            appendKernel(fmt::format("{0}.for_each({1}, [&] __device__ (auto const {2}) {{", HT(op), key, SLOT(op)));
-            appendKernel(fmt::format("auto const [{0}, {1}] = {2};", slot_first(op), slot_second(op), SLOT(op)));
+      if (!pk) {
+         appendKernel(fmt::format("{0}.for_each({1}, [&] __device__ (auto const {2}) {{", HT(op), key, SLOT(op)));
+         appendKernel(fmt::format("auto const [{0}, {1}] = {2};", slot_first(op), slot_second(op), SLOT(op)));
             forEachScopes++;
-         }
-         else {
-            // check the bloom filter first, before probing the hash table
-            if (gUseBloomFiltersForJoin)
-               appendKernel(fmt::format("if (!{0}.contains({1})) return;", BF(op), key));
 
+      } else {
+         if (shouldUseThreadsAliveCodeGen()) { 
+            // we are not inside a forEach lambda function, so we can use the threadActive variable
+            appendKernel(fmt::format("auto {0} = {1}.find({2});", SLOT(op), HT(op), key));
+            appendKernel(fmt::format("if ({0} == {1}.end()) {{ threadActive = false; }}", SLOT(op), HT(op)));
+            startThreadActiveScope(); // TODO: Insert shuffle here
+         } else {
+            // we are inside a forEach lambda function, so we cannot use the threadActive variable
             appendKernel(fmt::format("auto {0} = {1}.find({2});", SLOT(op), HT(op), key));
             appendKernel(fmt::format("if ({0} == {1}.end()) return;", SLOT(op), HT(op)));
          }
       }
-
+      
       // add all leftColumn data to this data
       auto baseRelations = getBaseRelations(leftColumnData);
       std::map<int, int> streamIdToBufId;
@@ -653,11 +663,7 @@ class HyperTupleStreamCode : public TupleStreamCode {
          mainArgs[BUF(op)] = getBufPtrType();
          countArgs[HT(op)] = "HASHTABLE_PROBE_PK";
          countArgs[BUF(op)] = getBufPtrType();
-         if (gUseBloomFiltersForJoin) {
-            mainArgs[BF(op)] = "BLOOM_FILTER_CONTAINS";
-            countArgs[BF(op)] = "BLOOM_FILTER_CONTAINS";
-            mlirToGlobalSymbol[BF(op)] = fmt::format("d_{}.ref()", BF(op));
-         }
+         
       } else {
          mainArgs[HT(op)] = "HASHTABLE_PROBE";
          mainArgs[BUF(op)] = getBufPtrType();
@@ -1114,13 +1120,16 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       }
    }
 
-   void writeThreadActiveScopeEndingBraces() {
-      for (const auto& [key, count] : m_threadActiveScopeCount) {
-         for (size_t i = 0; i < count; i++) {
-            appendKernel("}", key);
-         }
+   void writeThreadActiveScopeEndingBraces(KernelType kernelType, std::ostream& stream) {
+      if (m_threadActiveScopeCount.find(kernelType) == m_threadActiveScopeCount.end()) {
+         stream << "// No active thread scope to end \n";
+         return; // no active scope to end
       }
-      m_threadActiveScopeCount.clear();
+      auto count = m_threadActiveScopeCount[kernelType];
+      for (size_t i = 0; i < count; i++) {
+         stream << "}\n"; // end the if threadActive scope
+      }
+      m_threadActiveScopeCount[kernelType] = 0;
    }
 
    void printKernel(KernelType ty, std::ostream& stream) {
@@ -1208,6 +1217,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       for (int i = 0; i < forEachScopes; i++) {
          stream << "});\n";
       }
+      writeThreadActiveScopeEndingBraces(ty, stream);
       stream << "}\n";
    }
 };
@@ -1403,7 +1413,6 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
       if (gUseBloomFiltersForJoin) outputFile << "#include <cuco/bloom_filter.cuh>\n";
 
       for (auto code : kernelSchedule) {
-         code->writeThreadActiveScopeEndingBraces();
          code->printKernel(KernelType::Count, outputFile);
          code->printKernel(KernelType::Main, outputFile);
       }
