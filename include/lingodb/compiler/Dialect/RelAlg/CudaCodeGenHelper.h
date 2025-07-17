@@ -96,6 +96,8 @@ std::string mat_idx(const void* op);
 std::string slot_first(const void* op);
 std::string slot_second(const void* op);
 std::string BF(const void* op);
+std::string SHUF_BUF_NAME(const void* op);
+std::string SHUF_BUF_EXPR(const void* op);
 
 template <typename ColumnAttrTy>
 std::string getColumnName(const ColumnAttrTy& colAttr) {

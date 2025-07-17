@@ -109,6 +109,12 @@ std::string slot_second(const void* op) {
 std::string BF(const void* op) {
     return "BF_" + GetId(op);
 }
+std::string SHUF_BUF_NAME(const void* op) {
+   return "shuffle_buf_" + (op == nullptr ? "x" : GetId(op));
+}
+std::string SHUF_BUF_EXPR(const void* op) {
+   return op == nullptr ? "tid" : (SLOT(op) + "->second");
+}
 
 std::string GetId(const void* op){
    static IdGenerator<const void*> idGen;

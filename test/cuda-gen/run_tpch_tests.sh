@@ -19,6 +19,11 @@ for arg in "$@"; do
       # Remove this specific argument from $@
       set -- "${@/$arg/}"
       ;;
+    --pyper-shuffle)
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --pyper-shuffle"
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      ;;
   esac
 done
 
