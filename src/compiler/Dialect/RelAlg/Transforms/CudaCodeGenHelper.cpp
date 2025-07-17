@@ -299,6 +299,17 @@ static void checkForAlwaysAliveThreadsSwitch(int& argc, char** argv) {
    }
 }
 
+static void checkForPyperShuffleSwitch(int& argc, char** argv) {
+   for (int i = 0; i < argc; i++) {
+      if (std::string(argv[i]) == "--pyper-shuffle") {
+         std::clog << "Enabled pyper shuffle code generation\n";
+         gGeneratingShuffles = true;
+         removeCodeGenSwitch(argc, argv, i);
+         break;
+      }
+   }
+}
+
 void checkForCodeGenSwitches(int& argc, char** argv) {
    checkForStaticMapOnlySwitch(argc, argv);
    checkForGenKernelTimingCodeSwitch(argc, argv);
@@ -306,6 +317,7 @@ void checkForCodeGenSwitches(int& argc, char** argv) {
    checkForHashTableSizeSwitch(argc, argv);
    checkForBloomFilterSwitch(argc, argv);
    checkForAlwaysAliveThreadsSwitch(argc, argv);
+   checkForPyperShuffleSwitch(argc, argv);
 }
 
 // --- [end] code generation switches helpers ---

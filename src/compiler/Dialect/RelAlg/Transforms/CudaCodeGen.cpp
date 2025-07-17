@@ -35,13 +35,6 @@ class HyperTupleStreamCode : public TupleStreamCode {
       return fmt::format("{0}_{1}<<<std::ceil((float){2}/128.), 128>>>({3});", _kernelName, GetId((void*) this), size, args);
    }
 
-   void appendShuffleInit(KernelType kernelType)
-   {
-      if (!gGeneratingShuffles) return;
-      appendKernel("SHUFFLE_BUFFER_INIT(128);", kernelType);
-   }
-
-
    public:
    HyperTupleStreamCode(relalg::BaseTableOp& baseTableOp) {
       std::string tableName = baseTableOp.getTableIdentifier().data();
@@ -50,11 +43,8 @@ class HyperTupleStreamCode : public TupleStreamCode {
       mainArgs[tableSize] = "size_t";
       countArgs[tableSize] = "size_t"; // make sure this type is reserved for kernel size only
 
-      appendShuffleInit(KernelType::Main);
       appendKernel("size_t tid = blockIdx.x * blockDim.x + threadIdx.x;");
       appendKernel(fmt::format("if (tid >= {}) return;", tableSize));
-      if (gThreadsAlwaysAlive)
-         appendKernel("bool threadActive = true;");
 
       for (auto namedAttr : baseTableOp.getColumns().getValue()) {
          auto columnName = namedAttr.getName().str();
@@ -80,8 +70,6 @@ class HyperTupleStreamCode : public TupleStreamCode {
    HyperTupleStreamCode(mlir::Operation* op) {
       auto aggOp = mlir::dyn_cast_or_null<relalg::AggregationOp>(op);
       if (!aggOp) assert(false && "Expected aggregation operation");
-      if (gThreadsAlwaysAlive)
-         appendKernel("bool threadActive = true;");
       std::string tableSize = COUNT(op);
 
       mlirToGlobalSymbol[tableSize] = tableSize;
@@ -351,6 +339,11 @@ class HyperTupleStreamCode : public TupleStreamCode {
    }
    bool shouldUseThreadsAliveCodeGen() {
       return gThreadsAlwaysAlive && forEachScopes == 0; // we are not inside a forEach lambda of a multimap
+   }
+   bool shouldGenerateShuffle() {
+      // we can only generate shuffle when threads always alive is enabled
+      // AND we are not inside a forEach lambda of a multimap
+      return gGeneratingShuffles && shouldUseThreadsAliveCodeGen();
    }
    void AddSelectionPredicate(mlir::Region& predicate) {
       auto terminator = mlir::cast<tuples::ReturnOp>(predicate.front().getTerminator());
@@ -1120,6 +1113,14 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       }
    }
 
+   void writeThreadActiveScopeDefinition(KernelType kernelType, std::ostream& stream) {
+      if (m_threadActiveScopeCount.find(kernelType) == m_threadActiveScopeCount.end())
+         return;
+      auto count = m_threadActiveScopeCount[kernelType];
+      if (count != 0)
+         stream << "bool threadActive = true;\n";
+   }
+
    void writeThreadActiveScopeEndingBraces(KernelType kernelType, std::ostream& stream) {
       if (m_threadActiveScopeCount.find(kernelType) == m_threadActiveScopeCount.end()) {
          stream << "// No active thread scope to end \n";
@@ -1209,6 +1210,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
          sep = ", ";
       }
       stream << ") {\n";
+      writeThreadActiveScopeDefinition(ty, stream);
       if (KernelType::Main == ty) {
          for (auto line : mainCode) { stream << line << std::endl; }
       } else {
