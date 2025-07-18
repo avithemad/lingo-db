@@ -363,14 +363,14 @@ class HyperTupleStreamCode : public TupleStreamCode {
          appendKernel(fmt::format("{0}[old_shuffle_buf_idx] = {1};", SHUF_BUF_NAME(op), SHUF_BUF_EXPR(op)));
       }
       closeThreadActiveScopes(); // close the thread active scope after saving the state
-      appendKernel(fmt::format("__syncthreads();")); // sync all the threads after saving the state      
    }
    void retrieveCurStateFromShuffleBuffer() {
       assert(shouldGenerateShuffle() && "retrieveCurStateFromShuffleBuffer can only be called when shuffles are enabled");
       if (m_shuffleBufOps.empty())
          return; // nothing to retrieve
       appendKernel("// Retrieve current state from shuffle buffer");
-      startThreadActiveScope("if (threadIdx.x < shuffle_buf_idx)");
+      appendKernel("INVALIDATE_IF_THREAD_BEYOND_SHUFFLE();");
+      startThreadActiveScope("shuffle_valid");
       for (auto& op : m_shuffleBufOps) {
          appendKernel(fmt::format("{0} = {1}[threadIdx.x];", SHUF_BUF_EXPR(op), SHUF_BUF_NAME(op)));
       }
