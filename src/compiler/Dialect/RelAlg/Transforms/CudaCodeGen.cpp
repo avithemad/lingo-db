@@ -12,8 +12,13 @@ static int StreamId = 0;
 
 class HyperTupleStreamCode : public TupleStreamCode {
    std::map<KernelType, size_t> m_threadActiveScopeCount;
-   std::vector<const mlir::Operation*> m_shuffleBufOps; // the expressions that need to be saved until now
+   std::set<const mlir::Operation*> m_shuffleBufOps; // the expressions that need to be saved until now
    const mlir::Operation* predicateOp = nullptr; // placeholder for all predicate ops
+   // for an op, we see if this op was already saved to the shuffle buffer. 
+   // If saved, we just use the retrieved value for subsequent saves.
+   // Else, we use the SLOT(op)->second value
+   std::set<const mlir::Operation*> savedOps;
+   bool has_shuffle = false; // used to determine if we need to allocate shuffle_buf_tid
 
    std::string launchKernel(KernelType ty) override {
       std::string _kernelName;
@@ -351,34 +356,44 @@ class HyperTupleStreamCode : public TupleStreamCode {
    }
    void saveOpToShuffleBuffer(const mlir::Operation *op) {
       assert(shouldGenerateShuffle() && "saveOpToShuffleBuffer can only be called when shuffles are enabled");
-      m_shuffleBufOps.push_back(op);      
+      m_shuffleBufOps.insert(op);
    }
    void saveCurStateToShuffleBuffer() {
-      assert(shouldGenerateShuffle() && "saveCurStateToShuffleBuffer can only be called when shuffles are enabled");
-      if (m_shuffleBufOps.empty())
-         return; // nothing to save
+      assert(shouldGenerateShuffle() && "saveCurStateToShuffleBuffer can only be called when shuffles are enabled");      
+      has_shuffle = true; // we will need to allocate shuffle_buf_tid
       appendKernel("// Save current state to shuffle buffer");      
       appendKernel(fmt::format("auto old_shuffle_buf_idx = atomicAdd_block(&shuffle_buf_idx, 1);"));
+      appendKernel(fmt::format("shuffle_buf_tid[old_shuffle_buf_idx] = tid;"));
       for (auto& op : m_shuffleBufOps) {
-         appendKernel(fmt::format("{0}[old_shuffle_buf_idx] = {1};", SHUF_BUF_NAME(op), SHUF_BUF_EXPR(op)));
+         auto slotValue = (savedOps.find(op) != savedOps.end()) ? slot_or_shuf_val(op) : SHUF_BUF_EXPR(op);
+         appendKernel(fmt::format("{0}[old_shuffle_buf_idx] = {1};", SHUF_BUF_NAME(op), slotValue));
+         savedOps.insert(op); // mark this op as saved
       }
       closeThreadActiveScopes(); // close the thread active scope after saving the state
    }
    void retrieveCurStateFromShuffleBuffer() {
       assert(shouldGenerateShuffle() && "retrieveCurStateFromShuffleBuffer can only be called when shuffles are enabled");
-      if (m_shuffleBufOps.empty())
-         return; // nothing to retrieve
       appendKernel("// Retrieve current state from shuffle buffer");
       appendKernel("INVALIDATE_IF_THREAD_BEYOND_SHUFFLE();");
       startThreadActiveScope("shuffle_valid");
+      loadedColumns.clear(); // The tid has changed. The columns need to be reloaded.
+      loadedCountColumns.clear();
+      appendKernel(fmt::format("tid = shuffle_buf_tid[threadIdx.x];"));
       for (auto& op : m_shuffleBufOps) {
-         appendKernel(fmt::format("{0} = {1}[threadIdx.x];", SHUF_BUF_EXPR(op), SHUF_BUF_NAME(op)));
+         appendKernel(fmt::format("auto {0} = {1}[threadIdx.x];", SHUF_BUF_VAL(op), SHUF_BUF_NAME(op)));
       }
    }
    void genShuffleThreads() {
       assert(shouldGenerateShuffle() && "genShuffleThreads can only be called when shuffles are enabled");
       saveCurStateToShuffleBuffer();
       retrieveCurStateFromShuffleBuffer();      
+   }
+   std::string slot_or_shuf_val(const mlir::Operation* op) {
+      if (shouldGenerateShuffle()) {
+         return SHUF_BUF_VAL(op); // also check for the attribute on the op if we are selectively inserting shuffles.
+      } else {
+         return fmt::format("{0}->second", SLOT(op));
+      }
    }
    // --- [end] pyper shuffle helpers ---   
    void AddSelectionPredicate(mlir::Region& predicate) {
@@ -394,7 +409,6 @@ class HyperTupleStreamCode : public TupleStreamCode {
             {
                if (shouldGenerateShuffle()) {
                   startThreadActiveScope(condition);
-                  saveOpToShuffleBuffer(predicateOp); // we only need one shuffle idx for all predicates
                   return genShuffleThreads();
                }
                else
@@ -520,7 +534,15 @@ class HyperTupleStreamCode : public TupleStreamCode {
       auto key = MakeKeys(op, keys, KernelType::Main);
       appendKernel("// Probe Hash table");
       appendKernel(fmt::format("auto {0} = {1}.find({2});", SLOT(op), HT(op), key));
-      appendKernel(fmt::format("if ({0} == {1}.end()) return;", SLOT(op), HT(op)));
+      if (shouldUseThreadsAliveCodeGen()) {
+         startThreadActiveScope(fmt::format("{0} != {1}.end()", SLOT(op), HT(op)));
+         if (shouldGenerateShuffle()) {
+            saveOpToShuffleBuffer(op);
+            genShuffleThreads();
+         } 
+      } else {
+         appendKernel(fmt::format("if ({0} == {1}.end()) return;", SLOT(op), HT(op)));
+      }
 
       mainArgs[HT(op)] = "HASHTABLE_PROBE_SJ";
       countArgs[HT(op)] = "HASHTABLE_PROBE_SJ";
@@ -535,7 +557,16 @@ class HyperTupleStreamCode : public TupleStreamCode {
 
       appendKernel("// Probe Hash table");
       appendKernel(fmt::format("auto {0} = {1}.find({2});", SLOT(op), HT(op), key));
-      appendKernel(fmt::format("if (!({0} == {1}.end())) return;", SLOT(op), HT(op)));
+      if (shouldUseThreadsAliveCodeGen()) {
+         startThreadActiveScope(fmt::format("{0} == {1}.end()", SLOT(op), HT(op)));
+         if (shouldGenerateShuffle()) {
+            saveOpToShuffleBuffer(op);
+            genShuffleThreads();
+         } 
+      } else {
+         // Anti-Semi join. We should only output non-matching rows of the build size
+         appendKernel(fmt::format("if ({0} != {1}.end()) return;", SLOT(op), HT(op))); 
+      }
 
       mainArgs[HT(op)] = "HASHTABLE_PROBE_SJ";
       countArgs[HT(op)] = "HASHTABLE_PROBE_SJ";
@@ -647,8 +678,12 @@ class HyperTupleStreamCode : public TupleStreamCode {
          if (shouldUseThreadsAliveCodeGen()) { 
             // we are not inside a forEach lambda function, so we can use the threadActive variable
             appendKernel(fmt::format("auto {0} = {1}.find({2});", SLOT(op), HT(op), key));
-            auto threadActiveCondition = fmt::format("({0} != {1}.end())", SLOT(op), HT(op));
+            auto threadActiveCondition = fmt::format("{0} != {1}.end()", SLOT(op), HT(op));
             startThreadActiveScope(threadActiveCondition);
+            if (shouldGenerateShuffle()) {
+               saveOpToShuffleBuffer(joinOp);
+               genShuffleThreads();
+            }            
          } else {
             // we are inside a forEach lambda function, so we cannot use the threadActive variable
             appendKernel(fmt::format("auto {0} = {1}.find({2});", SLOT(op), HT(op), key));
@@ -678,8 +713,8 @@ class HyperTupleStreamCode : public TupleStreamCode {
             }
             // #else
             else {
-               colData.second->rid = fmt::format("{3}[{0}->second * {1} + {2}]",
-                                                 SLOT(op),
+               colData.second->rid = fmt::format("{3}[{0} * {1} + {2}]",
+                                                 slot_or_shuf_val(op),
                                                  std::to_string(baseRelations.size()),
                                                  streamIdToBufId[colData.second->streamId],
                                                  BUF(op));
@@ -1153,10 +1188,8 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       }
    }
 
-
    void writeThreadActiveScopeEndingBraces(KernelType kernelType, std::ostream& stream) {
       if (m_threadActiveScopeCount.find(kernelType) == m_threadActiveScopeCount.end()) {
-         stream << "// No active thread scope to end \n";
          return; // no active scope to end
       }
       auto count = m_threadActiveScopeCount[kernelType];
@@ -1182,8 +1215,10 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
    }
 
    void writeShuffleBufferDefinitions(std::ostream& stream) {
-      if (m_shuffleBufOps.empty()) return; // no shuffle buffers to define
+      if (!has_shuffle)
+         return;
       stream << "SHUFFLE_IDX_INIT()\n";
+      stream << "__shared__ int shuffle_buf_tid[128];\n";
       for (auto &op : m_shuffleBufOps)
          stream << fmt::format("__shared__ int {0}[128];\n", SHUF_BUF_NAME(op)); // TODO: Should this be int? What's the datatype of tid?
    }
