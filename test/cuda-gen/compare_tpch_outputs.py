@@ -233,6 +233,10 @@ def compare_csv_files_fuzzy(file1_path, file2_path, float_tolerance=1e-5, percen
                         break # Found first differing column
 
                 if first_diff_col_name is not None and first_diff_row_idx != -99:
+                     # Print the differing rows from both dataframes for better debugging
+                     print(f"Differing rows at index {first_diff_row_idx}:")
+                     print(f"DF1: {df1_sorted.iloc[first_diff_row_idx].to_dict()}")
+                     print(f"DF2: {df2_sorted.iloc[first_diff_row_idx].to_dict()}")
                      return False, (f"Integer-like numeric data differs. First difference found at "
                                    f"sorted row index {first_diff_row_idx}, column '{first_diff_col_name}': "
                                    f"{val1} (file 1) vs {val2} (file 2)")
