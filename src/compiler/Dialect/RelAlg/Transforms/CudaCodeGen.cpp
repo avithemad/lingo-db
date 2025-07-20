@@ -362,11 +362,11 @@ class HyperTupleStreamCode : public TupleStreamCode {
       assert(shouldGenerateShuffle() && "saveCurStateToShuffleBuffer can only be called when shuffles are enabled");      
       has_shuffle = true; // we will need to allocate shuffle_buf_tid
       appendKernel("// Save current state to shuffle buffer");      
-      appendKernel(fmt::format("auto old_shuffle_buf_idx = atomicAdd_block(&shuffle_buf_idx, 1);"));
-      appendKernel(fmt::format("shuffle_buf_tid[old_shuffle_buf_idx] = tid;"));
+      appendKernel(fmt::format("auto shuffle_slot = atomicAdd_block(&shuffle_buf_idx, 1);"));
+      appendKernel(fmt::format("shuffle_buf_tid[shuffle_slot] = tid;"));
       for (auto& op : m_shuffleBufOps) {
          auto slotValue = (savedOps.find(op) != savedOps.end()) ? slot_or_shuf_val(op) : SHUF_BUF_EXPR(op);
-         appendKernel(fmt::format("{0}[old_shuffle_buf_idx] = {1};", SHUF_BUF_NAME(op), slotValue));
+         appendKernel(fmt::format("{0}[shuffle_slot] = {1};", SHUF_BUF_NAME(op), slotValue));
          savedOps.insert(op); // mark this op as saved
       }
       closeThreadActiveScopes(); // close the thread active scope after saving the state
@@ -396,7 +396,7 @@ class HyperTupleStreamCode : public TupleStreamCode {
       }
    }
    // --- [end] pyper shuffle helpers ---   
-   void AddSelectionPredicate(mlir::Region& predicate) {
+   void AddSelectionPredicate(mlir::Region& predicate, float selectivity = 0.5f) {
       auto terminator = mlir::cast<tuples::ReturnOp>(predicate.front().getTerminator());
       if (!terminator.getResults().empty()) {
          auto& predicateBlock = predicate.front();
@@ -407,12 +407,11 @@ class HyperTupleStreamCode : public TupleStreamCode {
                return; // This is a null check op. No-op for now
             if (shouldUseThreadsAliveCodeGen())
             {
-               if (shouldGenerateShuffle()) {
-                  startThreadActiveScope(condition);
+               startThreadActiveScope(condition);
+               if (shouldGenerateShuffle() && selectivity <= 0.5f)
                   return genShuffleThreads();
-               }
                else
-                  return startThreadActiveScope(condition);
+                  return;
             } else {
                appendKernel(fmt::format("if (!({0})) return;", condition));
                return;
@@ -560,7 +559,9 @@ class HyperTupleStreamCode : public TupleStreamCode {
       if (shouldUseThreadsAliveCodeGen()) {
          startThreadActiveScope(fmt::format("{0} == {1}.end()", SLOT(op), HT(op)));
          if (shouldGenerateShuffle()) {
-            saveOpToShuffleBuffer(op);
+            // We don't really need to save this op to shuffle buffer 
+            // as the pipeline only progresses when there's no hash table
+            // match.
             genShuffleThreads();
          } 
       } else {
@@ -1336,7 +1337,11 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
             }
 
             mlir::Region& predicate = selection.getPredicate();
-            streamCode->AddSelectionPredicate(predicate);
+            // Get the selectivity attribute if available
+            float selectivity = 0.5f; // Default selectivity
+            if (auto selectivityAttr = selection->getAttrOfType<mlir::FloatAttr>("selectivity")) 
+               selectivity = selectivityAttr.getValueAsDouble();
+            streamCode->AddSelectionPredicate(predicate, selectivity);
             streamCodeMap[op] = streamCode;
          } else if (auto joinOp = llvm::dyn_cast<relalg::InnerJoinOp>(op)) {
             auto leftStream = joinOp.getLeftMutable().get().getDefiningOp();
