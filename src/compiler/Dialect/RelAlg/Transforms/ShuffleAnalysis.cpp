@@ -184,6 +184,7 @@ public:
   }
 
   void runOnOperation() override {
+    return; // disabled for now. Let's get back to this when we have a problem with the number of buffers we use.
     getOperation().walk([&](mlir::Operation* op){
        if (auto innerJoinOp = mlir::dyn_cast<relalg::InnerJoinOp>(op)) {
         walkInnerJoin(innerJoinOp);
