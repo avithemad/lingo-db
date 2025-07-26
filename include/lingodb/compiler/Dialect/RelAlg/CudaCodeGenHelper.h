@@ -154,6 +154,15 @@ int daysSinceEpoch(const std::string& dateStr);
 std::string mlirTypeToCudaType(const mlir::Type& ty);
 std::string translateConstantOp(db::ConstantOp& constantOp);
 
+typedef struct  {
+   size_t cur_shuffle_id = 0;
+   std::set<const mlir::Operation*> shuffleBufOps; // the expressions that need to be saved until now
+   // for an op, we see if this op was already saved to the shuffle buffer. 
+   // If saved, we just use the retrieved value for subsequent saves.
+   // Else, we use the SLOT(op)->second value
+   std::set<const mlir::Operation*> savedOps;
+} ShuffleData;
+
 // -- [Start] TupleStreamCode ---
 
 class TupleStreamCode {
@@ -175,6 +184,7 @@ protected:
    std::map<std::string, std::string> countArgs;
    bool m_hasInsertedSelection = false;
    bool m_genSelectionCheckUniversally = true;
+   ShuffleData m_shuffleData;
    int id;
 
    void appendKernel(std::string stmt, KernelType ty = KernelType::Main_And_Count) {

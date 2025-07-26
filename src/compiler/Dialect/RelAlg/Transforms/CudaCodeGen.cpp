@@ -12,14 +12,6 @@ static int StreamId = 0;
 
 class HyperTupleStreamCode : public TupleStreamCode {
    std::map<KernelType, size_t> m_threadActiveScopeCount;
-   std::set<const mlir::Operation*> m_shuffleBufOps; // the expressions that need to be saved until now
-   const mlir::Operation* predicateOp = nullptr; // placeholder for all predicate ops
-   // for an op, we see if this op was already saved to the shuffle buffer. 
-   // If saved, we just use the retrieved value for subsequent saves.
-   // Else, we use the SLOT(op)->second value
-   std::set<const mlir::Operation*> savedOps;
-   bool has_shuffle = false; // used to determine if we need to allocate shuffle_buf_tid
-
    std::string launchKernel(KernelType ty) override {
       std::string _kernelName;
       std::map<std::string, std::string> _args;
@@ -356,32 +348,34 @@ class HyperTupleStreamCode : public TupleStreamCode {
    }
    void saveOpToShuffleBuffer(const mlir::Operation *op) {
       assert(shouldGenerateShuffle() && "saveOpToShuffleBuffer can only be called when shuffles are enabled");
-      m_shuffleBufOps.insert(op);
+      m_shuffleData.shuffleBufOps.insert(op);
    }
    void saveCurStateToShuffleBuffer() {
       assert(shouldGenerateShuffle() && "saveCurStateToShuffleBuffer can only be called when shuffles are enabled");      
-      has_shuffle = true; // we will need to allocate shuffle_buf_tid
       appendKernel("// Save current state to shuffle buffer");      
-      appendKernel(fmt::format("auto shuffle_slot = atomicAdd_block(&shuffle_buf_idx, 1);"));
+      appendKernel(fmt::format("auto shuffle_slot = atomicAdd_block(&shuffle_buf_idx[{0}], 1);", m_shuffleData.cur_shuffle_id));
       appendKernel(fmt::format("shuffle_buf_tid[shuffle_slot] = tid;"));
-      for (auto& op : m_shuffleBufOps) {
-         auto slotValue = (savedOps.find(op) != savedOps.end()) ? slot_or_shuf_val(op) : SHUF_BUF_EXPR(op);
+      for (auto& op : m_shuffleData.shuffleBufOps) {
+         auto slotValue = (m_shuffleData.savedOps.find(op) != m_shuffleData.savedOps.end()) ? slot_or_shuf_val(op) : SHUF_BUF_EXPR(op);
          appendKernel(fmt::format("{0}[shuffle_slot] = {1};", SHUF_BUF_NAME(op), slotValue));
-         savedOps.insert(op); // mark this op as saved
+         m_shuffleData.savedOps.insert(op); // mark this op as saved
       }
       closeThreadActiveScopes(); // close the thread active scope after saving the state
    }
    void retrieveCurStateFromShuffleBuffer() {
       assert(shouldGenerateShuffle() && "retrieveCurStateFromShuffleBuffer can only be called when shuffles are enabled");
       appendKernel("// Retrieve current state from shuffle buffer");
-      appendKernel("INVALIDATE_IF_THREAD_BEYOND_SHUFFLE();");
+      appendKernel(fmt::format("INVALIDATE_IF_THREAD_BEYOND_SHUFFLE({0});", m_shuffleData.cur_shuffle_id++));
       startThreadActiveScope("shuffle_valid");
       loadedColumns.clear(); // The tid has changed. The columns need to be reloaded.
       loadedCountColumns.clear();
       appendKernel(fmt::format("tid = shuffle_buf_tid[threadIdx.x];"));
-      for (auto& op : m_shuffleBufOps) {
-         appendKernel(fmt::format("auto {0} = {1}[threadIdx.x];", SHUF_BUF_VAL(op), SHUF_BUF_NAME(op)));
+      for (auto& op : m_shuffleData.shuffleBufOps) {
+         appendKernel(fmt::format("{0} = {1}[threadIdx.x];", SHUF_BUF_VAL(op), SHUF_BUF_NAME(op)));
       }
+      closeThreadActiveScopes();
+      appendKernel("__syncthreads();");
+      startThreadActiveScope("shuffle_valid");
    }
    void genShuffleThreads() {
       assert(shouldGenerateShuffle() && "genShuffleThreads can only be called when shuffles are enabled");
@@ -1216,12 +1210,14 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
    }
 
    void writeShuffleBufferDefinitions(std::ostream& stream) {
-      if (!has_shuffle)
+      if (m_shuffleData.cur_shuffle_id == 0)
          return;
-      stream << "SHUFFLE_IDX_INIT()\n";
+      stream << fmt::format("SHUFFLE_IDX_INIT({0})\n", m_shuffleData.cur_shuffle_id);
       stream << "__shared__ int shuffle_buf_tid[128];\n";
-      for (auto &op : m_shuffleBufOps)
+      for (auto &op : m_shuffleData.shuffleBufOps) {
          stream << fmt::format("__shared__ int {0}[128];\n", SHUF_BUF_NAME(op)); // TODO: Should this be int? What's the datatype of tid?
+         stream << fmt::format("size_t {0};", SHUF_BUF_VAL(op));
+      }
    }
 
    void printKernel(KernelType ty, std::ostream& stream) {
