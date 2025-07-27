@@ -352,12 +352,19 @@ class HyperTupleStreamCode : public TupleStreamCode {
    }
    void saveCurStateToShuffleBuffer() {
       assert(shouldGenerateShuffle() && "saveCurStateToShuffleBuffer can only be called when shuffles are enabled");      
+      for (auto& op : m_shuffleData.shuffleBufOps) {
+         if (m_shuffleData.savedOps.find(op) == m_shuffleData.savedOps.end())
+            appendKernel(fmt::format("{0} = {1};", SHUF_BUF_VAL(op), SHUF_BUF_EXPR(op)));
+      }
+      appendKernel("threadActive = true;");
+      closeThreadActiveScopes();
+      startThreadActiveScope("ShouldShuffle(threadActive)");
       appendKernel("// Save current state to shuffle buffer");      
       appendKernel(fmt::format("auto shuffle_slot = atomicAdd_block(&shuffle_buf_idx[{0}], 1);", m_shuffleData.cur_shuffle_id));
       appendKernel(fmt::format("shuffle_buf_tid[shuffle_slot] = tid;"));
       for (auto& op : m_shuffleData.shuffleBufOps) {
          auto slotValue = (m_shuffleData.savedOps.find(op) != m_shuffleData.savedOps.end()) ? slot_or_shuf_val(op) : SHUF_BUF_EXPR(op);
-         appendKernel(fmt::format("{0}[shuffle_slot] = {1};", SHUF_BUF_NAME(op), slotValue));
+         appendKernel(fmt::format("{0}[shuffle_slot] = {1};", SHUF_BUF_NAME(op), slot_or_shuf_val(op)));
          m_shuffleData.savedOps.insert(op); // mark this op as saved
       }
       closeThreadActiveScopes(); // close the thread active scope after saving the state
