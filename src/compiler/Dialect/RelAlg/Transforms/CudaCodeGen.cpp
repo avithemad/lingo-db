@@ -359,6 +359,7 @@ class HyperTupleStreamCode : public TupleStreamCode {
       appendKernel("threadActive = true;");
       closeThreadActiveScopes();
       startThreadActiveScope("ShouldShuffle(threadActive)");
+      startThreadActiveScope("threadActive");
       appendKernel("// Save current state to shuffle buffer");      
       appendKernel(fmt::format("auto shuffle_slot = atomicAdd_block(&shuffle_buf_idx[{0}], 1);", m_shuffleData.cur_shuffle_id));
       appendKernel(fmt::format("shuffle_buf_tid[shuffle_slot] = tid;"));
@@ -367,22 +368,25 @@ class HyperTupleStreamCode : public TupleStreamCode {
          appendKernel(fmt::format("{0}[shuffle_slot] = {1};", SHUF_BUF_NAME(op), slot_or_shuf_val(op)));
          m_shuffleData.savedOps.insert(op); // mark this op as saved
       }
-      closeThreadActiveScopes(); // close the thread active scope after saving the state
+      closeThreadActiveScopes(1); // close the threadActive scope
    }
    void retrieveCurStateFromShuffleBuffer() {
       assert(shouldGenerateShuffle() && "retrieveCurStateFromShuffleBuffer can only be called when shuffles are enabled");
-      appendKernel("// Retrieve current state from shuffle buffer");
       appendKernel(fmt::format("INVALIDATE_IF_THREAD_BEYOND_SHUFFLE({0});", m_shuffleData.cur_shuffle_id++));
+      appendKernel("// Retrieve current state from shuffle buffer");
       startThreadActiveScope("shuffle_valid");
       loadedColumns.clear(); // The tid has changed. The columns need to be reloaded.
       loadedCountColumns.clear();
+      appendKernel("threadActive = true;");
       appendKernel(fmt::format("tid = shuffle_buf_tid[threadIdx.x];"));
       for (auto& op : m_shuffleData.shuffleBufOps) {
          appendKernel(fmt::format("{0} = {1}[threadIdx.x];", SHUF_BUF_VAL(op), SHUF_BUF_NAME(op)));
-      }
-      closeThreadActiveScopes();
+      }      
+      closeThreadActiveScopes(-1);
       appendKernel("__syncthreads();");
-      startThreadActiveScope("shuffle_valid");
+      closeThreadActiveScopes();
+      startThreadActiveScope("threadActive");
+      appendKernel("threadActive = false;");
    }
    void genShuffleThreads() {
       assert(shouldGenerateShuffle() && "genShuffleThreads can only be called when shuffles are enabled");
@@ -1201,18 +1205,25 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       m_threadActiveScopeCount[kernelType] = 0;
    }
 
-   void closeThreadActiveScopes(KernelType kernelType = KernelType::Main_And_Count) {
+   void closeThreadActiveScopes(int k = -2, KernelType kernelType = KernelType::Main_And_Count) {
       auto validKernelTypes = kernelType == KernelType::Main_And_Count  ? std::vector<KernelType>{KernelType::Main, KernelType::Count} : std::vector<KernelType>{kernelType};
       for (auto kt: validKernelTypes) {
          if (m_threadActiveScopeCount.find(kt) == m_threadActiveScopeCount.end())
              continue; // no active scope to close
 
          auto count = m_threadActiveScopeCount[kt];
-         // appendKernel(fmt::format("// Closing {0} thread active scopes\n", count));
-         for (size_t i = 0; i < count; i++) {
-            appendKernel("}\n", kt); // end the if threadActive scope
+         assert((k >= -2 || k < (int)count) && "Invalid number of closing braces requested");
+         auto numClosingBraces = 0;
+         if (k >= 1)
+            numClosingBraces = k;
+         else if (k == -1)            
+            numClosingBraces = count - 1; // close all but one active scope         
+         else if (k == -2)
+            numClosingBraces = count; // close all active scopes
+         for (size_t i = 0; i < numClosingBraces; i++) {
+            appendKernel("}\n", kt);
          }
-         m_threadActiveScopeCount[kt] = 0; // reset the count
+         m_threadActiveScopeCount[kt] -= numClosingBraces;
       }
    }
 
