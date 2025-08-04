@@ -19,9 +19,11 @@ std::vector<std::string> split(std::string s, std::string delimiter) {
 
 static bool gGenKernelTimingCode = false;
 static bool gGenPerOperationProfile = false;
+static bool gGenIsProfiling = false; // Do not generate multiple iteration loops if we are profiling
 
 bool generateKernelTimingCode() { return gGenKernelTimingCode; }
 bool generatePerOperationProfile() { return gGenPerOperationProfile; }
+bool isProfiling() { return gGenIsProfiling; }
 
 // -- [end] kernel timing code generation --
 
@@ -319,6 +321,17 @@ static void checkForPyperShuffleSwitch(int& argc, char** argv) {
    }
 }
 
+static void checkForProfilingSwitch(int& argc, char** argv) {
+   for (int i = 0; i < argc; i++) {
+      if (std::string(argv[i]) == "--profiling") {
+         std::clog << "Enabled profiling code generation\n";
+         gGenIsProfiling = true;
+         removeCodeGenSwitch(argc, argv, i);
+         break;
+      }
+   }
+}
+
 void checkForCodeGenSwitches(int& argc, char** argv) {
    checkForStaticMapOnlySwitch(argc, argv);
    checkForGenKernelTimingCodeSwitch(argc, argv);
@@ -327,6 +340,7 @@ void checkForCodeGenSwitches(int& argc, char** argv) {
    checkForBloomFilterSwitch(argc, argv);
    checkForAlwaysAliveThreadsSwitch(argc, argv);
    checkForPyperShuffleSwitch(argc, argv);
+   checkForProfilingSwitch(argc, argv);
 }
 
 // --- [end] code generation switches helpers ---

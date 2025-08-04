@@ -36,6 +36,7 @@ std::vector<std::string> split(std::string s, std::string delimiter);
 
 bool generateKernelTimingCode();
 bool generatePerOperationProfile();
+bool isProfiling();
 
 // -- [end] kernel timing code generation --
 
@@ -170,6 +171,7 @@ protected:
    std::vector<std::string> mainCode;
    std::vector<std::string> countCode;
    std::vector<std::string> controlCode;
+   std::vector<std::string> controlDeclarations;
    int forEachScopes = 0;
    std::map<std::string, ColumnMetadata*> columnData;
    std::set<std::string> loadedColumns;
@@ -200,6 +202,10 @@ protected:
       }
    }
 
+   void appendControlDecl(std::string stmt) {
+      controlDeclarations.push_back(stmt);
+   }
+
    void appendControl(std::string stmt) {
       controlCode.push_back(stmt);
    }
@@ -214,10 +220,11 @@ protected:
    virtual std::string launchKernel(KernelType ty) = 0;
 
    void genLaunchKernel(KernelType ty) {
-      if (generateKernelTimingCode())
+      static bool shouldGeneratePerKernelTiming = false;
+      if (generateKernelTimingCode() && shouldGeneratePerKernelTiming)
          appendControl("cudaEventRecord(start);");
       appendControl(launchKernel(ty));
-      if (generateKernelTimingCode()) {
+      if (generateKernelTimingCode() && shouldGeneratePerKernelTiming) {
          appendControl("cudaEventRecord(stop);");
          auto kernelName = getKernelName(ty) + "_" + GetId((void*) this);
          auto kernelTimeVarName = kernelName + "_time";
@@ -249,6 +256,11 @@ protected:
    }
 
 public:
+   void printControlDeclarations(std::ostream& stream) {
+      for (auto line : controlDeclarations) {
+         stream << line << std::endl;
+      }
+   }
    void printControl(std::ostream& stream) {
       for (auto line : controlCode) {
          stream << line << std::endl;
