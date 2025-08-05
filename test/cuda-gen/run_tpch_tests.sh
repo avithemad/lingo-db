@@ -1,6 +1,6 @@
 #!/bin/bash
 
-CODEGEN_OPTIONS="--smaller-hash-tables"
+CODEGEN_OPTIONS="--smaller-hash-tables --threads-always-alive"
 # for each arg in args
 for arg in "$@"; do
   case $arg in
@@ -15,12 +15,17 @@ for arg in "$@"; do
       set -- "${@/$arg/}"
       ;;
     --threads-always-alive)
-      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --threads-always-alive"
-      # Remove this specific argument from $@
+      # CODEGEN_OPTIONS="$CODEGEN_OPTIONS --threads-always-alive"
+      # Remove this specific argument from $@ # make this default for now
       set -- "${@/$arg/}"
       ;;
     --pyper-shuffle)
       CODEGEN_OPTIONS="$CODEGEN_OPTIONS --pyper-shuffle"
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      ;;
+    --profiling)
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --profiling"
       # Remove this specific argument from $@
       set -- "${@/$arg/}"
       ;;
@@ -176,6 +181,7 @@ echo -e "\n"
 if [ ${#FAILED_QUERIES[@]} -eq 0 ]; then
   # Print "TEST PASSED" in green
   echo -e "\033[0;32mTEST PASSED!\033[0m"
+  exit 0
 else
   # Print "TEST FAILED" in red
   echo -e "\033[0;31mTEST FAILED!\033[0m"

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-CODEGEN_OPTIONS="--smaller-hash-tables"
+CODEGEN_OPTIONS="--smaller-hash-tables --threads-always-alive"
 # for each arg in args
 for arg in "$@"; do
   case $arg in
@@ -15,7 +15,7 @@ for arg in "$@"; do
       set -- "${@/$arg/}"
       ;;
     --threads-always-alive)
-      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --threads-always-alive"
+      # CODEGEN_OPTIONS="$CODEGEN_OPTIONS --threads-always-alive" # make this default for now
       # Remove this specific argument from $@
       set -- "${@/$arg/}"
       ;;
@@ -102,6 +102,11 @@ for QUERY in "${QUERIES[@]}"; do
   echo $RUN_SQL
   $RUN_SQL > /dev/null # ignore the output. We are not comparing the results.
 
+  # format the file
+  FORMAT_CMD="clang-format -i output.cu"
+  echo $FORMAT_CMD
+  $FORMAT_CMD
+
   # Now run the generated CUDA code
   CP_CMD="cp output.cu $TPCH_CUDA_GEN_DIR/q$QUERY.codegen.cu"
   echo $CP_CMD
@@ -126,6 +131,7 @@ for QUERY in "${QUERIES[@]}"; do
   if [ ! -f build/q$QUERY.codegen.so ]; then
     echo -e "\033[0;31mError compiling Query $QUERY\033[0m"
     FAILED_QUERIES+=($QUERY)
+    exit 1
   fi
 done
 

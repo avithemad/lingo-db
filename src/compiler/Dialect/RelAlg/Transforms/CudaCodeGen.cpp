@@ -831,7 +831,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
             mainArgs[newbuffername] = bufferColType + "*";
             mlirToGlobalSymbol[newbuffername] = fmt::format("d_{}", newbuffername);
             appendControlDecl(fmt::format("{0}* d_{1} = nullptr;", bufferColType, newbuffername));
-            appendControl(fmt::format("cudaMalloc(&d_{0}, sizeof({1}) * {2});", newbuffername, bufferColType, COUNT(op)));
+            appendControl(fmt::format("cudaMallocExt(&d_{0}, sizeof({1}) * {2});", newbuffername, bufferColType, COUNT(op)));
             deviceFrees.insert(fmt::format("d_{0}", newbuffername));
             appendControl(fmt::format("cudaMemset(d_{0}, 0, sizeof({1}) * {2});", newbuffername, bufferColType, COUNT(op)));
             if (auto aggrFunc = llvm::dyn_cast<relalg::AggrFuncOp>(col.getDefiningOp())) {
@@ -933,7 +933,8 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
 
          if (type == "DBStringType") {
             std::string newBuffer = MAT(op) + mlirSymbol + "_encoded";
-            appendControl(fmt::format("auto {0} = (DBI16Type*)malloc(sizeof(DBI16Type) * {1});", newBuffer, COUNT(op)));
+            appendControlDecl(fmt::format("DBI16Type* {0} = nullptr;", newBuffer));
+            appendControl(fmt::format("mallocExt(&{0}, sizeof(DBI16Type) * {1});", newBuffer, COUNT(op)));
             hostFrees.insert(newBuffer);
             appendControlDecl(fmt::format("DBI16Type* d_{0} = nullptr;", newBuffer));
             appendControl(fmt::format("cudaMallocExt(&d_{0}, sizeof(DBI16Type) * {1});", newBuffer, COUNT(op)));
@@ -944,7 +945,8 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
             appendKernel(fmt::format("{0}[{2}] = {1};", newBuffer, key, mat_idx(op)), KernelType::Main);
          } else {
             std::string newBuffer = MAT(op) + mlirSymbol;
-            appendControl(fmt::format("auto {0} = ({1}*)malloc(sizeof({1}) * {2});", newBuffer, type, COUNT(op)));
+            appendControlDecl(fmt::format("{1}* {0} = nullptr;", newBuffer, type));
+            appendControl(fmt::format("mallocExt(&{0}, sizeof({1}) * {2});", newBuffer, type, COUNT(op)));
             hostFrees.insert(newBuffer);
             appendControlDecl(fmt::format("{1}* d_{0} = nullptr;", newBuffer, type));
             appendControl(fmt::format("cudaMallocExt(&d_{0}, sizeof({1}) * {2});", newBuffer, type, COUNT(op)));
@@ -960,7 +962,8 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       std::string printStmts;
       std::string delimiter = "|";
       bool first = true;
-      appendControl("if (iter == numIterations - 1) {"); // only print at the last iteration
+      if (!isProfiling())
+         appendControl("if (iter == numIterations - 1) {"); // only print at the last iteration
       for (auto col : materializeOp.getCols()) {
          auto columnAttr = mlir::cast<tuples::ColumnRefAttr>(col);
          auto detail = ColumnDetail(columnAttr);
@@ -992,7 +995,8 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
          appendControl(fmt::format("for (auto i=0ull; i < {0}; i++) {{ {1}std::cout << std::endl; }}",
                                    COUNT(op), printStmts));
       }
-      appendControl("}");
+      if (!isProfiling())
+         appendControl("}");
    }
 
    std::string mapOpDfs(mlir::Operation* op, std::vector<tuples::ColumnRefAttr>& dep) {
