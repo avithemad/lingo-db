@@ -1,5 +1,35 @@
 #!/bin/bash
 
+CODEGEN_OPTIONS="--smaller-hash-tables"
+# for each arg in args
+for arg in "$@"; do
+  case $arg in
+    --smaller-hash-tables)
+      # CODEGEN_OPTIONS="$CODEGEN_OPTIONS --smaller-hash-tables" # make this default for now
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      ;;
+    --use-bloom-filters)
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --use-bloom-filters"
+      echo "Use bloom filters option is not supported in crystal codegen."
+      exit 1
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      ;;
+    --threads-always-alive)
+      echo "Threads always alive option is not supported in crystal codegen."
+      exit 1
+      ;;
+    --pyper-shuffle)
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --pyper-shuffle"
+      echo "Pyper shuffle option is not supported in crystal codegen."
+      exit 1
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      ;;
+  esac
+done
+
 # The first argument is the scale factor
 SCALE_FACTOR="$1"
 if [ -z "$SCALE_FACTOR" ]; then
@@ -71,7 +101,7 @@ echo -n "" > $OUTPUT_FILE
 # generate the cuda files
 for QUERY in "${QUERIES[@]}"; do
   # First run the run-sql tool to generate CUDA and get reference output
-  RUN_SQL="$BUILD_DIR/run-sql $TPCH_DIR/$QUERY.sql $TPCH_DATA_DIR --gen-cuda-crystal-code --gen-kernel-timing"
+  RUN_SQL="$BUILD_DIR/run-sql $TPCH_DIR/$QUERY.sql $TPCH_DATA_DIR --gen-cuda-crystal-code --gen-kernel-timing $CODEGEN_OPTIONS"
   echo $RUN_SQL
   $RUN_SQL > /dev/null # ignore the output. We are not comparing the results.
 

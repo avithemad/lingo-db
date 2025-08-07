@@ -448,7 +448,6 @@ class HyperTupleStreamCode : public TupleStreamCode {
       appendControl(fmt::format("cudaMemcpy(&{0}, d_{0}, sizeof(uint64_t), cudaMemcpyDeviceToHost);", COUNT(op)));
       if (!isProfiling())
          appendControl("}\n");
-      appendControl(fmt::format("std::clog << \"{0} : \" << {0} << std::endl;", COUNT(op)));
    }
    std::string MakeKeys(mlir::Operation* op, const mlir::ArrayAttr& keys, KernelType kernelType) {
       //TODO(avinash, p3): figure a way out for double keys
@@ -647,8 +646,9 @@ class HyperTupleStreamCode : public TupleStreamCode {
    void ProbeBloomFilter(mlir::Operation* op, std::string key, bool pk) {
       if (!gUseBloomFiltersForJoin) 
          return;
-      appendKernel("// Probe Bloom filter");
+      
       if (pk) {
+         appendKernel("// Probe Bloom filter");
          if (shouldUseThreadsAliveCodeGen()) {
             auto threadActiveCondition = fmt::format("{0}.contains({1});", BF(op), key);
             startThreadActiveScope(threadActiveCondition);
@@ -660,7 +660,7 @@ class HyperTupleStreamCode : public TupleStreamCode {
          countArgs[BF(op)] = "BLOOM_FILTER_CONTAINS";
          mlirToGlobalSymbol[BF(op)] = fmt::format("d_{}.ref()", BF(op));
       } else {
-         assert(false && "Bloom filter for multi-map not implemented yet.");
+         // assert(false && "Bloom filter for multi-map not implemented yet.");
       }
    }
 

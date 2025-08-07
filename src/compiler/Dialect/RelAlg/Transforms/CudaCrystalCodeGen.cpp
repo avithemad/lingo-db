@@ -412,22 +412,25 @@ class CrystalTupleStreamCode : public TupleStreamCode {
    void MaterializeCount(mlir::Operation* op) {
       countArgs[COUNT(op)] = "uint64_t*";
       mlirToGlobalSymbol[COUNT(op)] = fmt::format("d_{}", COUNT(op));
-      appendKernel("//Materialize count", KernelType::Count);
+      appendKernel("// Materialize count", KernelType::Count);
       appendKernel("#pragma unroll", KernelType::Count);
       appendKernel(fmt::format("for (int ITEM = 0; ITEM < ITEMS_PER_THREAD && (ITEM*TB + tid < {0}); ++ITEM) {{", getKernelSizeVariable()), KernelType::Count);
       appendKernel("if (!selection_flags[ITEM]) continue;", KernelType::Count);
       appendKernel(fmt::format("atomicAdd((int*){0}, 1);", COUNT(op)), KernelType::Count);
       appendKernel("}", KernelType::Count);
 
-      appendControl("//Materialize count");
-      appendControl(fmt::format("uint64_t* d_{0};", COUNT(op)));
-      appendControl(fmt::format("cudaMalloc(&d_{0}, sizeof(uint64_t));", COUNT(op)));
+      appendControl("// Materialize count");
+      appendControlDecl(fmt::format("uint64_t* d_{0} = nullptr;", COUNT(op)));
+      if (!isProfiling())
+         appendControl("if (runCountKernel){\n");
+      appendControl(fmt::format("cudaMallocExt(&d_{0}, sizeof(uint64_t));", COUNT(op)));
       deviceFrees.insert(fmt::format("d_{0}", COUNT(op)));
       appendControl(fmt::format("cudaMemset(d_{0}, 0, sizeof(uint64_t));", COUNT(op)));
       genLaunchKernel(KernelType::Count);
-      appendControl(fmt::format("uint64_t {0};", COUNT(op)));
+      appendControlDecl(fmt::format("uint64_t {0};", COUNT(op)));
       appendControl(fmt::format("cudaMemcpy(&{0}, d_{0}, sizeof(uint64_t), cudaMemcpyDeviceToHost);", COUNT(op)));
-      // appendControl(fmt::format("cudaFree(d_{0});", COUNT(op)));
+      if (!isProfiling())
+         appendControl("}\n");
    }
    std::string MakeKeys(mlir::Operation* op, const mlir::ArrayAttr& keys, KernelType kernelType) {
       //TODO(avinash, p3): figure a way out for double keys
@@ -543,7 +546,7 @@ class CrystalTupleStreamCode : public TupleStreamCode {
       auto keys = joinOp->getAttrOfType<mlir::ArrayAttr>("leftHash");
       MakeKeys(op, keys, KernelType::Count);
       auto key = MakeKeys(op, keys, KernelType::Main);
-      appendKernel("//Probe Hash table");
+      appendKernel("// Probe Hash table");
       std::string kernelSize = getKernelSizeVariable();
       appendKernel("#pragma unroll");
       appendKernel(fmt::format("for (int ITEM = 0; ITEM < ITEMS_PER_THREAD && (ITEM*TB + tid < {0}); ++ITEM) {{", kernelSize));
@@ -609,12 +612,12 @@ class CrystalTupleStreamCode : public TupleStreamCode {
       mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::insert)", HT(op));
       mlirToGlobalSymbol[BUF(op)] = fmt::format("d_{}", BUF(op));
       appendControl("// Insert hash table control;");
-      appendControl(fmt::format("{0} d_{1};", getBufIdxPtrType(), BUF_IDX(op)));
-      appendControl(fmt::format("cudaMalloc(&d_{0}, sizeof({1}));", BUF_IDX(op), getBufIdxType()));
+      appendControlDecl(fmt::format("{1} d_{0} = nullptr;", BUF_IDX(op), getBufIdxPtrType()));
+      appendControl(fmt::format("cudaMallocExt(&d_{0}, sizeof({1}));", BUF_IDX(op), getBufIdxType()));
       deviceFrees.insert(fmt::format("d_{0}", BUF_IDX(op)));
       appendControl(fmt::format("cudaMemset(d_{0}, 0, sizeof({1}));", BUF_IDX(op), getBufIdxType()));
-      appendControl(fmt::format("{0} d_{1};", getBufPtrType(), BUF(op)));
-      appendControl(fmt::format("cudaMalloc(&d_{0}, sizeof({1}) * {2} * {3});", BUF(op), getBufEltType(), COUNT(op), baseRelations.size()));
+      appendControlDecl(fmt::format("{1} d_{0} = nullptr;", BUF(op), getBufPtrType()));
+      appendControl(fmt::format("cudaMallocExt(&d_{0}, sizeof({3}) * {1} * {2});", BUF(op), COUNT(op), baseRelations.size(), getBufEltType()));
       deviceFrees.insert(fmt::format("d_{0}", BUF(op)));
       appendControl(fmt::format("auto d_{0} = cuco::static_map{{ (int){1}*2, cuco::empty_key{{({2})-1}},cuco::empty_value{{(int64_t)-1}},thrust::equal_to<{2}>{{}},cuco::linear_probing<1, cuco::default_hash_function<{2}>>() }};",
                                 HT(op), COUNT(op), getHTKeyType(keys), getHTValueType()));
@@ -772,8 +775,8 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
             }
             mainArgs[newbuffername] = bufferColType + "*";
             mlirToGlobalSymbol[newbuffername] = fmt::format("d_{}", newbuffername);
-            appendControl(fmt::format("{0}* d_{1};", bufferColType, newbuffername));
-            appendControl(fmt::format("cudaMalloc(&d_{0}, sizeof({1}) * {2});", newbuffername, bufferColType, COUNT(op)));
+            appendControlDecl(fmt::format("{0}* d_{1} = nullptr;", bufferColType, newbuffername));
+            appendControl(fmt::format("cudaMallocExt(&d_{0}, sizeof({1}) * {2});", newbuffername, bufferColType, COUNT(op)));
             deviceFrees.insert(fmt::format("d_{0}", newbuffername));
             appendControl(fmt::format("cudaMemset(d_{0}, 0, sizeof({1}) * {2});", newbuffername, bufferColType, COUNT(op)));
             if (auto aggrFunc = llvm::dyn_cast<relalg::AggrFuncOp>(col.getDefiningOp())) {
@@ -833,8 +836,8 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
             std::string keyColumnName = KEY(op) + mlirSymbol + "_encoded";
             mainArgs[keyColumnName] = "DBI16Type*";
             mlirToGlobalSymbol[keyColumnName] = fmt::format("d_{}", keyColumnName);
-            appendControl(fmt::format("DBI16Type* d_{0};", keyColumnName));
-            appendControl(fmt::format("cudaMalloc(&d_{0}, sizeof(DBI16Type) * {1});", keyColumnName, COUNT(op)));
+            appendControlDecl(fmt::format("DBI16Type* d_{0} = nullptr;", keyColumnName));
+            appendControl(fmt::format("cudaMallocExt(&d_{0}, sizeof(DBI16Type) * {1});", keyColumnName, COUNT(op)));
             deviceFrees.insert(fmt::format("d_{0}", keyColumnName));
             appendControl(fmt::format("cudaMemset(d_{0}, 0, sizeof(DBI16Type) * {1});", keyColumnName, COUNT(op)));
             // This load column is redundant as we do it in makekeys
@@ -844,8 +847,8 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
             std::string keyColumnName = KEY(op) + mlirSymbol;
             mainArgs[keyColumnName] = keyColumnType + "*";
             mlirToGlobalSymbol[keyColumnName] = fmt::format("d_{}", keyColumnName);
-            appendControl(fmt::format("{0}* d_{1};", keyColumnType, keyColumnName));
-            appendControl(fmt::format("cudaMalloc(&d_{0}, sizeof({1}) * {2});", keyColumnName, keyColumnType, COUNT(op)));
+            appendControlDecl(fmt::format("{0}* d_{1} = nullptr;", keyColumnType, keyColumnName));
+            appendControl(fmt::format("cudaMallocExt(&d_{0}, sizeof({1}) * {2});", keyColumnName, keyColumnType, COUNT(op)));
             deviceFrees.insert(fmt::format("d_{0}", keyColumnName));
             appendControl(fmt::format("cudaMemset(d_{0}, 0, sizeof({1}) * {2});", keyColumnName, keyColumnType, COUNT(op)));
             auto key = LoadColumn(mlir::cast<tuples::ColumnRefAttr>(col), KernelType::Main);
@@ -859,14 +862,14 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       auto materializeOp = mlir::dyn_cast_or_null<relalg::MaterializeOp>(op);
       if (!materializeOp) assert(false && "Materialize buffer needs materialize op as argument.");
 
-      appendControl("//Materialize buffers");
-      appendControl(fmt::format("uint64_t* d_{0};", MAT_IDX(op)));
-      appendControl(fmt::format("cudaMalloc(&d_{0}, sizeof(uint64_t));", MAT_IDX(op)));
+      appendControl("// Materialize buffers");
+      appendControlDecl(fmt::format("uint64_t* d_{0} = nullptr;", MAT_IDX(op)));
+      appendControl(fmt::format("cudaMallocExt(&d_{0}, sizeof(uint64_t));", MAT_IDX(op)));
       deviceFrees.insert(fmt::format("d_{0}", MAT_IDX(op)));
       appendControl(fmt::format("cudaMemset(d_{0}, 0, sizeof(uint64_t));", MAT_IDX(op)));
       mainArgs[MAT_IDX(op)] = "uint64_t*";
       mlirToGlobalSymbol[MAT_IDX(op)] = "d_" + MAT_IDX(op);
-      appendKernel("//Materialize buffers", KernelType::Main);
+      appendKernel("// Materialize buffers", KernelType::Main);
       for (auto col : materializeOp.getCols()) {
          auto columnAttr = mlir::cast<tuples::ColumnRefAttr>(col);
          auto detail = ColumnDetail(columnAttr);
@@ -892,10 +895,11 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
 
          if (type == "DBStringType") {
             std::string newBuffer = MAT(op) + mlirSymbol + "_encoded";
-            appendControl(fmt::format("auto {0} = (DBI16Type*)malloc(sizeof(DBI16Type) * {1});", newBuffer, COUNT(op)));
+            appendControlDecl(fmt::format("DBI16Type* {0} = nullptr;", newBuffer));
+            appendControl(fmt::format("mallocExt(&{0}, sizeof(DBI16Type) * {1});", newBuffer, COUNT(op)));
             hostFrees.insert(newBuffer);
-            appendControl(fmt::format("DBI16Type* d_{0};", newBuffer));
-            appendControl(fmt::format("cudaMalloc(&d_{0}, sizeof(DBI16Type) * {1});", newBuffer, COUNT(op)));
+            appendControlDecl(fmt::format("DBI16Type* d_{0} = nullptr;", newBuffer));
+            appendControl(fmt::format("cudaMallocExt(&d_{0}, sizeof(DBI16Type) * {1});", newBuffer, COUNT(op)));
             deviceFrees.insert(fmt::format("d_{0}", newBuffer));
             mainArgs[newBuffer] = "DBI16Type*";
             mlirToGlobalSymbol[newBuffer] = "d_" + newBuffer;
@@ -903,10 +907,11 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
             appendKernel(fmt::format("{0}[{2}] = {1}[ITEM];", newBuffer, key, mat_idx(op)), KernelType::Main);
          } else {
             std::string newBuffer = MAT(op) + mlirSymbol;
-            appendControl(fmt::format("auto {0} = ({1}*)malloc(sizeof({1}) * {2});", newBuffer, type, COUNT(op)));
+            appendControlDecl(fmt::format("{1}* {0} = nullptr;", newBuffer, type));
+            appendControl(fmt::format("mallocExt(&{0}, sizeof({1}) * {2});", newBuffer, type, COUNT(op)));
             hostFrees.insert(newBuffer);
-            appendControl(fmt::format("{1}* d_{0};", newBuffer, type));
-            appendControl(fmt::format("cudaMalloc(&d_{0}, sizeof({1}) * {2});", newBuffer, type, COUNT(op)));
+            appendControlDecl(fmt::format("{1}* d_{0} = nullptr;", newBuffer, type));
+            appendControl(fmt::format("cudaMallocExt(&d_{0}, sizeof({1}) * {2});", newBuffer, type, COUNT(op)));
             deviceFrees.insert(fmt::format("d_{0}", newBuffer));
             mainArgs[newBuffer] = type + "*";
             mlirToGlobalSymbol[newBuffer] = "d_" + newBuffer;
@@ -920,6 +925,8 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       std::string printStmts;
       std::string delimiter = "|";
       bool first = true;
+      if (!isProfiling())
+         appendControl("if (iter == numIterations - 1) {"); // only print at the last iteration
       for (auto col : materializeOp.getCols()) {
          auto columnAttr = mlir::cast<tuples::ColumnRefAttr>(col);
          auto detail = ColumnDetail(columnAttr);
@@ -957,6 +964,8 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
          appendControl(fmt::format("for (auto i=0ull; i < {0}; i++) {{ {1}std::cout << std::endl; }}",
                                    COUNT(op), printStmts));
       }
+      if (!isProfiling())
+         appendControl("}");
    }
 
    std::string mapOpDfs(mlir::Operation* op, std::vector<tuples::ColumnRefAttr>& dep) {
@@ -1539,15 +1548,33 @@ class CudaCrystalCodeGen : public mlir::PassWrapper<CudaCrystalCodeGen, mlir::Op
 
       emitControlFunctionSignature(outputFile);
       emitTimingEventCreation(outputFile);
-
+      for (auto code : kernelSchedule) {
+         code->printControlDeclarations(outputFile);
+      }
       outputFile << "size_t used_mem = usedGpuMem();\n";
+
+      // generate timing start
+      if (!isProfiling()) {
       outputFile << "auto startTime = std::chrono::high_resolution_clock::now();\n";
+         outputFile << fmt::format("size_t numIterations = {0};\n", generateKernelTimingCode() ? 10 : 2);
+         outputFile << "for (size_t iter = 0; iter < numIterations; iter++) {\n";
+         outputFile << "bool runCountKernel = (iter == 0);\n";
+         outputFile << "if (iter == 1) startTime = std::chrono::high_resolution_clock::now();\n"; // start the timer after the warp up iteration
+      }
       for (auto code : kernelSchedule) {
          code->printControl(outputFile);
+      }
+      if (!isProfiling()) {
+         outputFile << "}\n";
+         outputFile << "auto endTime = std::chrono::high_resolution_clock::now();\n";
+         outputFile << fmt::format("auto duration = std::chrono::duration_cast<std::chrono::microseconds>(endTime - startTime)/(numIterations - 1);\n");
+         if (generateKernelTimingCode())
+            outputFile << "std::cout << \"total_query, \" << duration.count() / 1000. << std::endl;\n";
       }
       outputFile << "std::clog << \"Used memory: \" << used_mem / (1024 * 1024) << \" MB\" << std::endl; \n\
       size_t aux_mem = usedGpuMem() - used_mem;\n\
       std::clog << \"Auxiliary memory: \" << aux_mem / (1024) << \" KB\" << std::endl;\n";
+
       for (auto code : kernelSchedule) {
          code->printFrees(outputFile);
       }
