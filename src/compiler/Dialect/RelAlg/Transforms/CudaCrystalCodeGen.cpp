@@ -951,16 +951,10 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
          }
          first = false;
       }
-      appendControl(fmt::format("auto endTime = std::chrono::high_resolution_clock::now();"));
-      appendControl(fmt::format("auto duration = std::chrono::duration_cast<std::chrono::microseconds>(endTime - startTime);"));
-
       // Only append the print statements if we are not generating kernel timing code
       // We want to be able to parse the timing info and don't want unnecessary print statements
       // when we're timing kernels
-      if (generateKernelTimingCode()) {
-         appendControl("std::cout << \"total_query, \" << duration.count() / 1000. << std::endl;\n");
-      } else if(!generatePerOperationProfile()) {
-         appendControl(fmt::format("std::clog << \"Query execution time: \" << duration.count() / 1000. << \" milliseconds.\" << std::endl;\n"));
+      if(!generatePerOperationProfile()) {
          appendControl(fmt::format("for (auto i=0ull; i < {0}; i++) {{ {1}std::cout << std::endl; }}",
                                    COUNT(op), printStmts));
       }
