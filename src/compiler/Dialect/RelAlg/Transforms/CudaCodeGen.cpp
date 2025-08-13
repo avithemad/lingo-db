@@ -774,24 +774,28 @@ class HyperTupleStreamCode : public TupleStreamCode {
       std::string ht_size = "0";
       // TODO(avinash, p2): this is a hacky way, actually check if --use-db flag is enabled and query optimization is performed
       if (auto floatAttr = mlir::dyn_cast_or_null<mlir::FloatAttr>(op->getAttr("rows"))) {
-         if (std::floor(floatAttr.getValueAsDouble()) != 0)
-            ht_size = std::to_string((size_t) std::ceil(floatAttr.getValueAsDouble()));
+         if (std::floor(floatAttr.getValueAsDouble()) != 0) {            
+            ht_size = std::to_string(std::min((int) std::ceil(floatAttr.getValueAsDouble()), INT32_MAX/2));
+         }
          else {
             for (auto p : countArgs) {
                if (p.second == "size_t")
                   ht_size = p.first;
             }
          }
-      }
+      }      
       assert(ht_size != "0" && "hash table for aggregation is sizing to be 0!!");
-      appendControl("// Create aggregation hash table");
-      appendControl(fmt::format("auto d_{0} = cuco::static_map{{ (int){1}*2, cuco::empty_key{{({2})-1}},\
+      appendControlDecl("// Create aggregation hash table");
+      appendControlDecl(fmt::format("auto d_{0} = cuco::static_map{{ (int){1}*2, cuco::empty_key{{({2})-1}},\
 cuco::empty_value{{({3})-1}},\
 thrust::equal_to<{2}>{{}},\
 cuco::linear_probing<1, cuco::default_hash_function<{2}>>() }};",
                                 HT(op), ht_size, getHTKeyType(groupByKeys), getHTValueType()));
+      if (!isProfiling())
+         appendControl("if (runCountKernel){\n");
       genLaunchKernel(KernelType::Count);
-      appendControl(fmt::format("size_t {0} = d_{1}.size();", COUNT(op), HT(op)));
+      appendControlDecl(fmt::format("size_t {0} = 0;", COUNT(op)));
+      appendControl(fmt::format("{0} = d_{1}.size();", COUNT(op), HT(op)));
       // TODO(avinash): deallocate the old hash table and create a new one to save space in gpu when estimations are way off
       appendControl(fmt::format("thrust::device_vector<{3}> keys_{0}({2}), vals_{0}({2});\n\
 d_{1}.retrieve_all(keys_{0}.begin(), vals_{0}.begin());\n\
@@ -799,6 +803,8 @@ d_{1}.clear();\n\
 {3}* raw_keys{0} = thrust::raw_pointer_cast(keys_{0}.data());\n\
 insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::insert), {2});",
                                 GetId(op), HT(op), COUNT(op), getHTKeyType(groupByKeys)));
+      if (!isProfiling())
+         appendControl("}\n"); // runCountKernel
    }
    void AggregateInHashTable(mlir::Operation* op) {
       auto aggOp = mlir::dyn_cast_or_null<relalg::AggregationOp>(op);

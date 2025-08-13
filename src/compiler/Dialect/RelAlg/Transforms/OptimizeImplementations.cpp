@@ -489,7 +489,8 @@ class OptimizeImplementations : public mlir::PassWrapper<OptimizeImplementations
                   if (auto rightCardinalityAttr = mlir::dyn_cast_or_null<mlir::FloatAttr>(right->getAttr("rows"))) {
                      numRowsRight = rightCardinalityAttr.getValueAsDouble();
                   }
-                  if (isInnerJoin && leftCanUsePrimaryKeyIndex && right->hasAttr("rows") && 20 * numRowsRight < numRowsLeft) {
+                  bool allowIndexHashJoin = false;
+                  if (allowIndexHashJoin && isInnerJoin && leftCanUsePrimaryKeyIndex && right->hasAttr("rows") && 20 * numRowsRight < numRowsLeft) {
                      // base relations do not need to be moved
                      auto leftBaseTable = mlir::cast<relalg::BaseTableOp>(leftPath.top());
                      leftPath.pop();
