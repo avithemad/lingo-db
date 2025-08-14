@@ -29,28 +29,28 @@ bool isProfiling() { return gGenIsProfiling; }
 
 // --- [start] different sized hash tables helpers ---
 
-static bool gDifferentSizedHashTables = false;
+static bool gSmallerHashTables = false;
 
 bool shouldGenerateSmallerHashTables() {
-   return gDifferentSizedHashTables;
+   return gSmallerHashTables;
 }
 
 std::string getHTKeyType(mlir::ArrayAttr keys) {
-   if (!gDifferentSizedHashTables || keys.size() > 1)
+   if (!gSmallerHashTables || keys.size() > 1)
       return "int64_t";
    else
       return "int32_t"; 
 }
 
 std::string getHTValueType() {
-   if (!gDifferentSizedHashTables)
+   if (!gSmallerHashTables)
       return "int64_t";
    else
       return "int32_t";
 }
 
 std::string getBufEltType() {
-   if (!gDifferentSizedHashTables)
+   if (!gSmallerHashTables)
       return "uint64_t";
    else
       return "uint32_t";
@@ -219,8 +219,9 @@ std::string translateConstantOp(db::ConstantOp& constantOp) {
 bool gStaticMapOnly = false;
 bool gUseBloomFiltersForJoin = false;
 bool gThreadsAlwaysAlive = false;
-bool gGeneratingShuffles = false;
+bool gPyperShuffle = false;
 bool gCompilingSSB = false;
+bool gShuffleAllOps = false;
 
 void removeCodeGenSwitch(int& argc, char** argv, int i) {
    // Remove --gen-cuda-code from the argument list
@@ -245,102 +246,36 @@ void checkForBenchmarkSwitch(int& argc, char** argv) {
    }
 }
 
-// TODO: Consolidate this into bool, config map and go over it in a loop
-static void checkForStaticMapOnlySwitch(int& argc, char** argv) {
+static void checkForCodegenSwitch(int &argc, char** argv, bool* config, const std::string& switchName, const std::string& descr) {
    for (int i = 0; i < argc; i++) {
-      if (std::string(argv[i]) == "--static-map-only") {
-         gStaticMapOnly = true;
+      if (std::string(argv[i]) == switchName) {
+         std::clog << "Enabled " << descr << "\n";
+         *config = true;
          removeCodeGenSwitch(argc, argv, i);
          break;
       }
    }
-}
-
-static void checkForGenKernelTimingCodeSwitch(int& argc, char** argv) {
-   for (int i = 0; i < argc; i++)
-      if (std::string(argv[i]) == "--gen-kernel-timing") {
-         std::clog << "Enabled generation of kernel timing code\n";
-         gGenKernelTimingCode = true;
-         removeCodeGenSwitch(argc, argv, i);
-         break;
-      }
-}
-
-static void checkForGenPerOperationProfileSwitch(int& argc, char** argv) {
-   for (int i = 0; i < argc; i++) {
-      if (std::string(argv[i]) == "--gen-per-operation-profile") {
-         std::clog << "Enabled generation of per operation profile code\n";
-         gGenPerOperationProfile = true;
-         removeCodeGenSwitch(argc, argv, i);
-         break;
-      }
-   }
-}
-
-static void checkForHashTableSizeSwitch(int& argc, char** argv) {
-   for (int i = 0; i < argc; i++) {
-      if (std::string(argv[i]) == "--smaller-hash-tables") {
-         std::clog << "Enabled smaller hash tables\n";
-         gDifferentSizedHashTables = true;
-         removeCodeGenSwitch(argc, argv, i);
-         break;
-      }
-   }
-}
-
-static void checkForBloomFilterSwitch(int& argc, char** argv) {
-   for (int i = 0; i < argc; i++) {
-      if (std::string(argv[i]) == "--use-bloom-filters") {
-         std::clog << "Enabled bloom filters for join\n";
-         gUseBloomFiltersForJoin = true;
-         removeCodeGenSwitch(argc, argv, i);
-         break;
-      }
-   }
-}
-
-static void checkForAlwaysAliveThreadsSwitch(int& argc, char** argv) {
-   for (int i = 0; i < argc; i++) {
-      if (std::string(argv[i]) == "--threads-always-alive") {
-         std::clog << "Enabled threads always alive\n";
-         gThreadsAlwaysAlive = true;
-         removeCodeGenSwitch(argc, argv, i);
-         break;
-      }
-   }
-}
-
-static void checkForPyperShuffleSwitch(int& argc, char** argv) {
-   for (int i = 0; i < argc; i++) {
-      if (std::string(argv[i]) == "--pyper-shuffle") {
-         std::clog << "Enabled pyper shuffle code generation\n";
-         gGeneratingShuffles = true;
-         removeCodeGenSwitch(argc, argv, i);
-         break;
-      }
-   }
-}
-
-static void checkForProfilingSwitch(int& argc, char** argv) {
-   for (int i = 0; i < argc; i++) {
-      if (std::string(argv[i]) == "--profiling") {
-         std::clog << "Enabled profiling code generation\n";
-         gGenIsProfiling = true;
-         removeCodeGenSwitch(argc, argv, i);
-         break;
-      }
-   }
-}
+} 
 
 void checkForCodeGenSwitches(int& argc, char** argv) {
-   checkForStaticMapOnlySwitch(argc, argv);
-   checkForGenKernelTimingCodeSwitch(argc, argv);
-   checkForGenPerOperationProfileSwitch(argc, argv);
-   checkForHashTableSizeSwitch(argc, argv);
-   checkForBloomFilterSwitch(argc, argv);
-   checkForAlwaysAliveThreadsSwitch(argc, argv);
-   checkForPyperShuffleSwitch(argc, argv);
-   checkForProfilingSwitch(argc, argv);
+   std::tuple<bool*, std::string, std::string> switches[]  = {
+      std::make_tuple(&gStaticMapOnly, "--static-map-only", "static map only code generation"),
+      std::make_tuple(&gUseBloomFiltersForJoin, "--use-bloom-filters", "bloom filters for join"),
+      std::make_tuple(&gThreadsAlwaysAlive, "--threads-always-alive", "threads always alive"),
+      std::make_tuple(&gPyperShuffle, "--pyper-shuffle", "pyper shuffle code generation"),
+      std::make_tuple(&gGenKernelTimingCode, "--gen-kernel-timing", "kernel timing code generation"),
+      std::make_tuple(&gGenPerOperationProfile, "--gen-per-operation-profile", "per operation profile code generation"),
+      std::make_tuple(&gSmallerHashTables, "--smaller-hash-tables", "smaller hash tables"),
+      std::make_tuple(&gGenIsProfiling, "--profiling", "profiling code generation"),
+      std::make_tuple(&gShuffleAllOps, "--shuffle-all-ops", "shuffling all ops")
+   };
+   for (const auto& [switchPtr, switchName, descr] : switches) {
+      checkForCodegenSwitch(argc, argv, switchPtr, switchName, descr);
+   }
+
+   // assert that gShuffleAllOps and gPyperShuffle can only be enabled if gThreadsAlwaysAlive is true
+   assert((gThreadsAlwaysAlive || !gShuffleAllOps || !gPyperShuffle) && "gThreadsAlwaysAlive must be true if gShuffleAllOps or gPyperShuffle is enabled");
+   // assert that only one of gShuffleAllOps or gGeneratingShuffles must be enabled. Or both must be disabled.
 }
 
 // --- [end] code generation switches helpers ---

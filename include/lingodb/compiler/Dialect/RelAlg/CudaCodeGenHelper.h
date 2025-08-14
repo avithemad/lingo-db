@@ -287,10 +287,11 @@ void checkForCodeGenSwitches(int& argc, char** argv);
 // --- [end] code generation switches helpers ---
 
 // --- [start] Pyper ---
-extern bool gGeneratingShuffles; // TODO: Move to a getter
+extern bool gPyperShuffle; // TODO: Move to a getter
 extern bool gThreadsAlwaysAlive; // TODO: Move to a getter
 // -- [end] Pyper ---
 extern bool gUseBloomFiltersForJoin; // TODO: Move to a getter
+extern bool gShuffleAllOps; // TODO: Move to a getter
 
 bool isPrimaryKey(const std::set<std::string>& keysSet);
 bool invertJoinIfPossible(std::set<std::string>& rightkeysSet, bool left_pk);

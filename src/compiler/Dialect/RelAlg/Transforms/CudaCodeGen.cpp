@@ -344,7 +344,7 @@ class HyperTupleStreamCode : public TupleStreamCode {
    bool shouldGenerateShuffle() {
       // we can only generate shuffle when threads always alive is enabled
       // AND we are not inside a forEach lambda of a multimap
-      return gGeneratingShuffles && shouldUseThreadsAliveCodeGen();
+      return (gPyperShuffle || gShuffleAllOps) && shouldUseThreadsAliveCodeGen();
    }
    void saveOpToShuffleBuffer(const mlir::Operation *op) {
       assert(shouldGenerateShuffle() && "saveOpToShuffleBuffer can only be called when shuffles are enabled");
@@ -358,7 +358,12 @@ class HyperTupleStreamCode : public TupleStreamCode {
       }
       appendKernel("threadActive = true;");
       closeThreadActiveScopes();
-      startThreadActiveScope("ShouldShuffle(threadActive)");
+      if (gPyperShuffle)
+         startThreadActiveScope("ShouldShuffle(threadActive)");
+      else if (gShuffleAllOps)
+         startThreadActiveScope("true");
+      else
+         assert(false && "Shuffle: We shouldn't be here if shuffles are not enabled");
       startThreadActiveScope("threadActive");
       appendKernel("// Save current state to shuffle buffer");      
       appendKernel(fmt::format("auto shuffle_slot = atomicAdd_block(&shuffle_buf_idx[{0}], 1);", m_shuffleData.cur_shuffle_id));
@@ -650,7 +655,7 @@ class HyperTupleStreamCode : public TupleStreamCode {
       if (pk) {
          appendKernel("// Probe Bloom filter");
          if (shouldUseThreadsAliveCodeGen()) {
-            auto threadActiveCondition = fmt::format("{0}.contains({1});", BF(op), key);
+            auto threadActiveCondition = fmt::format("{0}.contains({1})", BF(op), key);
             startThreadActiveScope(threadActiveCondition);
          }
          else
