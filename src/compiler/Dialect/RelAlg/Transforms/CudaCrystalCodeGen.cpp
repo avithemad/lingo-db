@@ -954,7 +954,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       // Only append the print statements if we are not generating kernel timing code
       // We want to be able to parse the timing info and don't want unnecessary print statements
       // when we're timing kernels
-      if(!generatePerOperationProfile()) {
+      if(!generatePerOperationProfile() && !generateKernelTimingCode()) {
          appendControl(fmt::format("for (auto i=0ull; i < {0}; i++) {{ {1}std::cout << std::endl; }}",
                                    COUNT(op), printStmts));
       }

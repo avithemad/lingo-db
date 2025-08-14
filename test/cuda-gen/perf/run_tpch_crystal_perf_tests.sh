@@ -1,13 +1,17 @@
 #!/bin/bash
 
-CODEGEN_OPTIONS="--smaller-hash-tables"
+CODEGEN_OPTIONS=""
 # for each arg in args
+SUB_DIR="."
+SUFFIX=""
 for arg in "$@"; do
   case $arg in
     --smaller-hash-tables)
-      # CODEGEN_OPTIONS="$CODEGEN_OPTIONS --smaller-hash-tables" # make this default for now
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --smaller-hash-tables" # make this default for now
       # Remove this specific argument from $@
       set -- "${@/$arg/}"
+      SUB_DIR="HT32"
+      SUFFIX="-ht32"
       ;;
     --use-bloom-filters)
       CODEGEN_OPTIONS="$CODEGEN_OPTIONS --use-bloom-filters"
@@ -15,6 +19,8 @@ for arg in "$@"; do
       exit 1
       # Remove this specific argument from $@
       set -- "${@/$arg/}"
+      SUB_DIR="HT32_BF"
+      SUFFIX="-ht32-bf"
       ;;
     --threads-always-alive)
       echo "Threads always alive option is not supported in crystal codegen."
@@ -27,6 +33,11 @@ for arg in "$@"; do
       # Remove this specific argument from $@
       set -- "${@/$arg/}"
       ;;
+    --shuffle-all-ops)
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --shuffle-all-ops"
+      echo "Shuffle all ops option is not supported in crystal codegen."
+      exit 1
+      ;;
   esac
 done
 
@@ -37,7 +48,7 @@ if [ -z "$SCALE_FACTOR" ]; then
   exit 1
 fi
 
-SUFFIX="$2"
+GPU='A6000'
 
 # Check if SQL_PLAN_COMPILER_DIR environment variable is set
 if [ -n "$SQL_PLAN_COMPILER_DIR" ]; then
@@ -78,6 +89,9 @@ fi
 
 
 QUERIES=(1 3 4 5 6 7 8 9 10 12 13 14 16 17 18 19 20)
+if [ $SCALE_FACTOR -gt 10 ]; then
+  QUERIES=(1 3 4 5 6 7 8 10 12 13 14 16 17 18 19 20) # query 9 has issues with memory.
+fi
 
 TPCH_CUDA_GEN_DIR="$SQL_PLAN_COMPILER_DIR/gpu-db/tpch-$SCALE_FACTOR"
 echo "TPCH_CUDA_GEN_DIR: $TPCH_CUDA_GEN_DIR"
@@ -92,7 +106,9 @@ if [ $? -ne 0 ]; then
   exit 1
 fi
 
-OUTPUT_FILE=$SCRIPT_DIR/tpch-$SCALE_FACTOR-crystal-$SUFFIX-perf.csv
+OUTPUT_DIR=$SQL_PLAN_COMPILER_DIR/reports/ncu/$GPU/tpch-$SCALE_FACTOR-crystal/$SUB_DIR
+mkdir -p $OUTPUT_DIR
+OUTPUT_FILE=$OUTPUT_DIR/tpch-$SCALE_FACTOR-crystal$SUFFIX-perf.csv
 echo "Output file: $OUTPUT_FILE"
 
 # Empty the output file
@@ -104,6 +120,11 @@ for QUERY in "${QUERIES[@]}"; do
   RUN_SQL="$BUILD_DIR/run-sql $TPCH_DIR/$QUERY.sql $TPCH_DATA_DIR --gen-cuda-crystal-code --gen-kernel-timing $CODEGEN_OPTIONS"
   echo $RUN_SQL
   $RUN_SQL > /dev/null # ignore the output. We are not comparing the results.
+
+  # format the file
+  FORMAT_CMD="clang-format -i output.cu"
+  echo $FORMAT_CMD
+  $FORMAT_CMD
 
   # Now run the generated CUDA code
   CP_CMD="cp output.cu $TPCH_CUDA_GEN_DIR/q$QUERY.crystal.codegen.cu"

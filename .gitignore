@@ -26,3 +26,4 @@ output.cu
 intermediate_mlir
 build*/
 .venv
+**/*.log

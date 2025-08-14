@@ -27,13 +27,15 @@ exec 2>&1
 
 # Get the directory of this script
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RUN_TPCH_SCRIPT="$SCRIPT_DIR/run_tpch_hyper_perf_tests.sh"
+RUN_HYPER_PERF_SCRIPT="$SCRIPT_DIR/run_tpch_hyper_perf_tests.sh"
 
 # Check if the run_tpch_tests.sh script exists
-if [ ! -f "$RUN_TPCH_SCRIPT" ]; then
-  echo "Error: run_tpch_tests.sh not found at $RUN_TPCH_SCRIPT"
+if [ ! -f "$RUN_HYPER_PERF_SCRIPT" ]; then
+  echo "Error: run_tpch_tests.sh not found at $RUN_HYPER_PERF_SCRIPT"
   exit 1
 fi
+
+RUN_CRYSTAL_PERF_SCRIPT="$SCRIPT_DIR/run_tpch_crystal_perf_tests.sh"
 
 # Array to store test results
 PASSED_CONFIGS=()
@@ -41,6 +43,8 @@ FAILED_CONFIGS=()
 
 # Function to run tests and capture results
 run_test_config() {
+  local script_path="$1"
+  shift
   local config_name="$1"
   shift  # Remove first argument, rest are the parameters
   local params="$@"
@@ -51,7 +55,7 @@ run_test_config() {
   echo "========================================"
   
   # Run the test
-  $RUN_TPCH_SCRIPT $params
+  $script_path $params
   local exit_code=$?
   
   if [ $exit_code -eq 0 ]; then
@@ -66,24 +70,38 @@ run_test_config() {
   return $exit_code
 }
 
+run_hyper_test_config() {
+  run_test_config "$RUN_HYPER_PERF_SCRIPT" "$@"
+}
+
+run_crystal_test_config() {
+  run_test_config "$RUN_CRYSTAL_PERF_SCRIPT" "$@"
+}
+
 echo "Starting TPC-H tests with scale factor: $SCALE_FACTOR"
 echo "All output will be logged to: $LOG_FILE"
 echo "========================================"
 
 # Test Configuration 1: Basic run
-run_test_config "Basic" $SCALE_FACTOR
+run_hyper_test_config "Basic" $SCALE_FACTOR
 
 # Test Configuration 2: With smaller hash tables
-run_test_config "Smaller Hash Tables" $SCALE_FACTOR --smaller-hash-tables -ht32
+run_hyper_test_config "Smaller Hash Tables" $SCALE_FACTOR --smaller-hash-tables -ht32
 
 # Test Configuration 3: With bloom filters
-run_test_config "Bloom Filters" $SCALE_FACTOR --smaller-hash-tables --use-bloom-filters
+run_hyper_test_config "Bloom Filters" $SCALE_FACTOR --smaller-hash-tables --use-bloom-filters
 
 # Test Configuration 4: With pyper shuffle
-run_test_config "Pyper Shuffle" $SCALE_FACTOR --smaller-hash-tables --pyper-shuffle
+run_hyper_test_config "Pyper Shuffle" $SCALE_FACTOR --smaller-hash-tables --pyper-shuffle
 
 # Test Configuration 5: With shuffle all ops
-run_test_config "Shuffle All Ops" $SCALE_FACTOR --smaller-hash-tables --shuffle-all-ops
+run_hyper_test_config "Shuffle All Ops" $SCALE_FACTOR --smaller-hash-tables --shuffle-all-ops
+
+# Test Configuration 6: Basic crystal run
+run_crystal_test_config "Basic" $SCALE_FACTOR
+
+# Test Configuration 7: Crystal with smaller hash tables
+run_crystal_test_config "Smaller Hash Tables" $SCALE_FACTOR --smaller-hash-tables -ht32
 
 echo "========================================"
 echo "FINAL RESULTS SUMMARY"
