@@ -1,5 +1,45 @@
 #!/bin/bash
 
+CODEGEN_OPTIONS=""
+# for each arg in args
+for arg in "$@"; do
+  case $arg in
+    --smaller-hash-tables)
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --smaller-hash-tables" # make this default for now
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      ;;
+    --use-bloom-filters)
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --use-bloom-filters"
+      echo "Use bloom filters option is not supported in crystal codegen."
+      exit 1
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      ;;
+    --threads-always-alive)
+      echo "Threads always alive option is not supported in crystal codegen."
+      exit 1
+      ;;
+    --pyper-shuffle)
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --pyper-shuffle"
+      echo "Pyper shuffle option is not supported in crystal codegen."
+      exit 1
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      ;;
+    --profiling)
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --profiling"
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      ;;
+    --shuffle-all-ops)
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --shuffle-all-ops"
+      echo "Shuffle all ops option is not supported in crystal codegen."
+      exit 1
+      ;;
+  esac
+done
+
 # The first argument is the scale factor
 SCALE_FACTOR="$1"
 if [ -z "$SCALE_FACTOR" ]; then
@@ -52,6 +92,12 @@ MAKE_RUNTIME="make build-runtime CUCO_SRC_PATH=$CUCO_SRC_PATH"
 echo $MAKE_RUNTIME
 $MAKE_RUNTIME
 
+# Check if the make command was successful
+if [ $? -ne 0 ]; then
+  echo -e "\033[0;31mError building runtime!\033[0m"
+  exit 1
+fi
+
 # cleanup the result files, built shared objects
 rm -f build/*.codegen.so # do this so that we don't run other queries by mistake
 rm -f $SCRIPT_DIR/*.csv
@@ -59,23 +105,11 @@ rm -f $TPCH_CUDA_GEN_DIR/*.codegen.cu
 rm -f $TPCH_CUDA_GEN_DIR/*.csv
 rm -f $TPCH_CUDA_GEN_DIR/*.log
 
-# Check if the make command was successful
-if [ $? -ne 0 ]; then
-  echo -e "\033[0;31mError building runtime!\033[0m"
-  exit 1
-fi
-
-popd
-
-CD_CMD="cd $TPCH_CUDA_GEN_DIR"
-echo $CD_CMD
-$CD_CMD
-
 # generate the cuda files
 for QUERY in "${QUERIES[@]}"; do
   # First run the run-sql tool to generate CUDA and get reference output
   OUTPUT_FILE=$SCRIPT_DIR/"tpch-$QUERY-ref.csv"
-  RUN_SQL="$BUILD_DIR/run-sql $TPCH_DIR/$QUERY.sql $TPCH_DATA_DIR --gen-cuda-crystal-code"
+  RUN_SQL="$BUILD_DIR/run-sql $TPCH_DIR/$QUERY.sql $TPCH_DATA_DIR --gen-cuda-crystal-code $CODEGEN_OPTIONS"
   echo $RUN_SQL
   $RUN_SQL > $OUTPUT_FILE
 
@@ -130,7 +164,7 @@ cd -
 
 for QUERY in "${QUERIES[@]}"; do
   OUTPUT_FILE="tpch-$QUERY-ref.csv"
-  PYTHON_CMD="python $SCRIPT_DIR/compare_tpch_outputs.py $OUTPUT_FILE $TPCH_CUDA_GEN_DIR/cuda-tpch-$QUERY.crystal.csv"
+  PYTHON_CMD="python $SCRIPT_DIR/compare_tpch_outputs.py $SCRIPT_DIR/$OUTPUT_FILE $TPCH_CUDA_GEN_DIR/cuda-tpch-$QUERY.crystal.csv"
   echo $PYTHON_CMD
   $PYTHON_CMD
 
