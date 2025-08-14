@@ -56,8 +56,13 @@ for arg in "$@"; do
   esac
 done
 
-# The first argument is the directory where sql-plan-compiler is
-CUR_GPU="A6000" # TODO: Change this when you change GPUs
+if [ -n "$CUR_GPU" ]; then
+  echo "Using CUR_GPU from environment variable: $CUR_GPU"
+else
+  echo "CUR_GPU environment variable is not set."
+  exit 1
+fi
+
 SCALE_FACTOR=$1
 if [ -z "$SCALE_FACTOR" ]; then
   echo "Usage: $0 <scale_factor> [--crystal] "
