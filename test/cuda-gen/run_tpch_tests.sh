@@ -1,11 +1,11 @@
 #!/bin/bash
 
-CODEGEN_OPTIONS="--smaller-hash-tables --threads-always-alive"
+CODEGEN_OPTIONS="--threads-always-alive" # --smaller-hash-tables"
 # for each arg in args
 for arg in "$@"; do
   case $arg in
     --smaller-hash-tables)
-      # CODEGEN_OPTIONS="$CODEGEN_OPTIONS --smaller-hash-tables" # make this default for now
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --smaller-hash-tables" # make this default for now
       # Remove this specific argument from $@
       set -- "${@/$arg/}"
       ;;
@@ -29,6 +29,10 @@ for arg in "$@"; do
       # Remove this specific argument from $@
       set -- "${@/$arg/}"
       ;;
+    --shuffle-all-ops)
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --shuffle-all-ops"
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
   esac
 done
 
@@ -79,7 +83,7 @@ fi
 QUERIES=(1 3 4 5 6 7 8 9 10 12 13 14 16 17 18 19 20)
 if [ "$SCALE_FACTOR" -gt 10 ]; then
   QUERIES=(1 3 4 5 6 7 8 10 12 13 14 16 17 18 19 20) # remove query 9 for now as the aggregation table is huge
-else
+fi
 
 TPCH_CUDA_GEN_DIR="$SQL_PLAN_COMPILER_DIR/gpu-db/tpch-$SCALE_FACTOR"
 echo "TPCH_CUDA_GEN_DIR: $TPCH_CUDA_GEN_DIR"
@@ -97,7 +101,7 @@ fi
 # cleanup the result files, built shared objects
 rm -f build/*.codegen.so # do this so that we don't run other queries by mistake
 rm -f $SCRIPT_DIR/*.csv
-# rm -f $TPCH_CUDA_GEN_DIR/*.codegen.cu
+rm -f $TPCH_CUDA_GEN_DIR/*.codegen.cu
 rm -f $TPCH_CUDA_GEN_DIR/*.csv
 rm -f $TPCH_CUDA_GEN_DIR/*.log
 
