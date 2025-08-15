@@ -93,7 +93,8 @@ fi
 # List of queries to run - 1, 3, 5, 6, 7, 8, 9
 QUERIES=(1 3 4 5 6 7 8 9 10 12 13 14 16 17 18 19 20)
 
-CD_CMD="cd $SQL_PLAN_COMPILER_DIR/gpu-db/tpch-$SCALE_FACTOR"
+SRC_DIR="$SQL_PLAN_COMPILER_DIR/gpu-db/tpch-$SCALE_FACTOR"
+CD_CMD="cd $SRC_DIR"
 echo $CD_CMD
 $CD_CMD
 
@@ -110,5 +111,9 @@ for QUERY in "${QUERIES[@]}"; do
   echo $RUN_PROFILE_CMD
   $RUN_PROFILE_CMD # > op | tee 2>&1
 done
+
+CUDA_CP_CMD="cp $SRC_DIR/q*.codegen.cu $REPORT_FOLDER"
+echo $CUDA_CP_CMD
+$CUDA_CP_CMD
 
 cd -
