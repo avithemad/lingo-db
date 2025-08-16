@@ -775,12 +775,12 @@ class HyperTupleStreamCode : public TupleStreamCode {
       }
       auto key = MakeKeys(op, groupByKeys, KernelType::Count);
       appendKernel("// Create aggregation hash table", KernelType::Count);
+      appendKernel(fmt::format("if (countKeys) atomicAdd((int*){0}, 1); else ", COUNT(op)), KernelType::Count);
       appendKernel(fmt::format("{0}.insert(cuco::pair{{{1}, 1}});", HT(op), key), KernelType::Count);
       countArgs[HT(op)] = "HASHTABLE_INSERT";
-      countArgs[COUNT(op)] = "uint64_t*";
-      countArgs["countKeys"] = "bool";
-
+      
       mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::insert)", HT(op));
+      
       std::string ht_size = "0";
       static bool useQueryOptimizerEstimate = false;
       if (useQueryOptimizerEstimate) {
@@ -801,7 +801,7 @@ class HyperTupleStreamCode : public TupleStreamCode {
          ht_size = "1";  // create an empty table for now
 
       appendControlDecl("// Create aggregation hash table");
-      appendControlDecl(fmt::format("auto d_{0} = cuco::static_map{{ (int){1}*2, cuco::empty_key{{({2})-1}},\
+      appendControlDecl(fmt::format("auto d_{0} = cuco::static_map{{ (int)({1}*1.25), cuco::empty_key{{({2})-1}},\
 cuco::empty_value{{({3})-1}},\
 thrust::equal_to<{2}>{{}},\
 cuco::linear_probing<1, cuco::default_hash_function<{2}>>() }};",
@@ -813,11 +813,18 @@ cuco::linear_probing<1, cuco::default_hash_function<{2}>>() }};",
       appendControl(fmt::format("cudaMallocExt(&d_{0}, sizeof(uint64_t));", COUNT(op)));
       appendControl(fmt::format("cudaMemset(d_{0}, 0, sizeof(uint64_t));", COUNT(op)));
       appendControlDecl(fmt::format("size_t {0} = 0;", COUNT(op)));
+
+      countArgs[COUNT(op)] = "uint64_t*";
+      countArgs["countKeys"] = "bool";
+      mlirToGlobalSymbol[COUNT(op)] = fmt::format("d_{0}", COUNT(op));
+      mlirToGlobalSymbol["countKeys"] = fmt::format("true", "countKeys");
+
       genLaunchKernel(KernelType::Count);
 
       // Pass 2: Actually use the hash table
       appendControl(fmt::format("cudaMemcpy(&{0}, d_{0}, sizeof(uint64_t), cudaMemcpyDeviceToHost);", COUNT(op)));
       appendControl(fmt::format("d_{1}.rehash({0});", COUNT(op), HT(op)));
+      mlirToGlobalSymbol["countKeys"] = fmt::format("false", "countKeys");
       genLaunchKernel(KernelType::Count);
       appendControl(fmt::format("{0} = d_{1}.size();", COUNT(op), HT(op)));
       // TODO(avinash): deallocate the old hash table and create a new one to save space in gpu when estimations are way off
