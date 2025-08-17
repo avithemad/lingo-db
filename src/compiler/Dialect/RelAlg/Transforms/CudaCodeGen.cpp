@@ -775,7 +775,7 @@ class HyperTupleStreamCode : public TupleStreamCode {
       }
       auto key = MakeKeys(op, groupByKeys, KernelType::Count);
       appendKernel("// Create aggregation hash table", KernelType::Count);
-      appendKernel(fmt::format("if (countKeys) atomicAdd((int*){0}, 1); else ", COUNT(op)), KernelType::Count);
+      appendKernel(fmt::format("if (countKeys) estimator.add({0}); else ", key), KernelType::Count);
       appendKernel(fmt::format("{0}.insert(cuco::pair{{{1}, 1}});", HT(op), key), KernelType::Count);
       countArgs[HT(op)] = "HASHTABLE_INSERT";
       
@@ -818,12 +818,17 @@ cuco::linear_probing<1, cuco::default_hash_function<{2}>>() }};",
       countArgs["countKeys"] = "bool";
       mlirToGlobalSymbol[COUNT(op)] = fmt::format("d_{0}", COUNT(op));
       mlirToGlobalSymbol["countKeys"] = fmt::format("true", "countKeys");
+      countArgs["estimator"] = "HLL_ESTIMATOR_REF";
+      mlirToGlobalSymbol["estimator"] = fmt::format("estimator_{0}.ref()", GetId(op));
 
+      // TODO: Check if we need a bigger sketch size than 32_KB
+      appendControl(fmt::format("cuco::hyperloglog<{0}> estimator_{1}(32_KB);", getHTKeyType(groupByKeys), GetId(op)));
       genLaunchKernel(KernelType::Count);
 
       // Pass 2: Actually use the hash table
-      appendControl(fmt::format("cudaMemcpy(&{0}, d_{0}, sizeof(uint64_t), cudaMemcpyDeviceToHost);", COUNT(op)));
-      appendControl(fmt::format("d_{1}.rehash({0});", COUNT(op), HT(op)));
+      // appendControl(fmt::format("cudaMemcpy(&{0}, d_{0}, sizeof(uint64_t), cudaMemcpyDeviceToHost);", COUNT(op)));      
+      appendControl(fmt::format("{0} = estimator_{1}.estimate();", COUNT(op), GetId(op)));
+      appendControl(fmt::format("d_{1}.rehash((int)({0} * 1.2));", COUNT(op), HT(op)));
       mlirToGlobalSymbol["countKeys"] = fmt::format("false", "countKeys");
       genLaunchKernel(KernelType::Count);
       appendControl(fmt::format("{0} = d_{1}.size();", COUNT(op), HT(op)));
@@ -1290,7 +1295,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
          _kernelName = "count";
       }
       bool hasHash = false;
-      for (auto p : _args) hasHash |= (p.second == "HASHTABLE_FIND" || p.second == "HASHTABLE_INSERT" || p.second == "HASHTABLE_PROBE" || p.second == "HASHTABLE_INSERT_SJ" || p.second == "HASHTABLE_PROBE_SJ" || p.second == "HASHTABLE_INSERT_PK" || p.second == "HASHTABLE_PROBE_PK" || p.second == "BLOOM_FILTER_CONTAINS");
+      for (auto p : _args) hasHash |= (p.second == "HASHTABLE_FIND" || p.second == "HASHTABLE_INSERT" || p.second == "HASHTABLE_PROBE" || p.second == "HASHTABLE_INSERT_SJ" || p.second == "HASHTABLE_PROBE_SJ" || p.second == "HASHTABLE_INSERT_PK" || p.second == "HASHTABLE_PROBE_PK" || p.second == "BLOOM_FILTER_CONTAINS" || p.second == "HLL_ESTIMATOR_REF");
       if (hasHash) {
          if (shouldGenerateSmallerHashTables()) {
             // The hash tables can be different sized (e.g., one hash table can have a 32-bit key and another can have a 64-bit key)
@@ -1299,7 +1304,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
             auto id = 0;
             std::string sep = "";
             for (auto p : _args) {
-               if (p.second == "HASHTABLE_FIND" || p.second == "HASHTABLE_INSERT" || p.second == "HASHTABLE_PROBE" || p.second == "HASHTABLE_INSERT_SJ" || p.second == "HASHTABLE_PROBE_SJ" || p.second == "HASHTABLE_INSERT_PK" || p.second == "HASHTABLE_PROBE_PK" || p.second == "BLOOM_FILTER_CONTAINS") {
+               if (p.second == "HASHTABLE_FIND" || p.second == "HASHTABLE_INSERT" || p.second == "HASHTABLE_PROBE" || p.second == "HASHTABLE_INSERT_SJ" || p.second == "HASHTABLE_PROBE_SJ" || p.second == "HASHTABLE_INSERT_PK" || p.second == "HASHTABLE_PROBE_PK" || p.second == "BLOOM_FILTER_CONTAINS" || p.second == "HLL_ESTIMATOR_REF") {
                   p.second = fmt::format("{}_{}", p.second, id++);
                   stream << fmt::format("{}typename {}", sep, p.second);
                   _args[p.first] = p.second;
@@ -1314,6 +1319,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
             bool find = false, insert = false, probe = false;
             bool insertSJ = false, probeSJ = false;
             bool insertPK = false, probePK = false;
+            bool hllRef = false;
             std::string sep = "";
             for (auto p : _args) {
                if (p.second == "HASHTABLE_FIND" && !find) {
@@ -1342,6 +1348,10 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
                   sep = ", ";
                } else if (p.second == "HASHTABLE_PROBE_PK" && !probePK) {
                   probePK = true;
+                  stream << sep + "typename " + p.second;
+                  sep = ", ";
+               } else if (p.second == "HLL_ESTIMATOR_REF" && !hllRef) {
+                  hllRef = true;
                   stream << sep + "typename " + p.second;
                   sep = ", ";
                }
@@ -1557,7 +1567,8 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
             #include \"cudautils.cuh\"\n\
             #include \"db_types.h\"\n\
             #include \"dbruntime.h\"\n\
-            #include <chrono>\n";
+            #include <chrono>\n \
+            #include <cuco/hyperloglog.cuh>\n";
 
       if (generateKernelTimingCode()) {
          outputFile << "#include <cuda_runtime.h>\n";
