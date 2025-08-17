@@ -32,11 +32,6 @@ for arg in "$@"; do
       SUB_DIR="HT32_Pyper_Two_Warps_128"
       SUFFIX="-ht32-pyper-two-warps-128"
       ;;
-    --threads-always-alive)
-      # CODEGEN_OPTIONS="$CODEGEN_OPTIONS --threads-always-alive" # make this default for now
-      # Remove this specific argument from $@
-      set -- "${@/$arg/}"
-      ;;
     --shuffle-all-ops)
       CODEGEN_OPTIONS="$CODEGEN_OPTIONS --shuffle-all-ops"
       # Remove this specific argument from $@
@@ -99,7 +94,6 @@ if [ -z "$TPCH_DATA_DIR" ]; then
 fi
 
 
-QUERIES=(1 3 4 5 6 7 8 9 10 12 13 14 16 17 18 19 20)
 QUERIES=(1 3 4 5 6 7 8 9 10 12 13 14 16 17 18 19 20)
 if [ "$CUR_GPU" == "A6000" ]; then
   if [ $SCALE_FACTOR -gt 10 ]; then
