@@ -94,8 +94,14 @@ fi
 
 
 QUERIES=(1 3 4 5 6 7 8 9 10 12 13 14 16 17 18 19 20)
-if [ $SCALE_FACTOR -gt 10 ]; then
-  QUERIES=(1 3 4 5 6 7 8 10 12 13 14 16 17 18 19 20) # query 9 has issues with memory.
+if [ "$CUR_GPU" == "A6000" ]; then
+  if [ $SCALE_FACTOR -gt 10 ]; then
+    QUERIES=(1 3 4 5 6 7 8 10 12 13 14 16 17 18 19 20) # query 9 has issues with memory.
+  fi
+elif [ "$CUR_GPU" == "4090" ]; then
+  if [ $SCALE_FACTOR -gt 10 ]; then
+    QUERIES=(1 3 5 6 7 8 10 12 13 14 16 17 18 19 20) # query 4, 9 has issues with memory.
+  fi
 fi
 
 TPCH_CUDA_GEN_DIR="$SQL_PLAN_COMPILER_DIR/gpu-db/tpch-$SCALE_FACTOR"
