@@ -691,7 +691,7 @@ class CrystalTupleStreamCode : public TupleStreamCode {
       appendKernel("#pragma unroll", KernelType::Count);
       appendKernel(fmt::format("for (int ITEM = 0; ITEM < ITEMS_PER_THREAD && (ITEM*TB + tid < {0}); ++ITEM) {{", getKernelSizeVariable()), KernelType::Count);
       appendKernel("if (!selection_flags[ITEM]) continue;", KernelType::Count);
-      appendKernel(fmt::format("if (countKeys) estimator.add({0}); else ", key), KernelType::Count);
+      appendKernel(fmt::format("if (countKeys) estimator.add({0}[ITEM]); else ", key), KernelType::Count);
       appendKernel(fmt::format("{0}.insert(cuco::pair{{{1}[ITEM], 1}});", HT(op), key), KernelType::Count);
       appendKernel("}", KernelType::Count);
       countArgs[HT(op)] = "HASHTABLE_INSERT";
@@ -1197,7 +1197,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
          _kernelName = "count";
       }
       bool hasHash = false;
-      for (auto p : _args) hasHash |= (p.second == "HASHTABLE_FIND" || p.second == "HASHTABLE_INSERT" || p.second == "HASHTABLE_PROBE" || p.second == "HASHTABLE_INSERT_SJ" || p.second == "HASHTABLE_PROBE_SJ" || p.second == "HASHTABLE_INSERT_PK" || p.second == "HASHTABLE_PROBE_PK");
+      for (auto p : _args) hasHash |= (p.second == "HASHTABLE_FIND" || p.second == "HASHTABLE_INSERT" || p.second == "HASHTABLE_PROBE" || p.second == "HASHTABLE_INSERT_SJ" || p.second == "HASHTABLE_PROBE_SJ" || p.second == "HASHTABLE_INSERT_PK" || p.second == "HASHTABLE_PROBE_PK" || p.second == "BLOOM_FILTER_CONTAINS" || p.second == "HLL_ESTIMATOR_REF");
       if (hasHash) {
          if (shouldGenerateSmallerHashTables()) {
             // The hash tables can be different sized (e.g., one hash table can have a 32-bit key and another can have a 64-bit key)
@@ -1206,7 +1206,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
             auto id = 0;
             std::string sep = "";
             for (auto p : _args) {
-               if (p.second == "HASHTABLE_FIND" || p.second == "HASHTABLE_INSERT" || p.second == "HASHTABLE_PROBE" || p.second == "HASHTABLE_INSERT_SJ" || p.second == "HASHTABLE_PROBE_SJ" || p.second == "HASHTABLE_INSERT_PK" || p.second == "HASHTABLE_PROBE_PK") {
+               if (p.second == "HASHTABLE_FIND" || p.second == "HASHTABLE_INSERT" || p.second == "HASHTABLE_PROBE" || p.second == "HASHTABLE_INSERT_SJ" || p.second == "HASHTABLE_PROBE_SJ" || p.second == "HASHTABLE_INSERT_PK" || p.second == "HASHTABLE_PROBE_PK" || p.second == "BLOOM_FILTER_CONTAINS" || p.second == "HLL_ESTIMATOR_REF") {
                   p.second = fmt::format("{}_{}", p.second, id++);
                   stream << fmt::format("{}typename {}", sep, p.second);
                   _args[p.first] = p.second;
@@ -1219,6 +1219,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
             bool find = false, insert = false, probe = false;
             bool insertSJ = false, probeSJ = false;
             bool insertPK = false, probePK = false;
+            bool hllRef = false;
             std::string sep = "";
             for (auto p : _args) {
                if (p.second == "HASHTABLE_FIND" && !find) {
@@ -1247,6 +1248,10 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
                   sep = ", ";
                } else if (p.second == "HASHTABLE_PROBE_PK" && !probePK) {
                   probePK = true;
+                  stream << sep + "typename " + p.second;
+                  sep = ", ";
+               } else if (p.second == "HLL_ESTIMATOR_REF" && !hllRef) {
+                  hllRef = true;
                   stream << sep + "typename " + p.second;
                   sep = ", ";
                }
@@ -1569,6 +1574,7 @@ class CudaCrystalCodeGen : public mlir::PassWrapper<CudaCrystalCodeGen, mlir::Op
 #include \"db_types.h\"\n\
 #include \"dbruntime.h\"\n\
 #include <chrono>\n\
+#include <cuco/hyperloglog.cuh>\n\
 #define ITEMS_PER_THREAD 4\n\
 #define TILE_SIZE 512\n\
 #define TB TILE_SIZE/ITEMS_PER_THREAD\n";

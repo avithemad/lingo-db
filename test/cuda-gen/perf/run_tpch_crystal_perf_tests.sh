@@ -162,6 +162,7 @@ for QUERY in "${QUERIES[@]}"; do
   if [ ! -f build/q$NOCOUNT.codegen.so ]; then
     echo -e "\033[0;31mError compiling Query $QUERY\033[0m"
     FAILED_QUERIES+=($QUERY)
+    exit 1
   fi
 done
 
