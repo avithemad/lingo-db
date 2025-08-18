@@ -676,6 +676,9 @@ class CrystalTupleStreamCode : public TupleStreamCode {
       mlirToGlobalSymbol[BUF(op)] = fmt::format("d_{}", BUF(op));
    }
    void CreateAggregationHashTable(mlir::Operation* op) {
+      // We'll run the count kernels twice to get a better estimate of the aggregation hash table size.
+      // First pass: count the number of unique keys (with a bool that instructs to just count)
+      // Second pass: insert the keys into the hash table
       auto aggOp = mlir::dyn_cast_or_null<relalg::AggregationOp>(op);
       if (!aggOp) assert(false && "CreateAggregationHashTable expects aggregation op as a parameter!");
       mlir::ArrayAttr groupByKeys = aggOp.getGroupByCols();
@@ -688,32 +691,64 @@ class CrystalTupleStreamCode : public TupleStreamCode {
       appendKernel("#pragma unroll", KernelType::Count);
       appendKernel(fmt::format("for (int ITEM = 0; ITEM < ITEMS_PER_THREAD && (ITEM*TB + tid < {0}); ++ITEM) {{", getKernelSizeVariable()), KernelType::Count);
       appendKernel("if (!selection_flags[ITEM]) continue;", KernelType::Count);
+      appendKernel(fmt::format("if (countKeys) estimator.add({0}); else ", key), KernelType::Count);
       appendKernel(fmt::format("{0}.insert(cuco::pair{{{1}[ITEM], 1}});", HT(op), key), KernelType::Count);
       appendKernel("}", KernelType::Count);
       countArgs[HT(op)] = "HASHTABLE_INSERT";
-
+      
       mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::insert)", HT(op));
+      
       std::string ht_size = "0";
-      // TODO(avinash, p2): this is a hacky way, actually check if --use-db flag is enabled and query optimization is performed
-      if (auto floatAttr = mlir::dyn_cast_or_null<mlir::FloatAttr>(op->getAttr("rows"))) {
-         if (std::floor(floatAttr.getValueAsDouble()) != 0)
-            ht_size = std::to_string((size_t) std::ceil(floatAttr.getValueAsDouble()));
-         else {
-            for (auto p : countArgs) {
-               if (p.second == "size_t")
-                  ht_size = p.first;
+      static bool useQueryOptimizerEstimate = false;
+      if (useQueryOptimizerEstimate) {
+         // TODO(avinash, p2): this is a hacky way, actually check if --use-db flag is enabled and query optimization is performed      
+         if (auto floatAttr = mlir::dyn_cast_or_null<mlir::FloatAttr>(op->getAttr("rows"))) {
+            if (std::floor(floatAttr.getValueAsDouble()) != 0) {            
+               ht_size = std::to_string(std::min((int) std::ceil(floatAttr.getValueAsDouble()), INT32_MAX/2));
             }
-         }
-      }
-      assert(ht_size != "0" && "hash table for aggregation is sizing to be 0!!");
-      appendControl("// Create aggregation hash table");
-      appendControl(fmt::format("auto d_{0} = cuco::static_map{{ (int){1}*2, cuco::empty_key{{({2})-1}},\
+            else {
+               for (auto p : countArgs) {
+                  if (p.second == "size_t")
+                     ht_size = p.first;
+               }
+            }
+         }      
+         assert(ht_size != "0" && "hash table for aggregation is sizing to be 0!!");
+      } else
+         ht_size = "1";  // create an empty table for now
+
+      appendControlDecl("// Create aggregation hash table");
+      appendControlDecl(fmt::format("auto d_{0} = cuco::static_map{{ (int)({1}*1.25), cuco::empty_key{{({2})-1}},\
 cuco::empty_value{{({3})-1}},\
 thrust::equal_to<{2}>{{}},\
 cuco::linear_probing<1, cuco::default_hash_function<{2}>>() }};",
                                 HT(op), ht_size, getHTKeyType(groupByKeys), getHTValueType()));
+      if (!isProfiling())
+         appendControl("if (runCountKernel){\n");
+
+      appendControlDecl(fmt::format("uint64_t *d_{0} = nullptr;", COUNT(op)));
+      appendControl(fmt::format("cudaMallocExt(&d_{0}, sizeof(uint64_t));", COUNT(op)));
+      appendControl(fmt::format("cudaMemset(d_{0}, 0, sizeof(uint64_t));", COUNT(op)));
+      appendControlDecl(fmt::format("size_t {0} = 0;", COUNT(op)));
+
+      countArgs[COUNT(op)] = "uint64_t*";
+      countArgs["countKeys"] = "bool";
+      mlirToGlobalSymbol[COUNT(op)] = fmt::format("d_{0}", COUNT(op));
+      mlirToGlobalSymbol["countKeys"] = fmt::format("true", "countKeys");
+      countArgs["estimator"] = "HLL_ESTIMATOR_REF";
+      mlirToGlobalSymbol["estimator"] = fmt::format("estimator_{0}.ref()", GetId(op));
+
+      // TODO: Check if we need a bigger sketch size than 32_KB
+      appendControl(fmt::format("cuco::hyperloglog<{0}> estimator_{1}(32_KB);", getHTKeyType(groupByKeys), GetId(op)));
       genLaunchKernel(KernelType::Count);
-      appendControl(fmt::format("size_t {0} = d_{1}.size();", COUNT(op), HT(op)));
+
+      // Pass 2: Actually use the hash table
+      // appendControl(fmt::format("cudaMemcpy(&{0}, d_{0}, sizeof(uint64_t), cudaMemcpyDeviceToHost);", COUNT(op)));      
+      appendControl(fmt::format("{0} = estimator_{1}.estimate();", COUNT(op), GetId(op)));
+      appendControl(fmt::format("d_{1}.rehash((int)({0} * 1.2));", COUNT(op), HT(op)));
+      mlirToGlobalSymbol["countKeys"] = fmt::format("false", "countKeys");
+      genLaunchKernel(KernelType::Count);
+      appendControl(fmt::format("{0} = d_{1}.size();", COUNT(op), HT(op)));
       // TODO(avinash): deallocate the old hash table and create a new one to save space in gpu when estimations are way off
       appendControl(fmt::format("thrust::device_vector<{3}> keys_{0}({2}), vals_{0}({2});\n\
 d_{1}.retrieve_all(keys_{0}.begin(), vals_{0}.begin());\n\
@@ -721,6 +756,8 @@ d_{1}.clear();\n\
 {3}* raw_keys{0} = thrust::raw_pointer_cast(keys_{0}.data());\n\
 insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::insert), {2});",
                                 GetId(op), HT(op), COUNT(op), getHTKeyType(groupByKeys)));
+      if (!isProfiling())
+         appendControl("}\n"); // runCountKernel
    }
    void AggregateInHashTable(mlir::Operation* op) {
       auto aggOp = mlir::dyn_cast_or_null<relalg::AggregationOp>(op);
