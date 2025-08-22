@@ -222,6 +222,7 @@ bool gThreadsAlwaysAlive = false;
 bool gPyperShuffle = false;
 bool gCompilingSSB = false;
 bool gShuffleAllOps = false;
+bool gPrintHashTableSizes = false;
 
 void removeCodeGenSwitch(int& argc, char** argv, int i) {
    // Remove --gen-cuda-code from the argument list
@@ -267,7 +268,8 @@ void checkForCodeGenSwitches(int& argc, char** argv) {
       std::make_tuple(&gGenPerOperationProfile, "--gen-per-operation-profile", "per operation profile code generation"),
       std::make_tuple(&gSmallerHashTables, "--smaller-hash-tables", "smaller hash tables"),
       std::make_tuple(&gGenIsProfiling, "--profiling", "profiling code generation"),
-      std::make_tuple(&gShuffleAllOps, "--shuffle-all-ops", "shuffling all ops")
+      std::make_tuple(&gShuffleAllOps, "--shuffle-all-ops", "shuffling all ops"),
+      std::make_tuple(&gPrintHashTableSizes, "--print-hash-table-sizes", "print hash table sizes")
    };
    for (const auto& [switchPtr, switchName, descr] : switches) {
       checkForCodegenSwitch(argc, argv, switchPtr, switchName, descr);

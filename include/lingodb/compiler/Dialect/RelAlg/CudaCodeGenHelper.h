@@ -31,6 +31,7 @@ void emitControlFunctionSignature(std::ostream& outputFile);
 void emitTimingEventCreation(std::ostream& outputFile);
 bool isPrimaryKey(const std::set<std::string>& keysSet);
 std::vector<std::string> split(std::string s, std::string delimiter);
+extern bool gPrintHashTableSizes;
 
 // -- [start] kernel timing code generation --
 
@@ -253,6 +254,48 @@ protected:
          if (it.second == "size_t") return it.first;
       assert(false && "this kernel is supposed to have a size parameter");
       return "";
+   }
+
+   void printHashTableSize(const std::string& count_var, const std::string& key_size, const std::string& value_size, const std::string& load_factor, mlir::Operation *op) {
+      if (gPrintHashTableSizes) {
+         auto rightHashAttr = op->getAttrOfType<mlir::ArrayAttr>("rightHash");
+         auto leftHashAttr = op->getAttrOfType<mlir::ArrayAttr>("leftHash");
+         
+         // Convert ArrayAttr to string representation
+         std::string rightHashStr = "null";
+         std::string leftHashStr = "null";
+         
+         if (rightHashAttr) {
+            rightHashStr = "[";
+            for (size_t i = 0; i < rightHashAttr.size(); ++i) {
+               if (auto colRefAttr = mlir::dyn_cast<tuples::ColumnRefAttr>(rightHashAttr[i])) {
+                  ColumnDetail detail(colRefAttr);
+                  rightHashStr += detail.getMlirSymbol();
+               } else {
+                  rightHashStr += "unknown";
+               }
+               if (i < rightHashAttr.size() - 1) rightHashStr += ", ";
+            }
+            rightHashStr += "]";
+         }
+         
+         if (leftHashAttr) {
+            leftHashStr = "[";
+            for (size_t i = 0; i < leftHashAttr.size(); ++i) {
+               if (auto colRefAttr = mlir::dyn_cast<tuples::ColumnRefAttr>(leftHashAttr[i])) {
+                  ColumnDetail detail(colRefAttr);
+                  leftHashStr += detail.getMlirSymbol();
+               } else {
+                  leftHashStr += "unknown";
+               }
+               if (i < leftHashAttr.size() - 1) leftHashStr += ", ";
+            }
+            leftHashStr += "]";
+         }
+
+         auto kernel_name = "count_" +  GetId((void*) this);
+         appendControl(fmt::format("if (runCountKernel) std::cout << \"-- HT Size: \" << (int)({0} * {1}) * (sizeof({2}) + sizeof({3})) << \" bytes, Op: {6}, Left: {4}, Right: {5}, Kernel: {7} --\" << std::endl;", count_var, load_factor, key_size, value_size, leftHashStr, rightHashStr, op->getName().getStringRef().str(), kernel_name));
+      }
    }
 
 public:

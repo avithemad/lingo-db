@@ -519,6 +519,7 @@ class HyperTupleStreamCode : public TupleStreamCode {
       mainArgs[HT(op)] = "HASHTABLE_INSERT_SJ";
       mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::insert)", HT(op));
       appendControl("// Insert hash table control;");
+      printHashTableSize(COUNT(op), getHTKeyType(keys), getHTValueType(), "2", op);
       appendControl(fmt::format("auto d_{0} = cuco::static_map{{ (int){1}*2, cuco::empty_key{{({2})-1}},cuco::empty_value{{({3})-1}},thrust::equal_to<{2}>{{}},cuco::linear_probing<1, cuco::default_hash_function<{2}>>() }};",
                                 HT(op), COUNT(op), getHTKeyType(keys), getHTValueType()));
       genLaunchKernel(KernelType::Main);
@@ -534,6 +535,7 @@ class HyperTupleStreamCode : public TupleStreamCode {
       mainArgs[HT(op)] = "HASHTABLE_INSERT_SJ";
       mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::insert)", HT(op));
       appendControl("// Insert hash table control;");
+      printHashTableSize(COUNT(op), getHTKeyType(keys), getHTValueType(), "2", op);
       appendControl(fmt::format("auto d_{0} = cuco::static_map{{ (int){1}*2, cuco::empty_key{{({2})-1}},cuco::empty_value{{({3})-1}},thrust::equal_to<{2}>{{}},cuco::linear_probing<1, cuco::default_hash_function<{2}>>() }};",
                                 HT(op), COUNT(op), getHTKeyType(keys), getHTValueType()));
       genLaunchKernel(KernelType::Main);
@@ -625,6 +627,7 @@ class HyperTupleStreamCode : public TupleStreamCode {
       appendControl(fmt::format("cudaMallocExt(&d_{0}, sizeof({3}) * {1} * {2});", BUF(op), COUNT(op), baseRelations.size(), getBufEltType()));
       deviceFrees.insert(fmt::format("d_{0}", BUF(op)));
       // #ifdef MULTIMAP
+      printHashTableSize(COUNT(op), getHTKeyType(keys), getHTValueType(), "2", op);
       if (!pk)
          appendControl(fmt::format("auto d_{0} = cuco::experimental::static_multimap{{ (int){1}*2, cuco::empty_key{{({2})-1}},cuco::empty_value{{({3})-1}},thrust::equal_to<{2}>{{}},cuco::linear_probing<1, cuco::default_hash_function<{2}>>() }};",
                                    HT(op), COUNT(op), getHTKeyType(keys), getHTValueType()));
@@ -828,7 +831,9 @@ cuco::linear_probing<1, cuco::default_hash_function<{2}>>() }};",
       // Pass 2: Actually use the hash table
       // appendControl(fmt::format("cudaMemcpy(&{0}, d_{0}, sizeof(uint64_t), cudaMemcpyDeviceToHost);", COUNT(op)));      
       appendControl(fmt::format("{0} = estimator_{1}.estimate();", COUNT(op), GetId(op)));
-      appendControl(fmt::format("d_{1}.rehash((int)({0} * 1.2));", COUNT(op), HT(op)));
+      auto aggTableLoadFactor = "1.2";
+      appendControl(fmt::format("d_{1}.rehash((int)({0} * {2}));", COUNT(op), HT(op), aggTableLoadFactor));
+      printHashTableSize(COUNT(op), getHTKeyType(groupByKeys), getHTValueType(), aggTableLoadFactor, op);
       mlirToGlobalSymbol["countKeys"] = fmt::format("false", "countKeys");
       genLaunchKernel(KernelType::Count);
       appendControl(fmt::format("{0} = d_{1}.size();", COUNT(op), HT(op)));
@@ -1602,7 +1607,7 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
          outputFile << "}\n";
          outputFile << "auto endTime = std::chrono::high_resolution_clock::now();\n";
          outputFile << fmt::format("auto duration = std::chrono::duration_cast<std::chrono::microseconds>(endTime - startTime)/(numIterations - 1);\n");
-         if (generateKernelTimingCode())
+         if (generateKernelTimingCode() && !gPrintHashTableSizes)
             outputFile << "std::cout << \"total_query, \" << duration.count() / 1000. << std::endl;\n";
       }
       outputFile << "std::clog << \"Used memory: \" << used_mem / (1024 * 1024) << \" MB\" << std::endl; \n\
