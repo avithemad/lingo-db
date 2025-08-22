@@ -3,6 +3,18 @@
 # Script to run TPC-H tests with different parameter combinations
 # Usage: ./run_all_tpch_tests.sh [scale_factor]
 
+OTHER_OPTIONS=""
+SUB_DIR="."
+SUFFIX=""
+for arg in "$@"; do
+  case $arg in
+    --print-hash-table-sizes)
+      OTHER_OPTIONS="$OTHER_OPTIONS --print-hash-table-sizes"
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"      
+  esac
+done
+
 SCALE_FACTOR="$1"
 if [ -z "$SCALE_FACTOR" ]; then
   SCALE_FACTOR=1
@@ -76,11 +88,11 @@ run_test_config() {
 }
 
 run_hyper_test_config() {
-  run_test_config "$RUN_HYPER_PERF_SCRIPT" "$@"
+  run_test_config "$RUN_HYPER_PERF_SCRIPT" "$@" $OTHER_OPTIONS
 }
 
 run_crystal_test_config() {
-  run_test_config "$RUN_CRYSTAL_PERF_SCRIPT" "$@"
+  run_test_config "$RUN_CRYSTAL_PERF_SCRIPT" "$@" $OTHER_OPTIONS
 }
 
 echo "Starting TPC-H tests with scale factor: $SCALE_FACTOR"
@@ -91,7 +103,7 @@ echo "========================================"
 run_hyper_test_config "Basic" $SCALE_FACTOR
 
 # Test Configuration 2: With smaller hash tables
-run_hyper_test_config "Smaller Hash Tables" $SCALE_FACTOR --smaller-hash-tables -ht32
+run_hyper_test_config "Smaller Hash Tables" $SCALE_FACTOR --smaller-hash-tables
 
 # Test Configuration 3: With bloom filters
 run_hyper_test_config "Bloom Filters" $SCALE_FACTOR --smaller-hash-tables --use-bloom-filters

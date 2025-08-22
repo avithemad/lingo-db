@@ -39,6 +39,11 @@ for arg in "$@"; do
       SUB_DIR="HT32_Pyper_Shuffle_All_128"
       SUFFIX="-ht32-pyper-shuffle-all-128"
       ;;
+    --print-hash-table-sizes)
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --print-hash-table-sizes"
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      SUFFIX="-HTSIZE"
   esac
 done
 

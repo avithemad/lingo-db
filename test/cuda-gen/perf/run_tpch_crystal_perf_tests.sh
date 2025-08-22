@@ -38,6 +38,11 @@ for arg in "$@"; do
       echo "Shuffle all ops option is not supported in crystal codegen."
       exit 1
       ;;
+    --print-hash-table-sizes)
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --print-hash-table-sizes"
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      SUFFIX="-HTSIZE"
   esac
 done
 
