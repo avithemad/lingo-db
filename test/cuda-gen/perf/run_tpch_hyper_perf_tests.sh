@@ -43,7 +43,7 @@ for arg in "$@"; do
       CODEGEN_OPTIONS="$CODEGEN_OPTIONS --print-hash-table-sizes"
       # Remove this specific argument from $@
       set -- "${@/$arg/}"
-      SUFFIX="-HTSIZE"
+      SUFFIX="$SUFFIX-HTSIZE"
   esac
 done
 
