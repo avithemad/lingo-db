@@ -293,11 +293,18 @@ protected:
             leftHashStr += "]";
          }
 
-         auto kernel_name = "count_" +  GetId((void*) this);
-         appendControl(fmt::format("if (runCountKernel) std::cout << \"-- HT Size: \" << (int)({0} * {1}) * (sizeof({2}) + sizeof({3})) << \" bytes, Op: {6}, Left: {4}, Right: {5}, Kernel: {7} --\" << std::endl;", count_var, load_factor, key_size, value_size, leftHashStr, rightHashStr, op->getName().getStringRef().str(), kernel_name));
+         auto kernel_name = "main_" +  GetId((void*) this);
+         appendControl(fmt::format("if (runCountKernel) std::cout << \"-- HT Size: \" << (int)({0} * {1}) * (sizeof({2}) + sizeof({3})) << \" bytes, Op: {6}, OpId : {7}, Left: {4}, Right: {5}, Kernel: {8} --\" << std::endl;", count_var, load_factor, key_size, value_size, leftHashStr, rightHashStr, op->getName().getStringRef().str(), GetId((void*) op), kernel_name));
       }
    }
 
+   void printBufferSize(const std::string& size_str, mlir::Operation* op)
+   {
+      if (!gPrintHashTableSizes)
+         return;
+      auto kernel_name = "main_" +  GetId((void*) this);
+      appendControl(fmt::format("if (runCountKernel) std::cout << \"-- Buffer Size: \" << {0} << \" bytes, Op:  {1}, OpId : {2}, Kernel: {3} --\" << std::endl;", size_str, op->getName().getStringRef().str(), GetId((void*) op), kernel_name));
+   }
 public:
    void printControlDeclarations(std::ostream& stream) {
       for (auto line : controlDeclarations) {

@@ -625,6 +625,7 @@ class HyperTupleStreamCode : public TupleStreamCode {
       appendControl(fmt::format("cudaMemset(d_{0}, 0, sizeof({1}));", BUF_IDX(op), getBufIdxType()));
       appendControlDecl(fmt::format("{1} d_{0} = nullptr;", BUF(op), getBufPtrType()));
       appendControl(fmt::format("cudaMallocExt(&d_{0}, sizeof({3}) * {1} * {2});", BUF(op), COUNT(op), baseRelations.size(), getBufEltType()));
+      printBufferSize(fmt::format("(sizeof({0}) * {1} * {2})", getBufEltType(), COUNT(op), baseRelations.size()), op);
       deviceFrees.insert(fmt::format("d_{0}", BUF(op)));
       // #ifdef MULTIMAP
       printHashTableSize(COUNT(op), getHTKeyType(keys), getHTValueType(), "2", op);
@@ -879,6 +880,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
             mlirToGlobalSymbol[newbuffername] = fmt::format("d_{}", newbuffername);
             appendControlDecl(fmt::format("{0}* d_{1} = nullptr;", bufferColType, newbuffername));
             appendControl(fmt::format("cudaMallocExt(&d_{0}, sizeof({1}) * {2});", newbuffername, bufferColType, COUNT(op)));
+            printBufferSize(fmt::format("(sizeof({0}) * {1})", bufferColType, COUNT(op)), op);
             deviceFrees.insert(fmt::format("d_{0}", newbuffername));
             appendControl(fmt::format("cudaMemset(d_{0}, 0, sizeof({1}) * {2});", newbuffername, bufferColType, COUNT(op)));
             if (auto aggrFunc = llvm::dyn_cast<relalg::AggrFuncOp>(col.getDefiningOp())) {
@@ -940,6 +942,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
             mlirToGlobalSymbol[keyColumnName] = fmt::format("d_{}", keyColumnName);
             appendControlDecl(fmt::format("DBI16Type* d_{0} = nullptr;", keyColumnName));
             appendControl(fmt::format("cudaMallocExt(&d_{0}, sizeof(DBI16Type) * {1});", keyColumnName, COUNT(op)));
+            printBufferSize(fmt::format("(sizeof(DBI16Type) * {0})", COUNT(op)), op);
             deviceFrees.insert(fmt::format("d_{0}", keyColumnName));
             appendControl(fmt::format("cudaMemset(d_{0}, 0, sizeof(DBI16Type) * {1});", keyColumnName, COUNT(op)));
             auto key = LoadColumn<1>(mlir::cast<tuples::ColumnRefAttr>(col), KernelType::Main);
@@ -950,6 +953,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
             mlirToGlobalSymbol[keyColumnName] = fmt::format("d_{}", keyColumnName);
             appendControlDecl(fmt::format("{0}* d_{1} = nullptr;", keyColumnType, keyColumnName));
             appendControl(fmt::format("cudaMallocExt(&d_{0}, sizeof({1}) * {2});", keyColumnName, keyColumnType, COUNT(op)));
+            printBufferSize(fmt::format("(sizeof({0}) * {1})", keyColumnType, COUNT(op)), op);
             deviceFrees.insert(fmt::format("d_{0}", keyColumnName));
             appendControl(fmt::format("cudaMemset(d_{0}, 0, sizeof({1}) * {2});", keyColumnName, keyColumnType, COUNT(op)));
             auto key = LoadColumn(mlir::cast<tuples::ColumnRefAttr>(col), KernelType::Main);
@@ -985,6 +989,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
             hostFrees.insert(newBuffer);
             appendControlDecl(fmt::format("DBI16Type* d_{0} = nullptr;", newBuffer));
             appendControl(fmt::format("cudaMallocExt(&d_{0}, sizeof(DBI16Type) * {1});", newBuffer, COUNT(op)));
+            printBufferSize(fmt::format("(sizeof(DBI16Type) * {0})", COUNT(op)), op);
             deviceFrees.insert(fmt::format("d_{0}", newBuffer));
             mainArgs[newBuffer] = "DBI16Type*";
             mlirToGlobalSymbol[newBuffer] = "d_" + newBuffer;
@@ -997,6 +1002,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
             hostFrees.insert(newBuffer);
             appendControlDecl(fmt::format("{1}* d_{0} = nullptr;", newBuffer, type));
             appendControl(fmt::format("cudaMallocExt(&d_{0}, sizeof({1}) * {2});", newBuffer, type, COUNT(op)));
+            printBufferSize(fmt::format("(sizeof({0}) * {1})", type, COUNT(op)), op);
             deviceFrees.insert(fmt::format("d_{0}", newBuffer));
             mainArgs[newBuffer] = type + "*";
             mlirToGlobalSymbol[newBuffer] = "d_" + newBuffer;
