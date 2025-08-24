@@ -113,7 +113,7 @@ run_hyper_test_config "Pyper Shuffle" $SCALE_FACTOR --smaller-hash-tables --pype
 # Test Configuration 5: With shuffle all ops
 run_hyper_test_config "Shuffle All Ops" $SCALE_FACTOR --smaller-hash-tables --shuffle-all-ops
 
-Test Configuration 6: Basic crystal run
+# Test Configuration 6: Basic crystal run
 run_crystal_test_config "Basic" $SCALE_FACTOR
 
 # Test Configuration 7: Crystal with smaller hash tables
