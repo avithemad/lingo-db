@@ -99,6 +99,9 @@ fi
 
 
 QUERIES=(1 3 4 5 6 7 8 9 10 12 13 14 16 17 18 19 20)
+if [ $SCALE_FACTOR -gt 60 ]; then
+  QUERIES=(1 3 5 6 7 8 10 12 13 14 16 17 19 20) # Queries 4, 9 and 18 have large hash tables. Run out of memory on A6000
+fi
 
 TPCH_CUDA_GEN_DIR="$SQL_PLAN_COMPILER_DIR/gpu-db/tpch-$SCALE_FACTOR"
 echo "TPCH_CUDA_GEN_DIR: $TPCH_CUDA_GEN_DIR"
