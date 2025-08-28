@@ -37,6 +37,7 @@ std::vector<std::string> split(std::string s, std::string delimiter);
 bool generateKernelTimingCode();
 bool generatePerOperationProfile();
 bool isProfiling();
+bool usePartitionHashJoin();
 
 // -- [end] kernel timing code generation --
 

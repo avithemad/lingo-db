@@ -20,10 +20,12 @@ std::vector<std::string> split(std::string s, std::string delimiter) {
 static bool gGenKernelTimingCode = false;
 static bool gGenPerOperationProfile = false;
 static bool gGenIsProfiling = false; // Do not generate multiple iteration loops if we are profiling
+static bool gPartitionHashJoinCodeGenEnabled = false;
 
 bool generateKernelTimingCode() { return gGenKernelTimingCode; }
 bool generatePerOperationProfile() { return gGenPerOperationProfile; }
 bool isProfiling() { return gGenIsProfiling; }
+bool usePartitionHashJoin() { return gPartitionHashJoinCodeGenEnabled; }
 
 // -- [end] kernel timing code generation --
 
@@ -332,6 +334,17 @@ static void checkForProfilingSwitch(int& argc, char** argv) {
    }
 }
 
+void checkPartitionHashJoinSwitch(int& argc, char** argv) {
+   for (int i = 0; i < argc; i++) {
+      if (std::string(argv[i]) == "--use-partition-hash-join") {
+         gPartitionHashJoinCodeGenEnabled = true;
+         removeCodeGenSwitch(argc, argv, i);
+         break;
+      }
+   }
+}
+
+
 void checkForCodeGenSwitches(int& argc, char** argv) {
    checkForStaticMapOnlySwitch(argc, argv);
    checkForGenKernelTimingCodeSwitch(argc, argv);
@@ -341,6 +354,7 @@ void checkForCodeGenSwitches(int& argc, char** argv) {
    checkForAlwaysAliveThreadsSwitch(argc, argv);
    checkForPyperShuffleSwitch(argc, argv);
    checkForProfilingSwitch(argc, argv);
+   checkPartitionHashJoinSwitch(argc, argv);
 }
 
 // --- [end] code generation switches helpers ---
