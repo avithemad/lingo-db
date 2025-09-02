@@ -1678,6 +1678,8 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
                kernelSchedule.push_back(rightStreamCode);
 
                auto newJoinStream = new HyperTupleStreamCode(joinOp, joinResultInfo, leftStreamCode, rightStreamCode);
+               mlir::Region& predicate = joinOp.getPredicate();
+               newJoinStream->AddSelectionPredicate(predicate);
                streamCodeMap[op] = newJoinStream;
             } else {
                auto leftkeys = joinOp->getAttrOfType<mlir::ArrayAttr>("leftHash");
