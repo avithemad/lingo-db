@@ -484,25 +484,26 @@ class HyperTupleStreamCode : public TupleStreamCode {
       assert(false && "Predicate is not implemented");
       return;
    }
-   void MaterializeCount(mlir::Operation* op) {
+   void MaterializeCount(mlir::Operation* op, const std::string& suffix="") {
       if (usePartitionHashJoin() && mlir::isa<relalg::InnerJoinOp>(op)) return; // partition hash-join materializes count at the end.
 
-      countArgs[COUNT(op)] = "uint64_t*";
-      mlirToGlobalSymbol[COUNT(op)] = fmt::format("d_{}", COUNT(op));
+      std::string countVarName = COUNT(op) + suffix;
+      countArgs[countVarName] = "uint64_t*";
+      mlirToGlobalSymbol[countVarName] = fmt::format("d_{}", countVarName);
       appendKernel("// Materialize count", KernelType::Count);
       
-      appendKernel(fmt::format("atomicAdd((int*){0}, 1);", COUNT(op)), KernelType::Count);
+      appendKernel(fmt::format("atomicAdd((int*){0}, 1);", countVarName), KernelType::Count);
 
       appendControl("// Materialize count");
-      appendControlDecl(fmt::format("uint64_t* d_{0} = nullptr;", COUNT(op)));
+      appendControlDecl(fmt::format("uint64_t* d_{0} = nullptr;", countVarName));
       if (!isProfiling())
          appendControl("if (runCountKernel){\n");
-      appendControl(fmt::format("cudaMallocExt(&d_{0}, sizeof(uint64_t));", COUNT(op)));
-      deviceFrees.insert(fmt::format("d_{0}", COUNT(op)));
-      appendControl(fmt::format("cudaMemset(d_{0}, 0, sizeof(uint64_t));", COUNT(op)));
+      appendControl(fmt::format("cudaMallocExt(&d_{0}, sizeof(uint64_t));", countVarName));
+      deviceFrees.insert(fmt::format("d_{0}", countVarName));
+      appendControl(fmt::format("cudaMemset(d_{0}, 0, sizeof(uint64_t));", countVarName));
       genLaunchKernel(KernelType::Count);
-      appendControlDecl(fmt::format("uint64_t {0};", COUNT(op)));
-      appendControl(fmt::format("cudaMemcpy(&{0}, d_{0}, sizeof(uint64_t), cudaMemcpyDeviceToHost);", COUNT(op)));
+      appendControlDecl(fmt::format("uint64_t {0};", countVarName));
+      appendControl(fmt::format("cudaMemcpy(&{0}, d_{0}, sizeof(uint64_t), cudaMemcpyDeviceToHost);", countVarName));
       if (!isProfiling())
          appendControl("}\n");
    }
@@ -1389,8 +1390,9 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       stream << "}\n";
    }
 
-   NameTypePairs MaterializeColumns(mlir::Operation* op, mlir::ArrayAttr& columns)
+   NameTypePairs MaterializeColumns(mlir::Operation* op, mlir::ArrayAttr& columns, const std::string& countSuffix)
    {
+      std::string countVarName = COUNT(op) + countSuffix;
       NameTypePairs materializedColNameAndTypes;
       if (columns.size() == 0) return materializedColNameAndTypes;
 
@@ -1414,7 +1416,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
            auto inputColName = detail.column;
            auto cudaType = mlirTypeToCudaType(detail.type);
            appendControlDecl(fmt::format("{1}* {0} = nullptr;", filteredArgName, cudaType));
-           appendControl(fmt::format("cudaMalloc(&{0}, sizeof({1}) * {2});", filteredArgName, cudaType, COUNT(op)));
+           appendControl(fmt::format("cudaMalloc(&{0}, sizeof({1}) * {2});", filteredArgName, cudaType, countVarName));
            deviceFrees.insert(filteredArgName);
            mainArgs[filteredParamName] = cudaType + "*";
            mainArgs[inputColName] = cudaType + "*";
@@ -1434,46 +1436,58 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       appendKernel("// Materialize columns", KernelType::Main);
       appendKernel(fmt::format("auto filter_idx = atomicAdd((int*)filter_count, 1);"), KernelType::Main);
 
+      std::string keyColumnNamesConcat = "";
+      for (auto col : columns) {
+         if (keyColumnNamesConcat.size() > 0) {
+            keyColumnNamesConcat += "_";
+         }
+         tuples::ColumnRefAttr keyAttr = mlir::cast<tuples::ColumnRefAttr>(col);
+         keyColumnNamesConcat += getColumnName<tuples::ColumnRefAttr>(keyAttr);
+      }
+
+      auto filteredParamName = fmt::format("{0}_col_filtered", keyColumnNamesConcat);
+      auto filteredIdxParamName = fmt::format("{0}_col_filtered_idx", keyColumnNamesConcat);
+      auto filteredArgName = fmt::format("d_{0}_col_filtered_{1}", keyColumnNamesConcat, GetId(op));
+      auto filteredIdxArgName = fmt::format("d_{0}_col_filtered_idx_{1}", keyColumnNamesConcat, GetId(op));
+      auto cudaType = getHTKeyType(columns);
+
+      deviceFrees.insert(filteredArgName);
+      deviceFrees.insert(filteredIdxArgName);
+      materializedColNameAndTypes.push_back(std::make_pair(filteredArgName, cudaType));
+      materializedColNameAndTypes.push_back(std::make_pair(filteredIdxArgName, "uint64_t"));
+
+      appendControlDecl(fmt::format("{1}* {0} = nullptr;", filteredArgName, cudaType));
+      appendControlDecl(fmt::format("uint64_t* {0} = nullptr;", filteredIdxArgName));
+      appendControl(fmt::format("cudaMalloc(&{0}, sizeof({1}) * {2});", filteredArgName, cudaType, countVarName));
+      appendControl(fmt::format("cudaMalloc(&{0}, sizeof(uint64_t) * {1});", filteredIdxArgName, countVarName));
+
+      // parameters
+      mainArgs[filteredParamName] = cudaType + "*";
+      mainArgs[filteredIdxParamName] = "uint64_t*";
+      
+      // arguments
+      mlirToGlobalSymbol[filteredParamName] = filteredArgName;
+      mlirToGlobalSymbol[filteredIdxParamName] = filteredIdxArgName;
+
+      auto mergedKey = MakeKeys(op, columns, KernelType::Main);
+      // copy the value
+      appendKernel(fmt::format("{0}[filter_idx] = {1};", filteredParamName, mergedKey), KernelType::Main);
+      appendKernel(fmt::format("{0}[filter_idx] = tid;", filteredIdxParamName), KernelType::Main);
+
       // Allocate memory for filtered columns
       for (auto col : columns) {
          tuples::ColumnRefAttr keyAttr = mlir::cast<tuples::ColumnRefAttr>(col);
          ColumnDetail detail(keyAttr);
-         auto filteredParamName = fmt::format("{0}_col_filtered", detail.column);
-         auto filteredIdxParamName = fmt::format("{0}_col_filtered_idx", detail.column);
-         auto filteredArgName = fmt::format("d_{0}_col_filtered_{1}", detail.column, GetId(op));
-         auto filteredIdxArgName = fmt::format("d_{0}_col_filtered_idx_{1}", detail.column, GetId(op));
-         auto inputColName = detail.column;
-         auto cudaType = mlirTypeToCudaType(detail.type);
 
-         appendControlDecl(fmt::format("{1}* {0} = nullptr;", filteredArgName, cudaType));
-         appendControlDecl(fmt::format("uint64_t* {0} = nullptr;", filteredIdxArgName));
-         appendControl(fmt::format("cudaMalloc(&{0}, sizeof({1}) * {2});", filteredArgName, cudaType, COUNT(op)));
-         appendControl(fmt::format("cudaMalloc(&{0}, sizeof(uint64_t) * {1});", filteredIdxArgName, COUNT(op)));
-
-         deviceFrees.insert(filteredArgName);
-         deviceFrees.insert(filteredIdxArgName);
-         materializedColNameAndTypes.push_back(std::make_pair(filteredArgName, cudaType));
-         materializedColNameAndTypes.push_back(std::make_pair(filteredIdxArgName, "uint64_t"));
-
-         // parameters
-         mainArgs[filteredParamName] = cudaType + "*";
-         mainArgs[filteredIdxParamName] = "uint64_t*";
-         mainArgs[inputColName] = cudaType + "*";
-         // arguments
-         mlirToGlobalSymbol[filteredParamName] = filteredArgName;
-         mlirToGlobalSymbol[filteredIdxParamName] = filteredIdxArgName;
-         mlirToGlobalSymbol[inputColName] = getGlobalSymbolName(detail.table, detail.column);
-
-         // copy the value
-         appendKernel(fmt::format("{0}[filter_idx] = {1}[tid];", filteredParamName, inputColName), KernelType::Main);
-         appendKernel(fmt::format("{0}[filter_idx] = tid;", filteredIdxParamName), KernelType::Main);
+         mainArgs[detail.column] = mlirTypeToCudaType(detail.type) + "*";
+         mlirToGlobalSymbol[detail.column] = getGlobalSymbolName(detail.table, detail.column);
       }
 
       // memset size to 0
-      appendControl(fmt::format("cudaMemset({0}, 0, sizeof(uint64_t));", mlirToGlobalSymbol[COUNT(op)]));
+      appendControl(fmt::format("cudaMemset({0}, 0, sizeof(uint64_t));", mlirToGlobalSymbol[countVarName]));
 
       mainArgs["filter_count"] = "uint64_t*";
-      mlirToGlobalSymbol["filter_count"] = mlirToGlobalSymbol[COUNT(op)];
+      mlirToGlobalSymbol["filter_count"] = mlirToGlobalSymbol[countVarName];
       genLaunchKernel(KernelType::Main);
       return materializedColNameAndTypes;
    }
@@ -1584,13 +1598,16 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       }
       rightKeys = mlir::ArrayAttr::get(rightKeys.getContext(), filteredRightKeys);
 
-      leftStreamCode->MaterializeCount(leftStream);
-      rightStreamCode->MaterializeCount(rightStream);
+      auto countVarSuffix =  "_" + GetId(joinOp);
+      auto leftSuffix = mlir::isa<relalg::InnerJoinOp>(leftStream) ? "" : countVarSuffix;
+      auto rightSuffix = mlir::isa<relalg::InnerJoinOp>(rightStream) ? "" : countVarSuffix;
+      leftStreamCode->MaterializeCount(leftStream, leftSuffix);
+      rightStreamCode->MaterializeCount(rightStream, rightSuffix);
 
-      auto materializedLeftCols = leftStreamCode->MaterializeColumns(leftStream, leftKeys);
-      auto materializedRightCols = rightStreamCode->MaterializeColumns(rightStream, rightKeys);
+      auto materializedLeftCols = leftStreamCode->MaterializeColumns(leftStream, leftKeys, leftSuffix);
+      auto materializedRightCols = rightStreamCode->MaterializeColumns(rightStream, rightKeys, rightSuffix);
 
-      auto resultColumns = MaterializeJoinResult(joinOp, leftKeys, rightKeys, materializedLeftCols, materializedRightCols, COUNT(leftStream), COUNT(rightStream));
+      auto resultColumns = MaterializeJoinResult(joinOp, leftKeys, rightKeys, materializedLeftCols, materializedRightCols, COUNT(leftStream) + leftSuffix, COUNT(rightStream) + rightSuffix);
       PartitionHashJoinResultInfo resultInfo;
       resultInfo.resultVar = resultColumns[0].first;
       resultInfo.resultType = resultColumns[0].second;
