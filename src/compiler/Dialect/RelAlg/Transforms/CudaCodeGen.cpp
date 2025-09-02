@@ -187,15 +187,16 @@ class HyperTupleStreamCode : public TupleStreamCode {
          std::string ty = mlirTypeToCudaType(detailRef.type);
          if (colData == nullptr && mlirTypeToCudaType(detailRef.type) == "DBStringType") {
             colData = columnData[detailRef.getMlirSymbol() + "_encoded"];
-            ty = "DBI6Type";
+            ty = "DBI16Type";
          }
          if (colData == nullptr) {
             assert(false && "Renaming op: column ref not in tuple stream");
          }
          mainArgs[detailRef.getMlirSymbol()] = ty + "*";
          countArgs[detailRef.getMlirSymbol()] = ty + "*";
-         columnData[detailDef.getMlirSymbol()] =
-            new ColumnMetadata(colData);
+         auto newSymbol = mlirTypeToCudaType(detailDef.type) == "DBStringType" ? detailDef.getMlirSymbol() + "_encoded" : detailDef.getMlirSymbol();
+         columnData[newSymbol] = new ColumnMetadata(colData);
+         columnData[detailDef.getMlirSymbol()] = new ColumnMetadata(colData);
       }
    }
    template <int enc = 0>
@@ -1409,7 +1410,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
         }
         else {
            auto filteredParamName = fmt::format("{0}_col_filtered", detail.column);
-           auto filteredArgName = fmt::format("d_{0}_col_filtered", detail.column);
+           auto filteredArgName = fmt::format("d_{0}_col_filtered_{1}", detail.column, GetId(op));
            auto inputColName = detail.column;
            auto cudaType = mlirTypeToCudaType(detail.type);
            appendControlDecl(fmt::format("{1}* {0} = nullptr;", filteredArgName, cudaType));
@@ -1439,8 +1440,8 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
          ColumnDetail detail(keyAttr);
          auto filteredParamName = fmt::format("{0}_col_filtered", detail.column);
          auto filteredIdxParamName = fmt::format("{0}_col_filtered_idx", detail.column);
-         auto filteredArgName = fmt::format("d_{0}_col_filtered", detail.column);
-         auto filteredIdxArgName = fmt::format("d_{0}_col_filtered_idx", detail.column);
+         auto filteredArgName = fmt::format("d_{0}_col_filtered_{1}", detail.column, GetId(op));
+         auto filteredIdxArgName = fmt::format("d_{0}_col_filtered_idx_{1}", detail.column, GetId(op));
          auto inputColName = detail.column;
          auto cudaType = mlirTypeToCudaType(detail.type);
 
@@ -1565,6 +1566,23 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
 
       leftKeys = innerJoinOp->getAttrOfType<mlir::ArrayAttr>("leftHash");
       rightKeys = innerJoinOp->getAttrOfType<mlir::ArrayAttr>("rightHash");
+
+      // Filter out keys that are not tuples::ColumnRefAttr
+      std::vector<mlir::Attribute> filteredLeftKeys;
+      for (auto key : leftKeys) {
+         if (key.isa<tuples::ColumnRefAttr>()) {
+         filteredLeftKeys.push_back(key);
+         }
+      }
+      leftKeys = mlir::ArrayAttr::get(leftKeys.getContext(), filteredLeftKeys);
+
+      std::vector<mlir::Attribute> filteredRightKeys;
+      for (auto key : rightKeys) {
+         if (key.isa<tuples::ColumnRefAttr>()) {
+         filteredRightKeys.push_back(key);
+         }
+      }
+      rightKeys = mlir::ArrayAttr::get(rightKeys.getContext(), filteredRightKeys);
 
       leftStreamCode->MaterializeCount(leftStream);
       rightStreamCode->MaterializeCount(rightStream);
