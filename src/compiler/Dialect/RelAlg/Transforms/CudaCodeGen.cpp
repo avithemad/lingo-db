@@ -566,7 +566,7 @@ class HyperTupleStreamCode : public TupleStreamCode {
       if (!joinOp) assert(false && "Build hash table accepts only semi join operation.");
       auto keys = joinOp->getAttrOfType<mlir::ArrayAttr>("rightHash");
       auto key = MakeKeys(op, keys, KernelType::Main);
-      appendKernel("// Insert hash table kernel;", KernelType::Main);
+      appendKernel("// Insert hash table kernel - SemiJoin", KernelType::Main);
       appendKernel(fmt::format("{0}.insert(cuco::pair{{{1}, 1}});", HT(op), key), KernelType::Main);
 
       mainArgs[HT(op)] = "HASHTABLE_INSERT_SJ";
@@ -581,7 +581,7 @@ class HyperTupleStreamCode : public TupleStreamCode {
       if (!joinOp) assert(false && "Build hash table accepts only anti semi join operation.");
       auto keys = joinOp->getAttrOfType<mlir::ArrayAttr>("rightHash");
       auto key = MakeKeys(op, keys, KernelType::Main);
-      appendKernel("// Insert hash table kernel;", KernelType::Main);
+      appendKernel("// Insert hash table kernel - AntiJoin", KernelType::Main);
       appendKernel(fmt::format("{0}.insert(cuco::pair{{{1}, 1}});", HT(op), key), KernelType::Main);
 
       mainArgs[HT(op)] = "HASHTABLE_INSERT_SJ";
