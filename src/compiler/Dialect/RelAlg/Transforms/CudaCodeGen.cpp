@@ -12,14 +12,20 @@ namespace cudacodegen {
 
 static int StreamId = 0;
 
+struct MaterializedColumnInfo {
+   std::string columnVarName;
+   std::string columnCudaType;
+   std::vector<std::string> rowIdColumnVarNames;
+   std::map<std::string, std::string> tableToRowIdMap;
+};
+
 struct PartitionHashJoinResultInfo {
    std::set<std::string> joinKeySet;
    std::string resultVar;
    std::string resultType;
-   std::string leftTableName;
-   std::string rightTableName;
-   std::string leftRowId;
-   std::string  rightRowId;
+   std::map<std::string, std::string> tableToIdxMap;
+   std::map<std::string, int32_t> rowIdxVarToPtrIdMap;
+   std::map<std::string, std::vector<std::string>> keyColumnTablesMap;
 };
 
 std::string getGlobalSymbolName(const std::string& tableName, const std::string& columnName) {
@@ -71,11 +77,13 @@ class HyperTupleStreamCode : public TupleStreamCode {
          mlirToGlobalSymbol[mlirSymbol] = globalSymbol;
          ColumnMetadata* metadata = new ColumnMetadata(mlirSymbol, ColumnType::Direct, StreamId, globalSymbol);
          metadata->rid = "tid";
+         metadata->tableName = detail.table;
          columnData[mlirSymbol] = metadata;
 
          if (mlirTypeToCudaType(detail.type) == "DBStringType") {
             ColumnMetadata* encoded_metadata = new ColumnMetadata(mlirSymbol + "_encoded", ColumnType::Direct, StreamId, globalSymbol + "_encoded");
             encoded_metadata->rid = "tid";
+            encoded_metadata->tableName = detail.table;
             columnData[mlirSymbol + "_encoded"] = encoded_metadata;
             mlirToGlobalSymbol[mlirSymbol + "_encoded"] = globalSymbol + "_encoded";
          }
@@ -105,6 +113,7 @@ class HyperTupleStreamCode : public TupleStreamCode {
             mlirToGlobalSymbol[mlirSymbol] = globalSymbol;
             ColumnMetadata* encoded_metadata = new ColumnMetadata(mlirSymbol, ColumnType::Direct, StreamId, globalSymbol);
             encoded_metadata->rid = "tid";
+            encoded_metadata->tableName = detail.table;
             columnData[mlirSymbol] = encoded_metadata;
          } else {
             auto mlirSymbol = detail.getMlirSymbol();
@@ -112,6 +121,7 @@ class HyperTupleStreamCode : public TupleStreamCode {
             mlirToGlobalSymbol[mlirSymbol] = globalSymbol;
             ColumnMetadata* metadata = new ColumnMetadata(mlirSymbol, ColumnType::Direct, StreamId, globalSymbol);
             metadata->rid = "tid";
+            metadata->tableName = detail.table;
             columnData[mlirSymbol] = metadata;
          }
       }
@@ -123,6 +133,7 @@ class HyperTupleStreamCode : public TupleStreamCode {
             mlirToGlobalSymbol[mlirSymbol] = globalSymbol;
             ColumnMetadata* encoded_metadata = new ColumnMetadata(mlirSymbol, ColumnType::Direct, StreamId, globalSymbol);
             encoded_metadata->rid = "tid";
+            encoded_metadata->tableName = detail.table;
             columnData[mlirSymbol] = encoded_metadata;
          } else {
             auto mlirSymbol = detail.getMlirSymbol();
@@ -130,6 +141,7 @@ class HyperTupleStreamCode : public TupleStreamCode {
             mlirToGlobalSymbol[mlirSymbol] = globalSymbol;
             ColumnMetadata* metadata = new ColumnMetadata(mlirSymbol, ColumnType::Direct, StreamId, globalSymbol);
             metadata->rid = "tid";
+            metadata->tableName = detail.table;
             columnData[mlirSymbol] = metadata;
          }
       }
@@ -137,29 +149,35 @@ class HyperTupleStreamCode : public TupleStreamCode {
       StreamId++;
       return;
    }
-   HyperTupleStreamCode(relalg::InnerJoinOp joinOp, const PartitionHashJoinResultInfo& resultInfo, const HyperTupleStreamCode* leftStreamCode, const HyperTupleStreamCode* rightStreamCode) {
+   HyperTupleStreamCode(relalg::InnerJoinOp joinOp, PartitionHashJoinResultInfo&& resultInfo, const HyperTupleStreamCode* leftStreamCode, const HyperTupleStreamCode* rightStreamCode) {
       assert(usePartitionHashJoin() && "Should be called only when partition hash join is used.");
       mlir::Operation *op = joinOp.getOperation();
       std::string tableSize = COUNT(op);
-      m_joinInfo = resultInfo;
+      m_joinInfo = std::move(resultInfo);
 
       mlirToGlobalSymbol[tableSize] = tableSize;
       mainArgs[tableSize] = "size_t";
       countArgs[tableSize] = "size_t"; // make sure this type is reserved for kernel size only
-      mlirToGlobalSymbol[resultInfo.leftRowId] = fmt::format("{0}.get_typed_ptr<1>()", resultInfo.resultVar);
-      mlirToGlobalSymbol[resultInfo.rightRowId] = fmt::format("{0}.get_typed_ptr<2>()", resultInfo.resultVar);
-      mainArgs[resultInfo.leftRowId] = mainArgs[resultInfo.rightRowId] = countArgs[resultInfo.leftRowId] = countArgs[resultInfo.rightRowId] = "uint64_t*";
+      for (auto& kvp : m_joinInfo.rowIdxVarToPtrIdMap) {
+         mlirToGlobalSymbol[kvp.first] = fmt::format("{0}.get_typed_ptr<{1}>()", m_joinInfo.resultVar, kvp.second);
+         mainArgs[kvp.first] = countArgs[kvp.first] = "uint64_t*";
+      }
 
       appendKernel("size_t tid = blockIdx.x * blockDim.x + threadIdx.x;");
       appendKernel(fmt::format("if (tid >= {0}) return;", tableSize));
 
-      auto groupByKeys = leftStreamCode->columnData;
       for (auto& symbolDataPair : leftStreamCode->columnData) {
          auto mlirSymbol = symbolDataPair.first;
          auto globalSymbol = fmt::format("d_{0}", mlirSymbol);
          mlirToGlobalSymbol[mlirSymbol] = globalSymbol;
          ColumnMetadata* metadata = new ColumnMetadata(mlirSymbol, ColumnType::Direct, StreamId, globalSymbol);
-         metadata->rid = fmt::format("{}[tid]", resultInfo.leftRowId);
+         if(m_joinInfo.tableToIdxMap.contains(symbolDataPair.second->tableName)) {
+            metadata->rid = fmt::format("{0}[tid]", m_joinInfo.tableToIdxMap[symbolDataPair.second->tableName]);
+         }
+         else {
+            metadata->rid = symbolDataPair.second->rid;
+         }
+         metadata->tableName = symbolDataPair.second->tableName;
          columnData[mlirSymbol] = metadata;
       }
       for (auto& symbolDataPair : rightStreamCode->columnData) {
@@ -167,7 +185,13 @@ class HyperTupleStreamCode : public TupleStreamCode {
          auto globalSymbol = fmt::format("d_{0}", mlirSymbol);
          mlirToGlobalSymbol[mlirSymbol] = globalSymbol;
          ColumnMetadata* metadata = new ColumnMetadata(mlirSymbol, ColumnType::Direct, StreamId, globalSymbol);
-         metadata->rid = fmt::format("{}[tid]", resultInfo.rightRowId);
+         if(m_joinInfo.tableToIdxMap.contains(symbolDataPair.second->tableName)) {
+            metadata->rid = fmt::format("{0}[tid]", m_joinInfo.tableToIdxMap[symbolDataPair.second->tableName]);
+         }
+         else {
+            metadata->rid = symbolDataPair.second->rid;
+         }
+         metadata->tableName = symbolDataPair.second->tableName;
          columnData[mlirSymbol] = metadata;
       }
       id = StreamId;
@@ -196,7 +220,9 @@ class HyperTupleStreamCode : public TupleStreamCode {
          countArgs[detailRef.getMlirSymbol()] = ty + "*";
          auto newSymbol = mlirTypeToCudaType(detailDef.type) == "DBStringType" ? detailDef.getMlirSymbol() + "_encoded" : detailDef.getMlirSymbol();
          columnData[newSymbol] = new ColumnMetadata(colData);
+         columnData[newSymbol]->tableName = detailDef.table;
          columnData[detailDef.getMlirSymbol()] = new ColumnMetadata(colData);
+         columnData[detailDef.getMlirSymbol()]->tableName = detailDef.table;
       }
    }
    template <int enc = 0>
@@ -1237,6 +1263,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
             std::vector<tuples::ColumnRefAttr> dep;
             std::string expr = mapOpDfs(returnOp.getResults()[i].getDefiningOp(), dep);
             columnData[mlirSymbol] = new ColumnMetadata(expr, ColumnType::Mapped, StreamId, dep);
+            columnData[mlirSymbol]->tableName = detail.table;
             i++;
          }
       } else {
@@ -1390,25 +1417,26 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       stream << "}\n";
    }
 
-   NameTypePairs MaterializeColumns(mlir::Operation* op, mlir::ArrayAttr& columns, const std::string& countSuffix)
+   MaterializedColumnInfo MaterializeColumns(mlir::Operation* op, mlir::ArrayAttr& columns, const std::string& countSuffix)
    {
       std::string countVarName = COUNT(op) + countSuffix;
-      NameTypePairs materializedColNameAndTypes;
-      if (columns.size() == 0) return materializedColNameAndTypes;
+      MaterializedColumnInfo columnInfo;
+      assert((columns.size() >= 1) && "Number of columns should be >= 1");
 
       bool isPartitionJoin = mlir::isa<relalg::InnerJoinOp>(op) && usePartitionHashJoin();
-      if (isPartitionJoin) {
-        assert(columns.size() == 1 && "Join columns size should be one");
+      if (isPartitionJoin && columns.size() == 1) {
         tuples::ColumnRefAttr keyAttr = mlir::cast<tuples::ColumnRefAttr>(columns[0]);
         ColumnDetail detail(keyAttr);
-        assert((detail.table == m_joinInfo.leftTableName || detail.table == m_joinInfo.rightTableName) && "Table should match either left or right table name");
-        std::string rowId = detail.table == m_joinInfo.leftTableName ? m_joinInfo.leftRowId : m_joinInfo.rightRowId;
-        int ptrId = detail.table == m_joinInfo.leftTableName ? 1 : 2;
+        assert(m_joinInfo.tableToIdxMap.contains(detail.table) && "Table should be in the join info");
+        std::string rowId = m_joinInfo.tableToIdxMap[detail.table];
+        assert(m_joinInfo.rowIdxVarToPtrIdMap.contains(rowId) && "RowId's pointer ID information is missing");
+        int32_t ptrId = m_joinInfo.rowIdxVarToPtrIdMap[rowId];
         std::string rowIdVarName = fmt::format("{0}_{1}", rowId, GetId(op));
         appendControl(fmt::format("uint64_t* {0} = {1}.get_typed_ptr<{2}>();", rowIdVarName, m_joinInfo.resultVar, ptrId));
         if (m_joinInfo.joinKeySet.contains(detail.column)) {
-            materializedColNameAndTypes.push_back(std::make_pair(m_joinInfo.resultVar, mlirTypeToCudaType(detail.type)));
-            materializedColNameAndTypes.push_back(std::make_pair(rowIdVarName, "uint64_t"));
+            columnInfo.columnVarName = m_joinInfo.resultVar;
+            columnInfo.columnCudaType = mlirTypeToCudaType(detail.type);
+            columnInfo.rowIdColumnVarNames.push_back(rowIdVarName);
         }
         else {
            auto filteredParamName = fmt::format("{0}_col_filtered", detail.column);
@@ -1416,7 +1444,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
            auto inputColName = detail.column;
            auto cudaType = mlirTypeToCudaType(detail.type);
            appendControlDecl(fmt::format("{1}* {0} = nullptr;", filteredArgName, cudaType));
-           appendControl(fmt::format("cudaMalloc(&{0}, sizeof({1}) * {2});", filteredArgName, cudaType, countVarName));
+           appendControl(fmt::format("cudaMallocExt(&{0}, sizeof({1}) * {2});", filteredArgName, cudaType, countVarName));
            deviceFrees.insert(filteredArgName);
            mainArgs[filteredParamName] = cudaType + "*";
            mainArgs[inputColName] = cudaType + "*";
@@ -1425,11 +1453,13 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
            // copy the value
            appendKernel("// Materialize join columns", KernelType::Main);
            appendKernel(fmt::format("{0}[tid] = {2}[{1}[tid]];", filteredParamName, rowId, detail.column), KernelType::Main);
-           materializedColNameAndTypes.push_back(std::make_pair(filteredArgName, cudaType));
-           materializedColNameAndTypes.push_back(std::make_pair(rowIdVarName, "uint64_t"));
+           columnInfo.columnVarName = filteredArgName;
+           columnInfo.columnCudaType = cudaType;
+           columnInfo.rowIdColumnVarNames.push_back(rowIdVarName);
         }
         genLaunchKernel(KernelType::Main);
-        return materializedColNameAndTypes;
+        columnInfo.tableToRowIdMap[detail.table] = rowIdVarName;
+        return columnInfo;
       }
       // if it's in key set, use the key. Else, materialize.
       // Materialize -> Add column to args, add output column arg, use output_column[tid] = idx_column[tid];
@@ -1452,11 +1482,10 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       auto filteredCountArgName = fmt::format("d_{0}_filtered_count", GetId(op));
       auto cudaType = getHTKeyType(columns);
 
-      deviceFrees.insert(filteredArgName);
-      deviceFrees.insert(filteredIdxArgName);
-      materializedColNameAndTypes.push_back(std::make_pair(filteredArgName, cudaType));
-      materializedColNameAndTypes.push_back(std::make_pair(filteredIdxArgName, "uint64_t"));
-
+      columnInfo.columnVarName = filteredArgName;
+      columnInfo.columnCudaType = cudaType;
+      columnInfo.rowIdColumnVarNames.push_back(filteredIdxArgName);
+      
       appendControlDecl(fmt::format("{1}* {0} = nullptr;", filteredArgName, cudaType));
       appendControlDecl(fmt::format("uint64_t* {0} = nullptr;", filteredIdxArgName));
       appendControlDecl(fmt::format("uint64_t* {0} = nullptr;", filteredCountArgName));
@@ -1487,6 +1516,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
 
          mainArgs[detail.column] = mlirTypeToCudaType(detail.type) + "*";
          mlirToGlobalSymbol[detail.column] = getGlobalSymbolName(detail.table, detail.column);
+         columnInfo.tableToRowIdMap[detail.table] = filteredIdxArgName;
       }
 
       // memset size to 0
@@ -1495,26 +1525,31 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       mainArgs["filter_count"] = "uint64_t*";
       mlirToGlobalSymbol["filter_count"] = filteredCountArgName;
       genLaunchKernel(KernelType::Main);
-      return materializedColNameAndTypes;
+      return columnInfo;
    }
 
-   std::string BuildPartitionHashJoinChunkType(const NameTypePairs& keys) {
-      std::string chunkType = "Chunk<";
-      std::string sep = "";
-      for (auto key : keys) {
-         chunkType += sep + key.second;
-         sep = ", ";
+   std::string BuildPartitionHashJoinChunkType(const MaterializedColumnInfo& info) {
+      std::string chunkType = "Chunk<" + info.columnCudaType;
+      for (size_t i = 0; i < info.rowIdColumnVarNames.size(); i++) {
+         chunkType += ", uint64_t";
       }
       chunkType += ">";
       return chunkType;
    }
 
-   NameTypePairs MaterializeJoinResult(
+   void AddColumnsToChunk(const std::string& chunkVarName, const MaterializedColumnInfo& info) {
+      appendControl(fmt::format("{0}.add_column({1});", chunkVarName, info.columnVarName));
+      for (auto rowIdCol : info.rowIdColumnVarNames) {
+         appendControl(fmt::format("{0}.add_column({1});", chunkVarName, rowIdCol));
+      }
+   }
+
+   MaterializedColumnInfo MaterializeJoinResult(
       mlir::Operation* joinOp,
       mlir::ArrayAttr& leftKeys,
       mlir::ArrayAttr& rightKeys,
-      const NameTypePairs& materializedLeftKeys,
-      const NameTypePairs& materializedRightKeys,
+      const MaterializedColumnInfo& materializedLeftKeys,
+      const MaterializedColumnInfo& materializedRightKeys,
       const std::string& leftCount,
       const std::string& rightCount) {
       std::string leftTupleVar = fmt::format("left_{0}_tuple", cudacodegen::GetId(joinOp));
@@ -1527,13 +1562,21 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
 
       std::string leftChunkType = BuildPartitionHashJoinChunkType(materializedLeftKeys);
       std::string rightChunkType = BuildPartitionHashJoinChunkType(materializedRightKeys);
-      NameTypePairs resultColumns =
+
+      // Concatenate left and right rowIdColumnVarNames
+      std::vector<std::string> allRowIdColumnVarNames = materializedLeftKeys.rowIdColumnVarNames;
+      allRowIdColumnVarNames.insert(
+         allRowIdColumnVarNames.end(),
+         materializedRightKeys.rowIdColumnVarNames.begin(),
+         materializedRightKeys.rowIdColumnVarNames.end()
+      );
+      MaterializedColumnInfo resultInfo =
       {
-            std::make_pair(resultVar, materializedLeftKeys[0].second),
-            materializedLeftKeys[1],
-            materializedRightKeys[1]
+         resultVar,
+         materializedLeftKeys.columnCudaType,
+         allRowIdColumnVarNames
       };
-      std::string resultChunkType = BuildPartitionHashJoinChunkType(resultColumns);
+      std::string resultChunkType = BuildPartitionHashJoinChunkType(resultInfo);
 
       appendControl(fmt::format("// Partition Hash Join for {0}", cudacodegen::GetId(joinOp)));
       // Determine result tuple type based on input tuples
@@ -1551,23 +1594,15 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       appendControl(fmt::format("{0}.set_num_items({1});", rightTupleVar, rightCount));
 
       // Set column data pointers for each tuple
-      for (size_t i = 0; i < materializedLeftKeys.size(); i++) {
-         auto columnExpression = mlirToGlobalSymbol.contains(materializedLeftKeys[i].first) ? mlirToGlobalSymbol[materializedLeftKeys[i].first] : materializedLeftKeys[i].first;
-         appendControl(fmt::format("{0}.add_column({1});", leftTupleVar, columnExpression));
-      }
-
-      for (size_t i = 0; i < materializedRightKeys.size(); i++) {
-         auto columnExpression = mlirToGlobalSymbol.contains(materializedRightKeys[i].first) ? mlirToGlobalSymbol[materializedRightKeys[i].first] : materializedRightKeys[i].first;
-         appendControl(fmt::format("{0}.add_column({1});", rightTupleVar, columnExpression));
-      }
+      AddColumnsToChunk(leftTupleVar, materializedLeftKeys);
+      AddColumnsToChunk(rightTupleVar, materializedRightKeys);
       
       appendControl(fmt::format("auto {0} = partitionHashJoinHelper<{1}>({2}, {3});", resultVar, resultType, leftTupleVar, rightTupleVar));
 
       // Materialize join count.
       appendControlDecl(fmt::format("uint64_t {0};", COUNT(joinOp)));
-      appendControlDecl(fmt::format("uint64_t* d_{0} = nullptr;", COUNT(joinOp)));
       appendControl(fmt::format("{0} = {1}.num_items;", COUNT(joinOp), resultVar));
-      return resultColumns;
+      return std::move(resultInfo);
    }
 
    PartitionHashJoinResultInfo PartitionHashJoin(mlir::Operation* joinOp,
@@ -1590,16 +1625,16 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       // Filter out keys that are not tuples::ColumnRefAttr
       std::vector<mlir::Attribute> filteredLeftKeys;
       for (auto key : leftKeys) {
-         if (key.isa<tuples::ColumnRefAttr>()) {
-         filteredLeftKeys.push_back(key);
+         if (mlir::isa<tuples::ColumnRefAttr>(key)) {
+            filteredLeftKeys.push_back(key);
          }
       }
       leftKeys = mlir::ArrayAttr::get(leftKeys.getContext(), filteredLeftKeys);
 
       std::vector<mlir::Attribute> filteredRightKeys;
       for (auto key : rightKeys) {
-         if (key.isa<tuples::ColumnRefAttr>()) {
-         filteredRightKeys.push_back(key);
+         if (mlir::isa<tuples::ColumnRefAttr>(key)) {
+            filteredRightKeys.push_back(key);
          }
       }
       rightKeys = mlir::ArrayAttr::get(rightKeys.getContext(), filteredRightKeys);
@@ -1615,23 +1650,21 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
 
       auto resultColumns = MaterializeJoinResult(joinOp, leftKeys, rightKeys, materializedLeftCols, materializedRightCols, COUNT(leftStream) + leftSuffix, COUNT(rightStream) + rightSuffix);
       PartitionHashJoinResultInfo resultInfo;
-      resultInfo.resultVar = resultColumns[0].first;
-      resultInfo.resultType = resultColumns[0].second;
-      for (auto key : leftKeys) {
-         tuples::ColumnRefAttr keyAttr = mlir::cast<tuples::ColumnRefAttr>(key);
-
-         resultInfo.joinKeySet.insert(getColumnName<tuples::ColumnRefAttr>(keyAttr));
-         resultInfo.leftTableName = getTableName<tuples::ColumnRefAttr>(keyAttr);
-         resultInfo.leftRowId = resultColumns[1].first;
+      resultInfo.resultVar = resultColumns.columnVarName;
+      resultInfo.resultType = resultColumns.columnCudaType;
+      resultInfo.tableToIdxMap = std::move(materializedRightCols.tableToRowIdMap);
+      resultInfo.tableToIdxMap.merge(std::move(materializedLeftCols.tableToRowIdMap));
+      resultColumns.tableToRowIdMap.merge(m_joinInfo.tableToIdxMap);
+      for (auto kvp : materializedRightCols.tableToRowIdMap) {
+         resultInfo.tableToIdxMap[std::move(kvp.first)] = std::move(kvp.second);
       }
-      for (auto key : rightKeys) {
-         tuples::ColumnRefAttr keyAttr = mlir::cast<tuples::ColumnRefAttr>(key);
-
-         resultInfo.joinKeySet.insert(getColumnName<tuples::ColumnRefAttr>(keyAttr));
-         resultInfo.rightTableName = getTableName<tuples::ColumnRefAttr>(keyAttr);
-         resultInfo.rightRowId = resultColumns[2].first;
+      for (int32_t i = 0; i < (int32_t)materializedLeftCols.rowIdColumnVarNames.size(); i++) {
+         resultInfo.rowIdxVarToPtrIdMap[materializedLeftCols.rowIdColumnVarNames[i]] = i + 1;
       }
-      return resultInfo;
+      for (int32_t i = 0; i < (int32_t)materializedRightCols.rowIdColumnVarNames.size(); i++) {
+         resultInfo.rowIdxVarToPtrIdMap[materializedRightCols.rowIdColumnVarNames[i]] = i + materializedLeftCols.rowIdColumnVarNames.size() + 1;
+      }
+      return std::move(resultInfo);
    }
 };
 
@@ -1683,7 +1716,7 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
                kernelSchedule.push_back(leftStreamCode);
                kernelSchedule.push_back(rightStreamCode);
 
-               auto newJoinStream = new HyperTupleStreamCode(joinOp, joinResultInfo, leftStreamCode, rightStreamCode);
+               auto newJoinStream = new HyperTupleStreamCode(joinOp, std::move(joinResultInfo), leftStreamCode, rightStreamCode);
                mlir::Region& predicate = joinOp.getPredicate();
                newJoinStream->AddSelectionPredicate(predicate);
                streamCodeMap[op] = newJoinStream;
