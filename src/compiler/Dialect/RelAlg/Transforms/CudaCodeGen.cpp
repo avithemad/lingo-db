@@ -1449,6 +1449,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       auto filteredIdxParamName = fmt::format("{0}_col_filtered_idx", keyColumnNamesConcat);
       auto filteredArgName = fmt::format("d_{0}_col_filtered_{1}", keyColumnNamesConcat, GetId(op));
       auto filteredIdxArgName = fmt::format("d_{0}_col_filtered_idx_{1}", keyColumnNamesConcat, GetId(op));
+      auto filteredCountArgName = fmt::format("d_{0}_filtered_count", GetId(op));
       auto cudaType = getHTKeyType(columns);
 
       deviceFrees.insert(filteredArgName);
@@ -1458,8 +1459,13 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
 
       appendControlDecl(fmt::format("{1}* {0} = nullptr;", filteredArgName, cudaType));
       appendControlDecl(fmt::format("uint64_t* {0} = nullptr;", filteredIdxArgName));
-      appendControl(fmt::format("cudaMalloc(&{0}, sizeof({1}) * {2});", filteredArgName, cudaType, countVarName));
-      appendControl(fmt::format("cudaMalloc(&{0}, sizeof(uint64_t) * {1});", filteredIdxArgName, countVarName));
+      appendControlDecl(fmt::format("uint64_t* {0} = nullptr;", filteredCountArgName));
+      appendControl(fmt::format("cudaMallocExt(&{0}, sizeof({1}) * {2});", filteredArgName, cudaType, countVarName));
+      appendControl(fmt::format("cudaMallocExt(&{0}, sizeof(uint64_t) * {1});", filteredIdxArgName, countVarName));
+      appendControl(fmt::format("cudaMallocExt(&{0}, sizeof(uint64_t));", filteredCountArgName));
+      deviceFrees.insert(filteredArgName);
+      deviceFrees.insert(filteredIdxArgName);
+      deviceFrees.insert(filteredCountArgName);
 
       // parameters
       mainArgs[filteredParamName] = cudaType + "*";
@@ -1484,10 +1490,10 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       }
 
       // memset size to 0
-      appendControl(fmt::format("cudaMemset({0}, 0, sizeof(uint64_t));", mlirToGlobalSymbol[countVarName]));
+      appendControl(fmt::format("cudaMemset({0}, 0, sizeof(uint64_t));", filteredCountArgName));
 
       mainArgs["filter_count"] = "uint64_t*";
-      mlirToGlobalSymbol["filter_count"] = mlirToGlobalSymbol[countVarName];
+      mlirToGlobalSymbol["filter_count"] = filteredCountArgName;
       genLaunchKernel(KernelType::Main);
       return materializedColNameAndTypes;
    }
