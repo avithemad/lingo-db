@@ -1680,6 +1680,7 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
    CudaCodeGen() {}
 
    void runOnOperation() override {
+      bool usedPartitionHashJoin = false;
       getOperation().walk([&](mlir::Operation* op) {
          if (auto selection = llvm::dyn_cast<relalg::SelectionOp>(op)) {
             mlir::Operation* stream = selection.getRelMutable().get().getDefiningOp();
@@ -1720,6 +1721,7 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
                mlir::Region& predicate = joinOp.getPredicate();
                newJoinStream->AddSelectionPredicate(predicate);
                streamCodeMap[op] = newJoinStream;
+               usedPartitionHashJoin = true;
             } else {
                auto leftkeys = joinOp->getAttrOfType<mlir::ArrayAttr>("leftHash");
 
@@ -1875,7 +1877,7 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
       }
       if (gUseBloomFiltersForJoin) outputFile << "#include <cuco/bloom_filter.cuh>\n";
 
-      if (usePartitionHashJoin()) {
+      if (usedPartitionHashJoin) {
          outputFile << "#include \"../db-utils/phj/partitioned_hash_join.cuh\"\n";
       }
 
