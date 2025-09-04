@@ -19,13 +19,22 @@ struct MaterializedColumnInfo {
    std::map<std::string, std::string> tableToRowIdMap;
 };
 
+using RowIdColToPtrIdMap = std::map<std::string, int32_t>;
+
 struct PartitionHashJoinResultInfo {
    std::set<std::string> joinKeySet;
-   std::string resultVar;
-   std::string resultType;
+   std::map<std::string, std::string> tableToResultVarMap;
+   std::map<std::string, RowIdColToPtrIdMap> resultVarToRowIdColPtrIdMap;
+   std::map<std::string, std::string> resultVarToCudaType;
    std::map<std::string, std::string> tableToIdxMap;
-   std::map<std::string, int32_t> rowIdxVarToPtrIdMap;
-   std::map<std::string, std::vector<std::string>> keyColumnTablesMap;
+
+   void merge(const PartitionHashJoinResultInfo& other) {
+      joinKeySet.insert(other.joinKeySet.begin(), other.joinKeySet.end());
+      tableToResultVarMap.insert(other.tableToResultVarMap.begin(), other.tableToResultVarMap.end());
+      resultVarToRowIdColPtrIdMap.insert(other.resultVarToRowIdColPtrIdMap.begin(), other.resultVarToRowIdColPtrIdMap.end());
+      resultVarToCudaType.insert(other.resultVarToCudaType.begin(), other.resultVarToCudaType.end());
+      tableToIdxMap.insert(other.tableToIdxMap.begin(), other.tableToIdxMap.end());
+   }
 };
 
 std::string getGlobalSymbolName(const std::string& tableName, const std::string& columnName) {
@@ -157,10 +166,12 @@ class HyperTupleStreamCode : public TupleStreamCode {
 
       mlirToGlobalSymbol[tableSize] = tableSize;
       mainArgs[tableSize] = "size_t";
-      countArgs[tableSize] = "size_t"; // make sure this type is reserved for kernel size only
-      for (auto& kvp : m_joinInfo.rowIdxVarToPtrIdMap) {
-         mlirToGlobalSymbol[kvp.first] = fmt::format("{0}.get_typed_ptr<{1}>()", m_joinInfo.resultVar, kvp.second);
-         mainArgs[kvp.first] = countArgs[kvp.first] = "uint64_t*";
+      countArgs[tableSize] = "size_t";
+      for (auto& [resultVar, rowIdxColToPtrIdMap] : m_joinInfo.resultVarToRowIdColPtrIdMap) {
+         for (auto& [rowIdCol, ptrId] : rowIdxColToPtrIdMap) {
+            mlirToGlobalSymbol[rowIdCol] = fmt::format("{0}.get_typed_ptr<{1}>()", resultVar, ptrId);
+            mainArgs[rowIdCol] = countArgs[rowIdCol] = "uint64_t*";
+         }
       }
 
       appendKernel("size_t tid = blockIdx.x * blockDim.x + threadIdx.x;");
@@ -1419,53 +1430,12 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
 
    MaterializedColumnInfo MaterializeColumns(mlir::Operation* op, mlir::ArrayAttr& columns, const std::string& countSuffix)
    {
+      assert(usePartitionHashJoin() && "Should be used only when PartitionHashJoin is enabled");
       std::string countVarName = COUNT(op) + countSuffix;
       MaterializedColumnInfo columnInfo;
       assert((columns.size() >= 1) && "Number of columns should be >= 1");
 
-      bool isPartitionJoin = mlir::isa<relalg::InnerJoinOp>(op) && usePartitionHashJoin();
-      if (isPartitionJoin && columns.size() == 1) {
-        tuples::ColumnRefAttr keyAttr = mlir::cast<tuples::ColumnRefAttr>(columns[0]);
-        ColumnDetail detail(keyAttr);
-        assert(m_joinInfo.tableToIdxMap.contains(detail.table) && "Table should be in the join info");
-        std::string rowId = m_joinInfo.tableToIdxMap[detail.table];
-        assert(m_joinInfo.rowIdxVarToPtrIdMap.contains(rowId) && "RowId's pointer ID information is missing");
-        int32_t ptrId = m_joinInfo.rowIdxVarToPtrIdMap[rowId];
-        std::string rowIdVarName = fmt::format("{0}_{1}", rowId, GetId(op));
-        appendControl(fmt::format("uint64_t* {0} = {1}.get_typed_ptr<{2}>();", rowIdVarName, m_joinInfo.resultVar, ptrId));
-        if (m_joinInfo.joinKeySet.contains(detail.column)) {
-            columnInfo.columnVarName = m_joinInfo.resultVar;
-            columnInfo.columnCudaType = mlirTypeToCudaType(detail.type);
-            columnInfo.rowIdColumnVarNames.push_back(rowIdVarName);
-        }
-        else {
-           auto filteredParamName = fmt::format("{0}_col_filtered", detail.column);
-           auto filteredArgName = fmt::format("d_{0}_col_filtered_{1}", detail.column, GetId(op));
-           auto inputColName = detail.column;
-           auto cudaType = mlirTypeToCudaType(detail.type);
-           appendControlDecl(fmt::format("{1}* {0} = nullptr;", filteredArgName, cudaType));
-           appendControl(fmt::format("cudaMallocExt(&{0}, sizeof({1}) * {2});", filteredArgName, cudaType, countVarName));
-           deviceFrees.insert(filteredArgName);
-           mainArgs[filteredParamName] = cudaType + "*";
-           mainArgs[inputColName] = cudaType + "*";
-           mlirToGlobalSymbol[filteredParamName] = filteredArgName;
-           mlirToGlobalSymbol[inputColName] = getGlobalSymbolName(detail.table, detail.column);
-           // copy the value
-           appendKernel("// Materialize join columns", KernelType::Main);
-           appendKernel(fmt::format("{0}[tid] = {2}[{1}[tid]];", filteredParamName, rowId, detail.column), KernelType::Main);
-           columnInfo.columnVarName = filteredArgName;
-           columnInfo.columnCudaType = cudaType;
-           columnInfo.rowIdColumnVarNames.push_back(rowIdVarName);
-        }
-        genLaunchKernel(KernelType::Main);
-        columnInfo.tableToRowIdMap[detail.table] = rowIdVarName;
-        return columnInfo;
-      }
-      // if it's in key set, use the key. Else, materialize.
-      // Materialize -> Add column to args, add output column arg, use output_column[tid] = idx_column[tid];
-      appendKernel("// Materialize columns", KernelType::Main);
-      appendKernel(fmt::format("auto filter_idx = atomicAdd((int*)filter_count, 1);"), KernelType::Main);
-
+      auto keyColCudaType = getHTKeyType(columns);
       std::string keyColumnNamesConcat = "";
       for (auto col : columns) {
          if (keyColumnNamesConcat.size() > 0) {
@@ -1475,21 +1445,76 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
          keyColumnNamesConcat += getColumnName<tuples::ColumnRefAttr>(keyAttr);
       }
 
+      if (mlir::isa<relalg::InnerJoinOp>(op)) { // special case to handle partition hash join output materialization.
+         auto filteredParamName = fmt::format("{0}_col_filtered", keyColumnNamesConcat);
+         auto filteredArgName = fmt::format("d_{0}_col_filtered_{1}", keyColumnNamesConcat, GetId(op));
+         appendControlDecl(fmt::format("{1}* {0} = nullptr;", filteredArgName, keyColCudaType));
+         appendControl(fmt::format("cudaMallocExt(&{0}, sizeof({1}) * {2});", filteredArgName, keyColCudaType, countVarName));
+         mainArgs[filteredParamName] = keyColCudaType + "*";
+         mlirToGlobalSymbol[filteredParamName] = filteredArgName;
+
+         deviceFrees.insert(filteredArgName);
+
+         auto mergedKey = MakeKeys(op, columns, KernelType::Main);
+         appendKernel("// Materialize join columns", KernelType::Main);
+         appendKernel(fmt::format("{0}[tid] = {1};", filteredParamName, mergedKey), KernelType::Main);
+
+         columnInfo.columnVarName = filteredArgName;
+         columnInfo.columnCudaType = keyColCudaType;
+
+         std::set<std::string> usedTables;
+         for (auto col : columns) {
+            tuples::ColumnRefAttr keyAttr = mlir::cast<tuples::ColumnRefAttr>(col);
+            ColumnDetail detail(keyAttr);
+
+            assert(m_joinInfo.tableToIdxMap.contains(detail.table) && "Table -> RowIdxCol info isn't present.");
+            std::string rowId = m_joinInfo.tableToIdxMap[detail.table];
+            std::string rowIdVarName = fmt::format("{0}_{1}", rowId, GetId(op));
+
+            if (!usedTables.contains(detail.table)) {
+               assert(m_joinInfo.tableToResultVarMap.contains(detail.table) && "Table -> ResultVarName info isn't present.");
+               auto resultVar = m_joinInfo.tableToResultVarMap[detail.table];
+
+               assert(m_joinInfo.resultVarToRowIdColPtrIdMap.contains(resultVar) && "ResultVarName -> RowIdColToPtrId map isn't present");
+               auto rowIdColToPtrIdMap = m_joinInfo.resultVarToRowIdColPtrIdMap[resultVar];
+               
+               assert(rowIdColToPtrIdMap.contains(rowId) && "RowId's pointer ID information is missing");
+               int32_t ptrId = rowIdColToPtrIdMap[rowId];
+
+               appendControl(fmt::format("uint64_t* {0} = {1}.get_typed_ptr<{2}>();", rowIdVarName, resultVar, ptrId));
+               
+               columnInfo.rowIdColumnVarNames.push_back(rowIdVarName);
+               columnInfo.tableToRowIdMap[detail.table] = rowIdVarName;
+               
+               usedTables.insert(detail.table);
+            }
+
+            mainArgs[detail.column] = mlirTypeToCudaType(detail.type) + "*";
+            mlirToGlobalSymbol[detail.column] = getGlobalSymbolName(detail.table, detail.column);
+         }
+         genLaunchKernel(KernelType::Main);
+         return columnInfo;
+      }
+
+      // if it's in key set, use the key. Else, materialize.
+      // Materialize -> Add column to args, add output column arg, use output_column[tid] = idx_column[tid];
+      appendKernel("// Materialize columns", KernelType::Main);
+      appendKernel(fmt::format("auto filter_idx = atomicAdd((int*)filter_count, 1);"), KernelType::Main);
+
       auto filteredParamName = fmt::format("{0}_col_filtered", keyColumnNamesConcat);
       auto filteredIdxParamName = fmt::format("{0}_col_filtered_idx", keyColumnNamesConcat);
       auto filteredArgName = fmt::format("d_{0}_col_filtered_{1}", keyColumnNamesConcat, GetId(op));
       auto filteredIdxArgName = fmt::format("d_{0}_col_filtered_idx_{1}", keyColumnNamesConcat, GetId(op));
       auto filteredCountArgName = fmt::format("d_{0}_filtered_count", GetId(op));
-      auto cudaType = getHTKeyType(columns);
 
       columnInfo.columnVarName = filteredArgName;
-      columnInfo.columnCudaType = cudaType;
+      columnInfo.columnCudaType = keyColCudaType;
       columnInfo.rowIdColumnVarNames.push_back(filteredIdxArgName);
       
-      appendControlDecl(fmt::format("{1}* {0} = nullptr;", filteredArgName, cudaType));
+      appendControlDecl(fmt::format("{1}* {0} = nullptr;", filteredArgName, keyColCudaType));
       appendControlDecl(fmt::format("uint64_t* {0} = nullptr;", filteredIdxArgName));
       appendControlDecl(fmt::format("uint64_t* {0} = nullptr;", filteredCountArgName));
-      appendControl(fmt::format("cudaMallocExt(&{0}, sizeof({1}) * {2});", filteredArgName, cudaType, countVarName));
+      appendControl(fmt::format("cudaMallocExt(&{0}, sizeof({1}) * {2});", filteredArgName, keyColCudaType, countVarName));
       appendControl(fmt::format("cudaMallocExt(&{0}, sizeof(uint64_t) * {1});", filteredIdxArgName, countVarName));
       appendControl(fmt::format("cudaMallocExt(&{0}, sizeof(uint64_t));", filteredCountArgName));
       deviceFrees.insert(filteredArgName);
@@ -1497,7 +1522,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       deviceFrees.insert(filteredCountArgName);
 
       // parameters
-      mainArgs[filteredParamName] = cudaType + "*";
+      mainArgs[filteredParamName] = keyColCudaType + "*";
       mainArgs[filteredIdxParamName] = "uint64_t*";
       
       // arguments
@@ -1650,20 +1675,27 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
 
       auto resultColumns = MaterializeJoinResult(joinOp, leftKeys, rightKeys, materializedLeftCols, materializedRightCols, COUNT(leftStream) + leftSuffix, COUNT(rightStream) + rightSuffix);
       PartitionHashJoinResultInfo resultInfo;
-      resultInfo.resultVar = resultColumns.columnVarName;
-      resultInfo.resultType = resultColumns.columnCudaType;
+      for (auto&[table, _] : materializedLeftCols.tableToRowIdMap) {
+         resultInfo.tableToResultVarMap[table] = resultColumns.columnVarName;
+      }
+      for (auto&[table, _] : materializedRightCols.tableToRowIdMap) {
+         resultInfo.tableToResultVarMap[table] = resultColumns.columnVarName;
+      }
+
+      resultInfo.resultVarToCudaType[resultColumns.columnVarName] = resultColumns.columnCudaType;
       resultInfo.tableToIdxMap = std::move(materializedRightCols.tableToRowIdMap);
       resultInfo.tableToIdxMap.merge(std::move(materializedLeftCols.tableToRowIdMap));
-      resultColumns.tableToRowIdMap.merge(m_joinInfo.tableToIdxMap);
-      for (auto kvp : materializedRightCols.tableToRowIdMap) {
-         resultInfo.tableToIdxMap[std::move(kvp.first)] = std::move(kvp.second);
-      }
+
+      RowIdColToPtrIdMap rowIdColToPtrMap;
       for (int32_t i = 0; i < (int32_t)materializedLeftCols.rowIdColumnVarNames.size(); i++) {
-         resultInfo.rowIdxVarToPtrIdMap[materializedLeftCols.rowIdColumnVarNames[i]] = i + 1;
+         rowIdColToPtrMap[materializedLeftCols.rowIdColumnVarNames[i]] = i + 1;
       }
       for (int32_t i = 0; i < (int32_t)materializedRightCols.rowIdColumnVarNames.size(); i++) {
-         resultInfo.rowIdxVarToPtrIdMap[materializedRightCols.rowIdColumnVarNames[i]] = i + materializedLeftCols.rowIdColumnVarNames.size() + 1;
+         rowIdColToPtrMap[materializedRightCols.rowIdColumnVarNames[i]] = i + materializedLeftCols.rowIdColumnVarNames.size() + 1;
       }
+      resultInfo.resultVarToRowIdColPtrIdMap[std::move(resultColumns.columnVarName)] = std::move(rowIdColToPtrMap);
+      resultInfo.merge(leftStreamCode->m_joinInfo);
+      resultInfo.merge(rightStreamCode->m_joinInfo);
       return std::move(resultInfo);
    }
 };
