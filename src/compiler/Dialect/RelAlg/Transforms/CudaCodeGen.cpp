@@ -1473,6 +1473,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
    }
 
    void ExtractPointerIdFromResult(mlir::Operation* op, const std::string& tableName, MaterializedColumnInfo& columnInfo) {
+      assert(m_joinInfo.tableToIdxMap.contains(tableName) && "Table -> RowIdxCol info isn't present.");
       std::string rowId = m_joinInfo.tableToIdxMap[tableName];
       std::string rowIdVarName = fmt::format("{0}_{1}", rowId, GetId(op));
 
@@ -1531,8 +1532,6 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
             tuples::ColumnRefAttr keyAttr = mlir::cast<tuples::ColumnRefAttr>(col);
             ColumnDetail detail(keyAttr);
 
-            assert(m_joinInfo.tableToIdxMap.contains(detail.table) && "Table -> RowIdxCol info isn't present.");
-
             if (!usedTables.contains(detail.table)) {
                ExtractPointerIdFromResult(op, detail.table, columnInfo);
                usedTables.insert(detail.table);
@@ -1556,7 +1555,6 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
                   if (usedTables.contains(table)) {
                      continue;
                   }
-                  assert(m_joinInfo.tableToIdxMap.contains(table) && "Table -> RowIdxCol info isn't present.");
                   ExtractPointerIdFromResult(op, table, columnInfo);
 
                   usedTables.insert(table);
