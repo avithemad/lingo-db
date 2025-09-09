@@ -1,4 +1,8 @@
 #include "lingodb/compiler/Dialect/RelAlg/CudaCodeGenHelper.h"
+#include <string>
+#include <map>
+#include <queue>
+#include <algorithm>
 using namespace lingodb::compiler::dialect;
 
 static bool gCudaCodeGenEnabled = false;
@@ -31,14 +35,50 @@ struct PartitionHashJoinResultInfo {
    void merge(const PartitionHashJoinResultInfo& other) {
       joinKeySet.insert(other.joinKeySet.begin(), other.joinKeySet.end());
       tableToResultVarMap.insert(other.tableToResultVarMap.begin(), other.tableToResultVarMap.end());
-      resultVarToRowIdColPtrIdMap.insert(other.resultVarToRowIdColPtrIdMap.begin(), other.resultVarToRowIdColPtrIdMap.end());
-      resultVarToCudaType.insert(other.resultVarToCudaType.begin(), other.resultVarToCudaType.end());
+      for (auto& [_, resultVar] : tableToResultVarMap) {
+         if (!resultVarToRowIdColPtrIdMap.contains(resultVar)) {
+            resultVarToRowIdColPtrIdMap[resultVar] = other.resultVarToRowIdColPtrIdMap.find(resultVar)->second;
+            resultVarToCudaType[resultVar] = other.resultVarToCudaType.find(resultVar)->second;
+         }
+      }
       tableToIdxMap.insert(other.tableToIdxMap.begin(), other.tableToIdxMap.end());
    }
 };
 
+struct JoinOpMaterializationState {
+   JoinOpMaterializationState() = default;
+   std::map<relalg::InnerJoinOp, std::vector<relalg::InnerJoinOp>> joinOpsToMaterializeIdx;
+   std::map<relalg::InnerJoinOp, std::set<std::string>> joinToTablesMap;
+};
+
 std::string getGlobalSymbolName(const std::string& tableName, const std::string& columnName) {
    return fmt::format("d_{0}__{1}", tableName, columnName);
+}
+
+std::set<std::string> getJoinTables(relalg::InnerJoinOp& innerJoinOp) {
+   std::set<std::string> joinTables;
+   
+   // Get all leftHash and rightHash keys from the current join op
+   auto leftKeys = innerJoinOp->getAttrOfType<mlir::ArrayAttr>("leftHash");
+   auto rightKeys = innerJoinOp->getAttrOfType<mlir::ArrayAttr>("rightHash");
+
+   // Process left keys
+   for (auto key : leftKeys) {
+      if (auto colRefAttr = mlir::dyn_cast<tuples::ColumnRefAttr>(key)) {
+         ColumnDetail detail(colRefAttr);
+         joinTables.insert(detail.table);
+      }
+   }
+
+   // Process right keys
+   for (auto key : rightKeys) {
+      if (auto colRefAttr = mlir::dyn_cast<tuples::ColumnRefAttr>(key)) {
+         ColumnDetail detail(colRefAttr);
+         joinTables.insert(detail.table);
+      }
+   }
+
+   return std::move(joinTables);
 }
 
 class HyperTupleStreamCode : public TupleStreamCode {
@@ -1428,7 +1468,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       stream << "}\n";
    }
 
-   MaterializedColumnInfo MaterializeColumns(mlir::Operation* op, mlir::ArrayAttr& columns, const std::string& countSuffix)
+   MaterializedColumnInfo MaterializeColumns(relalg::InnerJoinOp& curJoinOp, mlir::Operation* op, mlir::ArrayAttr& columns, const std::string& countSuffix, const JoinOpMaterializationState& state)
    {
       assert(usePartitionHashJoin() && "Should be used only when PartitionHashJoin is enabled");
       std::string countVarName = COUNT(op) + countSuffix;
@@ -1445,7 +1485,8 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
          keyColumnNamesConcat += getColumnName<tuples::ColumnRefAttr>(keyAttr);
       }
 
-      if (mlir::isa<relalg::InnerJoinOp>(op)) { // special case to handle partition hash join output materialization.
+      // special case to handle partition hash join output materialization.
+      if (auto innerJoinOp = mlir::dyn_cast<relalg::InnerJoinOp>(op)) {
          auto filteredParamName = fmt::format("{0}_col_filtered", keyColumnNamesConcat);
          auto filteredArgName = fmt::format("d_{0}_col_filtered_{1}", keyColumnNamesConcat, GetId(op));
          appendControlDecl(fmt::format("{1}* {0} = nullptr;", filteredArgName, keyColCudaType));
@@ -1477,20 +1518,56 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
 
                assert(m_joinInfo.resultVarToRowIdColPtrIdMap.contains(resultVar) && "ResultVarName -> RowIdColToPtrId map isn't present");
                auto rowIdColToPtrIdMap = m_joinInfo.resultVarToRowIdColPtrIdMap[resultVar];
-               
+
                assert(rowIdColToPtrIdMap.contains(rowId) && "RowId's pointer ID information is missing");
                int32_t ptrId = rowIdColToPtrIdMap[rowId];
 
                appendControl(fmt::format("uint64_t* {0} = {1}.get_typed_ptr<{2}>();", rowIdVarName, resultVar, ptrId));
-               
+
                columnInfo.rowIdColumnVarNames.push_back(rowIdVarName);
                columnInfo.tableToRowIdMap[detail.table] = rowIdVarName;
-               
+
                usedTables.insert(detail.table);
             }
 
             mainArgs[detail.column] = mlirTypeToCudaType(detail.type) + "*";
             mlirToGlobalSymbol[detail.column] = getGlobalSymbolName(detail.table, detail.column);
+         }
+         if (state.joinOpsToMaterializeIdx.contains(curJoinOp)) {
+            for (auto mappedJoin : state.joinOpsToMaterializeIdx.find(curJoinOp)->second) {
+               assert(state.joinToTablesMap.contains(mappedJoin) && "Table info missing for join");
+               std::set<std::string> tablesNotIncluded;
+               auto joinTables = getJoinTables(curJoinOp);
+               auto& tablesToInclude = state.joinToTablesMap.find(mappedJoin)->second;
+               std::set_difference(tablesToInclude.begin(),
+                                   tablesToInclude.end(),
+                                   joinTables.begin(),
+                                   joinTables.end(),
+                                   std::inserter(tablesNotIncluded, tablesNotIncluded.begin()));
+               for (auto table : tablesNotIncluded) {
+                  if (usedTables.contains(table)) {
+                     continue;
+                  }
+                  assert(m_joinInfo.tableToIdxMap.contains(table) && "Table -> RowIdxCol info isn't present.");
+                  std::string rowId = m_joinInfo.tableToIdxMap[table];
+                  std::string rowIdVarName = fmt::format("{0}_{1}", rowId, GetId(op));
+                  assert(m_joinInfo.tableToResultVarMap.contains(table) && "Table -> ResultVarName info isn't present.");
+                  auto resultVar = m_joinInfo.tableToResultVarMap[table];
+
+                  assert(m_joinInfo.resultVarToRowIdColPtrIdMap.contains(resultVar) && "ResultVarName -> RowIdColToPtrId map isn't present");
+                  auto rowIdColToPtrIdMap = m_joinInfo.resultVarToRowIdColPtrIdMap[resultVar];
+
+                  assert(rowIdColToPtrIdMap.contains(rowId) && "RowId's pointer ID information is missing");
+                  int32_t ptrId = rowIdColToPtrIdMap[rowId];
+
+                  appendControl(fmt::format("uint64_t* {0} = {1}.get_typed_ptr<{2}>();", rowIdVarName, resultVar, ptrId));
+
+                  columnInfo.rowIdColumnVarNames.push_back(rowIdVarName);
+                  columnInfo.tableToRowIdMap[table] = rowIdVarName;
+
+                  usedTables.insert(table);
+               }
+            }
          }
          genLaunchKernel(KernelType::Main);
          return columnInfo;
@@ -1611,8 +1688,8 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       appendControl(fmt::format("using {0} = {1};", resultType, resultChunkType));
 
       // Create input tuples
-      appendControl(fmt::format("{0} {1};", leftChunkType, leftTupleVar));
-      appendControl(fmt::format("{0} {1};", rightChunkType, rightTupleVar));
+      appendControl(fmt::format("{0} {1};", leftResultType, leftTupleVar));
+      appendControl(fmt::format("{0} {1};", rightResultType, rightTupleVar));
 
       // set number of items for each tuple.
       appendControl(fmt::format("{0}.set_num_items({1});", leftTupleVar, leftCount));
@@ -1634,7 +1711,8 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
                           mlir::Operation* leftStream,
                           mlir::Operation* rightStream,
                           HyperTupleStreamCode* leftStreamCode,
-                          HyperTupleStreamCode* rightStreamCode) {
+                          HyperTupleStreamCode* rightStreamCode,
+                          const JoinOpMaterializationState& state) {
       auto innerJoinOp = mlir::dyn_cast_or_null<relalg::InnerJoinOp>(joinOp);
       
       if (!innerJoinOp) {
@@ -1670,8 +1748,8 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       leftStreamCode->MaterializeCount(leftStream, leftSuffix);
       rightStreamCode->MaterializeCount(rightStream, rightSuffix);
 
-      auto materializedLeftCols = leftStreamCode->MaterializeColumns(leftStream, leftKeys, leftSuffix);
-      auto materializedRightCols = rightStreamCode->MaterializeColumns(rightStream, rightKeys, rightSuffix);
+      auto materializedLeftCols = leftStreamCode->MaterializeColumns(innerJoinOp, leftStream, leftKeys, leftSuffix, state);
+      auto materializedRightCols = rightStreamCode->MaterializeColumns(innerJoinOp, rightStream, rightKeys, rightSuffix, state);
 
       auto resultColumns = MaterializeJoinResult(joinOp, leftKeys, rightKeys, materializedLeftCols, materializedRightCols, COUNT(leftStream) + leftSuffix, COUNT(rightStream) + rightSuffix);
       PartitionHashJoinResultInfo resultInfo;
@@ -1713,6 +1791,116 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
 
    void runOnOperation() override {
       bool usedPartitionHashJoin = false;
+      JoinOpMaterializationState state;
+      getOperation().walk([&](mlir::Operation* op) {
+         if (!mlir::isa<relalg::InnerJoinOp>(op)) {
+            return;
+         }
+         relalg::InnerJoinOp innerJoinOp = mlir::dyn_cast<relalg::InnerJoinOp>(op);
+         // Get all innerJoinOp users of the current innerJoinOp
+         std::queue<mlir::Operation*> opsToCheck;
+         for (auto user : innerJoinOp.getOperation()->getUsers()) {
+            opsToCheck.push(user);
+         }
+
+         // Collect all tables involved in current join
+         std::set<std::string> joinTables, usedTables;
+         joinTables = getJoinTables(innerJoinOp);
+         
+         std::vector<relalg::InnerJoinOp> joinChain;
+         while (!opsToCheck.empty()) {
+            auto user = opsToCheck.front();
+            opsToCheck.pop();
+            bool pushUsers = true;
+
+            if (auto materializeOp = mlir::dyn_cast<relalg::MaterializeOp>(user)) {
+               pushUsers = false;
+               for (auto col : materializeOp.getCols()) {
+                  if (auto colRefAttr = mlir::dyn_cast<tuples::ColumnRefAttr>(col)) {
+                     ColumnDetail detail(colRefAttr);
+                     if (joinTables.count(detail.table)) {
+                        usedTables.insert(detail.table);
+                     }
+                  }
+               }
+            }
+            else if (auto joinOp = mlir::dyn_cast<relalg::InnerJoinOp>(user)) {
+               joinChain.push_back(joinOp);
+
+               // Get all leftHash and rightHash keys from the current join op
+               auto leftKeys = joinOp->getAttrOfType<mlir::ArrayAttr>("leftHash");
+               auto rightKeys = joinOp->getAttrOfType<mlir::ArrayAttr>("rightHash");
+               for (auto key : leftKeys) {
+                  if (auto colRefAttr = mlir::dyn_cast<tuples::ColumnRefAttr>(key)) {
+                     ColumnDetail detail(colRefAttr);
+                     if (joinTables.count(detail.table)) {
+                        usedTables.insert(detail.table);
+                     }
+                  }
+               }
+               for (auto key : rightKeys) {
+                  if (auto colRefAttr = mlir::dyn_cast<tuples::ColumnRefAttr>(key)) {
+                     ColumnDetail detail(colRefAttr);
+                     if (joinTables.count(detail.table)) {
+                        usedTables.insert(detail.table);
+                     }
+                  }
+               }
+            }
+            else if (auto aggOp = mlir::dyn_cast<relalg::AggregationOp>(user)) {
+               // Check if aggregation references columns from involved tables
+               for (auto groupByCol : aggOp.getGroupByCols()) {
+                  if (auto colRefAttr = mlir::dyn_cast<tuples::ColumnRefAttr>(groupByCol)) {
+                     ColumnDetail detail(colRefAttr);
+                     if (joinTables.count(detail.table)) {
+                        usedTables.insert(detail.table);
+                     }
+                  }
+               }
+
+               // Also check computed columns in the aggregation
+               auto& aggRgn = aggOp.getAggrFunc();
+               if (auto returnOp = mlir::dyn_cast_or_null<tuples::ReturnOp>(aggRgn.front().getTerminator())) {
+                  for (mlir::Value col : returnOp.getResults()) {
+                     if (auto aggrFunc = llvm::dyn_cast<relalg::AggrFuncOp>(col.getDefiningOp())) {
+                        if (auto colRefAttr = mlir::dyn_cast<tuples::ColumnRefAttr>(aggrFunc.getAttr())) {
+                           ColumnDetail detail(colRefAttr);
+                           if (joinTables.count(detail.table)) {
+                              usedTables.insert(detail.table);
+                           }
+                        }
+                     }
+                  }
+               }
+            }
+            else if (auto mapOp = mlir::dyn_cast<relalg::MapOp>(user)) {
+               // Check if map operation references columns from involved tables
+               for (auto computedCol : mapOp.getComputedCols()) {
+                  if (auto colRefAttr = mlir::dyn_cast<tuples::ColumnRefAttr>(computedCol)) {
+                     ColumnDetail detail(colRefAttr);
+                     if (joinTables.count(detail.table)) {
+                        usedTables.insert(detail.table);
+                     }
+                  }
+               }
+            }
+
+            if (pushUsers) {
+               for (auto usedByUser : user->getUsers()) {
+                  opsToCheck.push(usedByUser);
+               }
+            }
+         }
+
+         // If we need to materialize indices for this join, add it to the map
+         if (!usedTables.empty()) {
+            for (auto joinOp : joinChain) {
+               state.joinOpsToMaterializeIdx[joinOp].push_back(innerJoinOp);
+            }
+            state.joinToTablesMap[innerJoinOp] = std::move(usedTables);
+         }
+      });
+
       getOperation().walk([&](mlir::Operation* op) {
          if (auto selection = llvm::dyn_cast<relalg::SelectionOp>(op)) {
             mlir::Operation* stream = selection.getRelMutable().get().getDefiningOp();
@@ -1745,7 +1933,7 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
 
             if (usePartitionHashJoin()) {
                // Perform partition hash join
-               auto joinResultInfo = rightStreamCode->PartitionHashJoin(op, leftStream, rightStream, leftStreamCode, rightStreamCode);
+               auto joinResultInfo = rightStreamCode->PartitionHashJoin(op, leftStream, rightStream, leftStreamCode, rightStreamCode, state);
                kernelSchedule.push_back(leftStreamCode);
                kernelSchedule.push_back(rightStreamCode);
 
