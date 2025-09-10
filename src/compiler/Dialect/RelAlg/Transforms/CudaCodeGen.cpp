@@ -55,10 +55,6 @@ struct JoinOpDownstreamColumnUseInfo {
    std::map<relalg::InnerJoinOp, std::set<std::string>> joinToDownstreamTableUseMap;
 };
 
-std::string getGlobalSymbolName(const std::string& tableName, const std::string& columnName) {
-   return fmt::format("d_{0}__{1}", tableName, columnName);
-}
-
 std::set<std::string> getJoinTables(relalg::InnerJoinOp& innerJoinOp) {
    std::set<std::string> joinTables;
    
@@ -223,7 +219,8 @@ class HyperTupleStreamCode : public TupleStreamCode {
 
       for (auto& symbolDataPair : leftStreamCode->columnData) {
          auto mlirSymbol = symbolDataPair.first;
-         auto globalSymbol = fmt::format("d_{0}", mlirSymbol);
+         assert(leftStreamCode->mlirToGlobalSymbol.contains(mlirSymbol) && "Left stream code should have the global symbol mapping");
+         auto globalSymbol = leftStreamCode->mlirToGlobalSymbol.find(mlirSymbol)->second;
          mlirToGlobalSymbol[mlirSymbol] = globalSymbol;
          ColumnMetadata* metadata = new ColumnMetadata(mlirSymbol, ColumnType::Direct, StreamId, globalSymbol);
          if(m_joinInfo.tableToIdxMap.contains(symbolDataPair.second->tableName)) {
@@ -237,7 +234,8 @@ class HyperTupleStreamCode : public TupleStreamCode {
       }
       for (auto& symbolDataPair : rightStreamCode->columnData) {
          auto mlirSymbol = symbolDataPair.first;
-         auto globalSymbol = fmt::format("d_{0}", mlirSymbol);
+         assert(rightStreamCode->mlirToGlobalSymbol.contains(mlirSymbol) && "Right stream code should have the global symbol mapping");
+         auto globalSymbol = rightStreamCode->mlirToGlobalSymbol.find(mlirSymbol)->second;
          mlirToGlobalSymbol[mlirSymbol] = globalSymbol;
          ColumnMetadata* metadata = new ColumnMetadata(mlirSymbol, ColumnType::Direct, StreamId, globalSymbol);
          if(m_joinInfo.tableToIdxMap.contains(symbolDataPair.second->tableName)) {
@@ -1537,8 +1535,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
                usedTables.insert(detail.table);
             }
 
-            mainArgs[detail.column] = mlirTypeToCudaType(detail.type) + "*";
-            mlirToGlobalSymbol[detail.column] = getGlobalSymbolName(detail.table, detail.column);
+            mainArgs[detail.getMlirSymbol()] = mlirTypeToCudaType(detail.type) + "*";
          }
          if (state.joinOpsToMaterializeIdx.contains(curJoinOp)) {
             for (auto mappedJoin : state.joinOpsToMaterializeIdx.find(curJoinOp)->second) {
@@ -1555,7 +1552,11 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
                   if (usedTables.contains(table)) {
                      continue;
                   }
-                  ExtractMaterializedPointerFromJoinResult(op, table, columnInfo);
+                  // only process upstream idx if we know it's part of this stream.
+                  // TODO - this is a bit of a hack. Fix
+                  if(m_joinInfo.tableToIdxMap.contains(table)) {
+                     ExtractMaterializedPointerFromJoinResult(op, table, columnInfo);
+                  }
 
                   usedTables.insert(table);
                }
@@ -1608,8 +1609,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
          tuples::ColumnRefAttr keyAttr = mlir::cast<tuples::ColumnRefAttr>(col);
          ColumnDetail detail(keyAttr);
 
-         mainArgs[detail.column] = mlirTypeToCudaType(detail.type) + "*";
-         mlirToGlobalSymbol[detail.column] = getGlobalSymbolName(detail.table, detail.column);
+         mainArgs[detail.getMlirSymbol()] = mlirTypeToCudaType(detail.type) + "*";
          columnInfo.tableToRowIdMap[detail.table] = filteredIdxArgName;
       }
 
