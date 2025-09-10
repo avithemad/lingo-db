@@ -1866,12 +1866,15 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
                }
             }
             else if (auto mapOp = mlir::dyn_cast<relalg::MapOp>(user)) {
-               // Check if map operation references columns from involved tables
-               for (auto computedCol : mapOp.getComputedCols()) {
-                  if (auto colRefAttr = mlir::dyn_cast<tuples::ColumnRefAttr>(computedCol)) {
-                     ColumnDetail detail(colRefAttr);
-                     if (joinTables.count(detail.table)) {
-                        usedTables.insert(detail.table);
+               // check if used columns are from any of the joined tables.
+               auto& predicateRegion = mapOp.getPredicate();
+               for (auto& block : predicateRegion.getBlocks()) {
+                  for (auto& op : block.getOperations()) {
+                     if (auto getCol = mlir::dyn_cast_or_null<tuples::GetColumnOp>(op)) {
+                        ColumnDetail detail(getCol.getAttr());
+                        if (joinTables.count(detail.table)) {
+                           usedTables.insert(detail.table);
+                        }
                      }
                   }
                }
