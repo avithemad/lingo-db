@@ -219,12 +219,22 @@ class HyperTupleStreamCode : public TupleStreamCode {
 
       for (auto& symbolDataPair : leftStreamCode->columnData) {
          auto mlirSymbol = symbolDataPair.first;
-         assert(leftStreamCode->mlirToGlobalSymbol.contains(mlirSymbol) && "Left stream code should have the global symbol mapping");
-         auto globalSymbol = leftStreamCode->mlirToGlobalSymbol.find(mlirSymbol)->second;
-         mlirToGlobalSymbol[mlirSymbol] = globalSymbol;
-         ColumnMetadata* metadata = new ColumnMetadata(mlirSymbol, ColumnType::Direct, StreamId, globalSymbol);
+         auto globalSymbol = symbolDataPair.second->globalId;
+         auto loadExpression = symbolDataPair.second->loadExpression;
+         if (symbolDataPair.second->type != ColumnType::Mapped) {
+            mlirToGlobalSymbol[mlirSymbol] = globalSymbol;
+         }
+         ColumnMetadata* metadata = new ColumnMetadata(loadExpression, symbolDataPair.second->type, StreamId, globalSymbol);
+         if (symbolDataPair.second->type == ColumnType::Mapped) {
+            metadata->dependencies = symbolDataPair.second->dependencies;
+         }
          if(m_joinInfo.tableToIdxMap.contains(symbolDataPair.second->tableName)) {
             metadata->rid = fmt::format("{0}[tid]", m_joinInfo.tableToIdxMap[symbolDataPair.second->tableName]);
+         }
+         // TODO(sampathrg), HACK: This is only for q17 to work. Need to refine this if something breaks.
+         else if (symbolDataPair.second->type == ColumnType::Direct && leftStreamCode->loadedColumns.size() == 1 && leftStreamCode->columnData.contains(*leftStreamCode->loadedColumns.begin())) {
+            auto colData = leftStreamCode->columnData.find(*leftStreamCode->loadedColumns.begin())->second;
+            metadata->rid = fmt::format("{0}[tid]", m_joinInfo.tableToIdxMap[colData->tableName]);
          }
          else {
             metadata->rid = symbolDataPair.second->rid;
@@ -234,10 +244,15 @@ class HyperTupleStreamCode : public TupleStreamCode {
       }
       for (auto& symbolDataPair : rightStreamCode->columnData) {
          auto mlirSymbol = symbolDataPair.first;
-         assert(rightStreamCode->mlirToGlobalSymbol.contains(mlirSymbol) && "Right stream code should have the global symbol mapping");
-         auto globalSymbol = rightStreamCode->mlirToGlobalSymbol.find(mlirSymbol)->second;
-         mlirToGlobalSymbol[mlirSymbol] = globalSymbol;
-         ColumnMetadata* metadata = new ColumnMetadata(mlirSymbol, ColumnType::Direct, StreamId, globalSymbol);
+         auto globalSymbol = symbolDataPair.second->globalId;
+         auto loadExpression = symbolDataPair.second->loadExpression;
+         if (symbolDataPair.second->type != ColumnType::Mapped) {
+            mlirToGlobalSymbol[mlirSymbol] = globalSymbol;
+         }
+         ColumnMetadata* metadata = new ColumnMetadata(loadExpression, symbolDataPair.second->type, StreamId, globalSymbol);
+         if (symbolDataPair.second->type == ColumnType::Mapped) {
+            metadata->dependencies = symbolDataPair.second->dependencies;
+         }
          if(m_joinInfo.tableToIdxMap.contains(symbolDataPair.second->tableName)) {
             metadata->rid = fmt::format("{0}[tid]", m_joinInfo.tableToIdxMap[symbolDataPair.second->tableName]);
          }
@@ -1553,7 +1568,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
                      continue;
                   }
                   // only process upstream idx if we know it's part of this stream.
-                  // TODO - this is a bit of a hack. Fix
+                  // TODO(sampathrg) - this is a bit of a hack. Fix
                   if(m_joinInfo.tableToIdxMap.contains(table)) {
                      ExtractMaterializedPointerFromJoinResult(op, table, columnInfo);
                   }
@@ -1609,7 +1624,12 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
          tuples::ColumnRefAttr keyAttr = mlir::cast<tuples::ColumnRefAttr>(col);
          ColumnDetail detail(keyAttr);
 
-         mainArgs[detail.getMlirSymbol()] = mlirTypeToCudaType(detail.type) + "*";
+         // PROBABLY A HACK: Sometimes the global symbol map doesn't have the entry when the join is using the result of another query.
+         // in such cases, the key column is referencing to the select output of the query and that parameter should already be part of main args.
+         // Don't create a parameter in that case.
+         if (mlirToGlobalSymbol.contains(detail.getMlirSymbol())) {
+            mainArgs[detail.getMlirSymbol()] = mlirTypeToCudaType(detail.type) + "*";
+         }
          columnInfo.tableToRowIdMap[detail.table] = filteredIdxArgName;
       }
 

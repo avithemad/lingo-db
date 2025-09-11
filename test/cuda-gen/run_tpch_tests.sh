@@ -127,7 +127,7 @@ for QUERY in "${QUERIES[@]}"; do
 done
 
 
-# generate the cuda files
+# compile the cuda files
 for QUERY in "${QUERIES[@]}"; do
   MAKE_QUERY="make query Q=$QUERY CUCO_SRC_PATH=$CUCO_SRC_PATH"
   echo $MAKE_QUERY
