@@ -216,9 +216,9 @@ std::string translateConstantOp(db::ConstantOp& constantOp) {
 
 // --- [start] code generation switches helpers ---
 
-bool gStaticMapOnly = false;
+bool gStaticMapOnly = true;
 bool gUseBloomFiltersForJoin = false;
-bool gThreadsAlwaysAlive = false;
+bool gThreadsAlwaysAlive = true;
 bool gPyperShuffle = false;
 bool gCompilingSSB = false;
 bool gShuffleAllOps = false;
@@ -269,7 +269,8 @@ void checkForCodeGenSwitches(int& argc, char** argv) {
       std::make_tuple(&gSmallerHashTables, "--smaller-hash-tables", "smaller hash tables"),
       std::make_tuple(&gGenIsProfiling, "--profiling", "profiling code generation"),
       std::make_tuple(&gShuffleAllOps, "--shuffle-all-ops", "shuffling all ops"),
-      std::make_tuple(&gPrintHashTableSizes, "--print-hash-table-sizes", "print hash table sizes")
+      std::make_tuple(&gPrintHashTableSizes, "--print-hash-table-sizes", "print hash table sizes"),
+      std::make_tuple(&gMockHashTablesWithBuffer, "--mock-hash-tables-with-buffer", "mock hash tables with buffer"),
    };
    for (const auto& [switchPtr, switchName, descr] : switches) {
       checkForCodegenSwitch(argc, argv, switchPtr, switchName, descr);
