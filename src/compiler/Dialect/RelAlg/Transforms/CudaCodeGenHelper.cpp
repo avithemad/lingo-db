@@ -270,7 +270,6 @@ void checkForCodeGenSwitches(int& argc, char** argv) {
       std::make_tuple(&gGenIsProfiling, "--profiling", "profiling code generation"),
       std::make_tuple(&gShuffleAllOps, "--shuffle-all-ops", "shuffling all ops"),
       std::make_tuple(&gPrintHashTableSizes, "--print-hash-table-sizes", "print hash table sizes"),
-      std::make_tuple(&gMockHashTablesWithBuffer, "--mock-hash-tables-with-buffer", "mock hash tables with buffer"),
    };
    for (const auto& [switchPtr, switchName, descr] : switches) {
       checkForCodegenSwitch(argc, argv, switchPtr, switchName, descr);
