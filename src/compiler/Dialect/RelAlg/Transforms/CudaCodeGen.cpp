@@ -1402,7 +1402,17 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
 
    CudaCodeGen() {}
 
+   void dumpModuleToFile() {
+      std::error_code EC;
+      llvm::raw_fd_ostream dumpFile("module.mlir", EC);
+      if (!EC) {
+         getOperation()->print(dumpFile);
+         dumpFile.close();
+      }
+   }
+
    void runOnOperation() override {
+      // dumpModuleToFile();
       getOperation().walk([&](mlir::Operation* op) {
          if (auto selection = llvm::dyn_cast<relalg::SelectionOp>(op)) {
             mlir::Operation* stream = selection.getRelMutable().get().getDefiningOp();
