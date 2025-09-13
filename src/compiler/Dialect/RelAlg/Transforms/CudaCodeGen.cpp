@@ -1505,7 +1505,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       columnInfo.tableToRowIdMap[tableName] = rowIdVarName;
    }
 
-   MaterializedColumnInfo MaterializeColumns(relalg::InnerJoinOp& curJoinOp, mlir::Operation* op, mlir::ArrayAttr& columns, const std::string& countSuffix, const JoinOpDownstreamColumnUseInfo& state)
+   MaterializedColumnInfo MaterializeColumns(relalg::InnerJoinOp& curJoinOp, mlir::Operation* op, mlir::ArrayAttr& columns, const std::string& countSuffix, const JoinOpDownstreamColumnUseInfo& useInfo)
    {
       assert(usePartitionHashJoin() && "Should be used only when PartitionHashJoin is enabled");
       std::string countVarName = COUNT(op) + countSuffix;
@@ -1552,12 +1552,12 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
 
             mainArgs[detail.getMlirSymbol()] = mlirTypeToCudaType(detail.type) + "*";
          }
-         if (state.joinOpsToMaterializeIdx.contains(curJoinOp)) {
-            for (auto mappedJoin : state.joinOpsToMaterializeIdx.find(curJoinOp)->second) {
-               assert(state.joinToDownstreamTableUseMap.contains(mappedJoin) && "Table info missing for join");
+         if (useInfo.joinOpsToMaterializeIdx.contains(curJoinOp)) {
+            for (auto mappedJoin : useInfo.joinOpsToMaterializeIdx.find(curJoinOp)->second) {
+               assert(useInfo.joinToDownstreamTableUseMap.contains(mappedJoin) && "Table info missing for join");
                std::set<std::string> tablesNotIncluded;
                auto joinTables = getJoinTables(curJoinOp);
-               auto& tablesToInclude = state.joinToDownstreamTableUseMap.find(mappedJoin)->second;
+               auto& tablesToInclude = useInfo.joinToDownstreamTableUseMap.find(mappedJoin)->second;
                std::set_difference(tablesToInclude.begin(),
                                    tablesToInclude.end(),
                                    joinTables.begin(),
@@ -1719,12 +1719,12 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       return std::move(resultInfo);
    }
 
-   PartitionHashJoinResultInfo PartitionHashJoin(mlir::Operation* joinOp,
+   PartitionHashJoinResultInfo GeneratePartitionHashJoin(mlir::Operation* joinOp,
                           mlir::Operation* leftStream,
                           mlir::Operation* rightStream,
                           HyperTupleStreamCode* leftStreamCode,
                           HyperTupleStreamCode* rightStreamCode,
-                          const JoinOpDownstreamColumnUseInfo& state) {
+                          const JoinOpDownstreamColumnUseInfo& useInfo) {
       auto innerJoinOp = mlir::dyn_cast_or_null<relalg::InnerJoinOp>(joinOp);
       
       if (!innerJoinOp) {
@@ -1760,8 +1760,8 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       leftStreamCode->MaterializeCount(leftStream, leftSuffix);
       rightStreamCode->MaterializeCount(rightStream, rightSuffix);
 
-      auto materializedLeftCols = leftStreamCode->MaterializeColumns(innerJoinOp, leftStream, leftKeys, leftSuffix, state);
-      auto materializedRightCols = rightStreamCode->MaterializeColumns(innerJoinOp, rightStream, rightKeys, rightSuffix, state);
+      auto materializedLeftCols = leftStreamCode->MaterializeColumns(innerJoinOp, leftStream, leftKeys, leftSuffix, useInfo);
+      auto materializedRightCols = rightStreamCode->MaterializeColumns(innerJoinOp, rightStream, rightKeys, rightSuffix, useInfo);
 
       auto resultColumns = MaterializeJoinResult(joinOp, leftKeys, rightKeys, materializedLeftCols, materializedRightCols, COUNT(leftStream) + leftSuffix, COUNT(rightStream) + rightSuffix);
       PartitionHashJoinResultInfo resultInfo;
@@ -1793,18 +1793,12 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
 class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<mlir::func::FuncOp>> {
    virtual llvm::StringRef getArgument() const override { return "relalg-cuda-code-gen"; }
 
-   public:
-   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(CudaCodeGen)
-
-   std::map<mlir::Operation*, HyperTupleStreamCode*> streamCodeMap;
-   std::vector<HyperTupleStreamCode*> kernelSchedule;
-
-   CudaCodeGen() {}
-
-   void runOnOperation() override {
-      bool usedPartitionHashJoin = false;
-      JoinOpDownstreamColumnUseInfo state;
-      getOperation().walk([&](mlir::Operation* op) {
+   JoinOpDownstreamColumnUseInfo getJoinOpDownstreamColumnUseInfo(mlir::func::FuncOp funcOp) {
+      JoinOpDownstreamColumnUseInfo useInfo;
+      if (!usePartitionHashJoin()) {
+         return std::move(useInfo);
+      }
+      funcOp.walk([&](mlir::Operation* op) {
          if (!mlir::isa<relalg::InnerJoinOp>(op)) {
             return;
          }
@@ -1818,7 +1812,7 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
          // Collect all tables involved in current join
          std::set<std::string> joinTables, usedTables;
          joinTables = getJoinTables(innerJoinOp);
-         
+
          std::vector<relalg::InnerJoinOp> joinChain;
          while (!opsToCheck.empty()) {
             auto user = opsToCheck.front();
@@ -1835,8 +1829,7 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
                      }
                   }
                }
-            }
-            else if (auto joinOp = mlir::dyn_cast<relalg::InnerJoinOp>(user)) {
+            } else if (auto joinOp = mlir::dyn_cast<relalg::InnerJoinOp>(user)) {
                joinChain.push_back(joinOp);
 
                // Get all leftHash and rightHash keys from the current join op
@@ -1858,8 +1851,7 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
                      }
                   }
                }
-            }
-            else if (auto aggOp = mlir::dyn_cast<relalg::AggregationOp>(user)) {
+            } else if (auto aggOp = mlir::dyn_cast<relalg::AggregationOp>(user)) {
                // Check if aggregation references columns from involved tables
                for (auto groupByCol : aggOp.getGroupByCols()) {
                   if (auto colRefAttr = mlir::dyn_cast<tuples::ColumnRefAttr>(groupByCol)) {
@@ -1884,8 +1876,7 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
                      }
                   }
                }
-            }
-            else if (auto mapOp = mlir::dyn_cast<relalg::MapOp>(user)) {
+            } else if (auto mapOp = mlir::dyn_cast<relalg::MapOp>(user)) {
                // check if used columns are from any of the joined tables.
                auto& predicateRegion = mapOp.getPredicate();
                for (auto& block : predicateRegion.getBlocks()) {
@@ -1910,12 +1901,26 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
          // If we need to materialize indices for this join, add it to the map
          if (!usedTables.empty()) {
             for (auto joinOp : joinChain) {
-               state.joinOpsToMaterializeIdx[joinOp].push_back(innerJoinOp);
+               useInfo.joinOpsToMaterializeIdx[joinOp].push_back(innerJoinOp);
             }
-            state.joinToDownstreamTableUseMap[innerJoinOp] = std::move(usedTables);
+            useInfo.joinToDownstreamTableUseMap[innerJoinOp] = std::move(usedTables);
          }
       });
 
+      return std::move(useInfo);
+   }
+
+   public:
+   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(CudaCodeGen)
+
+   std::map<mlir::Operation*, HyperTupleStreamCode*> streamCodeMap;
+   std::vector<HyperTupleStreamCode*> kernelSchedule;
+
+   CudaCodeGen() {}
+
+   void runOnOperation() override {
+      bool usedPartitionHashJoin = false;
+      JoinOpDownstreamColumnUseInfo useInfo = getJoinOpDownstreamColumnUseInfo(getOperation());
       getOperation().walk([&](mlir::Operation* op) {
          if (auto selection = llvm::dyn_cast<relalg::SelectionOp>(op)) {
             mlir::Operation* stream = selection.getRelMutable().get().getDefiningOp();
@@ -1948,7 +1953,7 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
 
             if (usePartitionHashJoin()) {
                // Perform partition hash join
-               auto joinResultInfo = rightStreamCode->PartitionHashJoin(op, leftStream, rightStream, leftStreamCode, rightStreamCode, state);
+               auto joinResultInfo = rightStreamCode->GeneratePartitionHashJoin(op, leftStream, rightStream, leftStreamCode, rightStreamCode, useInfo);
                kernelSchedule.push_back(leftStreamCode);
                kernelSchedule.push_back(rightStreamCode);
 
