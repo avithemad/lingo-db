@@ -35,8 +35,7 @@ if [ -z "$TPCH_DATA_DIR" ]; then
   TPCH_DATA_DIR="$REPO_DIR/resources/data/tpch-$SCALE_FACTOR"
 fi
 
-# QUERIES=(1 3 4 5 6 7 8 9 10 12 13 14 16 17 18 19 20)
-QUERIES=(1 3 4 5 6 7 8 9 12 14 17 18 19)
+QUERIES=(1 3 4 5 6 7 8 9 10 12 13 14 16 17 18 19 20)
 
 # cleanup the result files and logs
 rm -f $SCRIPT_DIR/*.csv
