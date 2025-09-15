@@ -26,14 +26,12 @@ struct MaterializedColumnInfo {
 using RowIdColToPtrIdMap = std::map<std::string, int32_t>;
 
 struct PartitionHashJoinResultInfo {
-   std::set<std::string> joinKeySet;
    std::map<std::string, std::string> tableToResultVarMap;
    std::map<std::string, RowIdColToPtrIdMap> resultVarToRowIdColPtrIdMap;
    std::map<std::string, std::string> resultVarToCudaType;
    std::map<std::string, std::string> tableToIdxMap;
 
    void merge(const PartitionHashJoinResultInfo& other) {
-      joinKeySet.insert(other.joinKeySet.begin(), other.joinKeySet.end());
       tableToResultVarMap.insert(other.tableToResultVarMap.begin(), other.tableToResultVarMap.end());
       for (auto& [_, resultVar] : tableToResultVarMap) {
          if (!resultVarToRowIdColPtrIdMap.contains(resultVar)) {
@@ -79,6 +77,45 @@ std::set<std::string> getJoinTables(relalg::InnerJoinOp& innerJoinOp) {
    }
 
    return std::move(joinTables);
+}
+
+bool hasAnUpstreamFilter(mlir::Operation* op) {
+   std::queue<mlir::Operation*> queue;
+   queue.push(op);
+   while (!queue.empty()) {
+      mlir::Operation* currOp = queue.front();
+      queue.pop();
+      bool pushOperands = true;
+      mlir::Region* predicate = nullptr;
+      if (auto selectOp = mlir::dyn_cast<relalg::SelectionOp>(currOp)) {
+         predicate = &selectOp.getPredicate();
+      }
+      else if (auto mapOp = mlir::dyn_cast<relalg::MapOp>(currOp)) {
+         predicate = &mapOp.getPredicate();
+      }
+      // this operations start new streams so we don't need to walk past them.
+      else if (mlir::isa<relalg::BaseTableOp>(currOp)
+         || mlir::isa<relalg::SemiJoinOp>(currOp)
+         || mlir::isa<relalg::AntiSemiJoinOp>(currOp)
+         || mlir::isa<relalg::InnerJoinOp>(currOp)
+         || mlir::isa<relalg::AggregationOp>(currOp)) {
+         pushOperands = false;
+      }
+      if (predicate) {
+         for (auto& op : predicate->getOps()) {
+            if (mlir::isa<db::CmpOp>(op) || mlir::isa<db::IsNullOp>(op) || mlir::isa<db::BetweenOp>(op) || mlir::isa<db::OneOfOp>(op)) {
+               return true;
+            }
+         }
+      }
+      if (pushOperands) {
+         for (auto operand : currOp->getOperands()) {
+            queue.push(operand.getDefiningOp());
+         }
+      }
+   }
+
+   return false;
 }
 
 class HyperTupleStreamCode : public TupleStreamCode {
@@ -1586,6 +1623,9 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       appendKernel("// Materialize columns", KernelType::Main);
       appendKernel(fmt::format("auto filter_idx = atomicAdd((int*)filter_count, 1);"), KernelType::Main);
 
+      // allocate memory to materialize columns only in when there's a filter or multiple columns need to be merged into one key. Else just materialize row-ids.
+      bool shouldEmitColMaterialization = columns.size() > 1 || hasAnUpstreamFilter(op);
+
       auto filteredParamName = fmt::format("{0}_col_filtered", keyColumnNamesConcat);
       auto filteredIdxParamName = fmt::format("{0}_col_filtered_idx", keyColumnNamesConcat);
       auto filteredArgName = fmt::format("d_{0}_col_filtered_{1}", keyColumnNamesConcat, GetId(op));
@@ -1595,31 +1635,36 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       columnInfo.columnVarName = filteredArgName;
       columnInfo.columnCudaType = keyColCudaType;
       columnInfo.rowIdColumnVarNames.push_back(filteredIdxArgName);
-      
-      appendControlDecl(fmt::format("{1}* {0} = nullptr;", filteredArgName, keyColCudaType));
+
+      if (shouldEmitColMaterialization) {
+         appendControlDecl(fmt::format("{1}* {0} = nullptr;", filteredArgName, keyColCudaType));
+         appendControl(fmt::format("cudaMallocExt(&{0}, sizeof({1}) * {2});", filteredArgName, keyColCudaType, countVarName));
+         deviceFrees.insert(filteredArgName);
+
+         mainArgs[filteredParamName] = keyColCudaType + "*";
+         mlirToGlobalSymbol[filteredParamName] = filteredArgName;
+
+         auto mergedKey = MakeKeys(op, columns, KernelType::Main);
+         appendKernel(fmt::format("{0}[filter_idx] = {1};", filteredParamName, mergedKey), KernelType::Main);
+      }
+      else {
+         ColumnDetail detail(mlir::cast<tuples::ColumnRefAttr>(columns[0]));
+         appendControlDecl(fmt::format("{1}* {0} = {2};", filteredArgName, keyColCudaType, mlirToGlobalSymbol[detail.getMlirSymbol()]));
+      }
       appendControlDecl(fmt::format("uint64_t* {0} = nullptr;", filteredIdxArgName));
       appendControlDecl(fmt::format("uint64_t* {0} = nullptr;", filteredCountArgName));
-      appendControl(fmt::format("cudaMallocExt(&{0}, sizeof({1}) * {2});", filteredArgName, keyColCudaType, countVarName));
       appendControl(fmt::format("cudaMallocExt(&{0}, sizeof(uint64_t) * {1});", filteredIdxArgName, countVarName));
       appendControl(fmt::format("cudaMallocExt(&{0}, sizeof(uint64_t));", filteredCountArgName));
-      deviceFrees.insert(filteredArgName);
       deviceFrees.insert(filteredIdxArgName);
       deviceFrees.insert(filteredCountArgName);
-
-      // parameters
-      mainArgs[filteredParamName] = keyColCudaType + "*";
+     
       mainArgs[filteredIdxParamName] = "uint64_t*";
-      
-      // arguments
-      mlirToGlobalSymbol[filteredParamName] = filteredArgName;
       mlirToGlobalSymbol[filteredIdxParamName] = filteredIdxArgName;
 
-      auto mergedKey = MakeKeys(op, columns, KernelType::Main);
-      // copy the value
-      appendKernel(fmt::format("{0}[filter_idx] = {1};", filteredParamName, mergedKey), KernelType::Main);
       appendKernel(fmt::format("{0}[filter_idx] = tid;", filteredIdxParamName), KernelType::Main);
 
-      // Allocate memory for filtered columns
+      appendControl(fmt::format("cudaMemset({0}, 0, sizeof(uint64_t));", filteredCountArgName));
+
       for (auto col : columns) {
          tuples::ColumnRefAttr keyAttr = mlir::cast<tuples::ColumnRefAttr>(col);
          ColumnDetail detail(keyAttr);
@@ -1632,9 +1677,6 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
          }
          columnInfo.tableToRowIdMap[detail.table] = filteredIdxArgName;
       }
-
-      // memset size to 0
-      appendControl(fmt::format("cudaMemset({0}, 0, sizeof(uint64_t));", filteredCountArgName));
 
       mainArgs["filter_count"] = "uint64_t*";
       mlirToGlobalSymbol["filter_count"] = filteredCountArgName;
