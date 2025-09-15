@@ -1,6 +1,7 @@
 #!/bin/bash
 
 CODEGEN_OPTIONS="--smaller-hash-tables --threads-always-alive"
+$FILE_SUFFIX=""
 # for each arg in args
 for arg in "$@"; do
   case $arg in
@@ -24,6 +25,11 @@ for arg in "$@"; do
       # Remove this specific argument from $@
       set -- "${@/$arg/}"
       ;;
+    --use-partition-hash-join)
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --use-partition-hash-join"
+      FILE_SUFFIX=".phj"
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
   esac
 done
 
@@ -108,7 +114,7 @@ for QUERY in "${QUERIES[@]}"; do
   $FORMAT_CMD
 
   # Now run the generated CUDA code
-  CP_CMD="cp output.cu $TPCH_CUDA_GEN_DIR/q$QUERY.codegen.cu"
+  CP_CMD="cp output.cu $TPCH_CUDA_GEN_DIR/q$QUERY$FILE_SUFFIX.codegen.cu"
   echo $CP_CMD
   $CP_CMD
 done
