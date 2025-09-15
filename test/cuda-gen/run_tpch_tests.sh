@@ -1,6 +1,7 @@
 #!/bin/bash
 
 CODEGEN_OPTIONS="--smaller-hash-tables --threads-always-alive"
+$FILE_SUFFIX=""
 # for each arg in args
 for arg in "$@"; do
   case $arg in
@@ -31,6 +32,7 @@ for arg in "$@"; do
       ;;
     --use-partition-hash-join)
       CODEGEN_OPTIONS="$CODEGEN_OPTIONS --use-partition-hash-join"
+      FILE_SUFFIX=".phj."
       # Remove this specific argument from $@
       set -- "${@/$arg/}"
   esac
@@ -79,8 +81,10 @@ if [ -z "$TPCH_DATA_DIR" ]; then
   TPCH_DATA_DIR="$REPO_DIR/resources/data/tpch-$SCALE_FACTOR"
 fi
 
-
+# QUERIES=(20)
 QUERIES=(1 3 4 5 6 7 8 9 10 12 13 14 16 17 18 19 20)
+# QUERIES=(14 16 19 20)
+# QUERIES=(20)
 
 TPCH_CUDA_GEN_DIR="$SQL_PLAN_COMPILER_DIR/gpu-db/tpch-$SCALE_FACTOR"
 echo "TPCH_CUDA_GEN_DIR: $TPCH_CUDA_GEN_DIR"
@@ -98,7 +102,7 @@ fi
 # cleanup the result files, built shared objects
 rm -f build/*.codegen.so # do this so that we don't run other queries by mistake
 rm -f $SCRIPT_DIR/*.csv
-rm -f $TPCH_CUDA_GEN_DIR/*.codegen.cu
+# rm -f $TPCH_CUDA_GEN_DIR/*.codegen.cu
 rm -f $TPCH_CUDA_GEN_DIR/*.csv
 rm -f $TPCH_CUDA_GEN_DIR/*.log
 
@@ -121,10 +125,13 @@ for QUERY in "${QUERIES[@]}"; do
   $FORMAT_CMD
 
   # Now run the generated CUDA code
-  CP_CMD="cp output.cu $TPCH_CUDA_GEN_DIR/q$QUERY.codegen.cu"
+  CP_CMD="cp output.cu $TPCH_CUDA_GEN_DIR/q$QUERY$FILE_SUFFIX.codegen.cu"
   echo $CP_CMD
   $CP_CMD
 done
+
+# delete the temporary output.cu file
+rm output.cu
 
 
 # compile the cuda files
