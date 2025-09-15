@@ -35,6 +35,25 @@ if [ -z "$TPCH_DATA_DIR" ]; then
   TPCH_DATA_DIR="$REPO_DIR/resources/data/tpch-$SCALE_FACTOR"
 fi
 
+# Check if SQL_PLAN_COMPILER_DIR environment variable is set
+if [ -n "$SQL_PLAN_COMPILER_DIR" ]; then
+  echo "Using SQL_PLAN_COMPILER_DIR from environment variable: $SQL_PLAN_COMPILER_DIR"
+else
+  echo "SQL_PLAN_COMPILER_DIR environment variable is not set."
+  exit 1
+fi
+
+if [ -n "$CUR_GPU" ]; then
+  echo "Using CUR_GPU from environment variable: $CUR_GPU"
+else
+  echo "CUR_GPU environment variable is not set."
+  exit 1
+fi
+
+OUTPUT_DIR=$SQL_PLAN_COMPILER_DIR/reports/ncu/$CUR_GPU/tpch-$SCALE_FACTOR/cudf
+mkdir -p $OUTPUT_DIR
+echo "Output directory: $OUTPUT_DIR"
+
 QUERIES=(1 3 4 5 6 7 8 9 10 12 13 14 16 17 18 19 20)
 
 # cleanup the result files and logs
@@ -66,7 +85,7 @@ TPCH_CUDF_PY_DIR="$SQL_PLAN_COMPILER_DIR/cudf/tpch"
 echo "TPCH_CUDF_PY_DIR: $TPCH_CUDF_PY_DIR"
 pushd $TPCH_CUDF_PY_DIR
 
-RUN_QUERY_CMD="python run_cudf_tpch_queries.py $TPCH_DATA_DIR/ $QUERIES_STR"
+RUN_QUERY_CMD="python run_cudf_tpch_queries.py $TPCH_DATA_DIR/ $QUERIES_STR $OUTPUT_DIR/tpch-$SCALE_FACTOR-cudf.csv"
 echo $RUN_QUERY_CMD
 $RUN_QUERY_CMD
 
