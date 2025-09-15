@@ -1551,12 +1551,17 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
 
       auto keyColCudaType = getHTKeyType(columns);
       std::string keyColumnNamesConcat = "";
-      for (auto col : columns) {
+      std::vector<std::string> columNames;
+      std::for_each(columns.begin(), columns.end(), [&](mlir::Attribute col) {
+         tuples::ColumnRefAttr keyAttr = mlir::cast<tuples::ColumnRefAttr>(col);
+         columNames.push_back(getColumnName<tuples::ColumnRefAttr>(keyAttr));
+      });
+      std::sort(columNames.begin(), columNames.end());
+      for (auto colName : columNames) {
          if (keyColumnNamesConcat.size() > 0) {
             keyColumnNamesConcat += "_";
          }
-         tuples::ColumnRefAttr keyAttr = mlir::cast<tuples::ColumnRefAttr>(col);
-         keyColumnNamesConcat += getColumnName<tuples::ColumnRefAttr>(keyAttr);
+         keyColumnNamesConcat += colName;
       }
 
       // special case to handle partition hash join output materialization.
