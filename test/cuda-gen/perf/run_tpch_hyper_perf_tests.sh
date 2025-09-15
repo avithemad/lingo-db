@@ -108,8 +108,8 @@ for QUERY in "${QUERIES[@]}"; do
   echo $RUN_SQL
   $RUN_SQL > /dev/null # ignore the output. We are not comparing the results.
 
-  # format the file
-  FORMAT_CMD="clang-format -i output.cu"
+  # format the generated cuda code
+  FORMAT_CMD="clang-format -i output.cu -style=Microsoft"
   echo $FORMAT_CMD
   $FORMAT_CMD
 
