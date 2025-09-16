@@ -1602,6 +1602,17 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       columnInfo.tableToRowIdMap[tableName] = rowIdVarName;
    }
 
+   std::string getKeyType(mlir::ArrayAttr& columns) {
+      if (columns.size() > 1) {
+         return "int64_t";
+      }
+      else {
+         auto keyAttr = mlir::cast<tuples::ColumnRefAttr>(columns[0]);
+         ColumnDetail detail(keyAttr);
+         return mlirTypeToCudaType(detail.type);
+      }
+   }
+
    MaterializedColumnInfo MaterializeColumns(relalg::InnerJoinOp& curJoinOp, mlir::Operation* op, mlir::ArrayAttr& columns, const std::string& countSuffix, const JoinOpDownstreamColumnUseInfo& useInfo)
    {
       assert(usePartitionHashJoin() && "Should be used only when PartitionHashJoin is enabled");
@@ -1609,7 +1620,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       MaterializedColumnInfo columnInfo;
       assert((columns.size() >= 1) && "Number of columns should be >= 1");
 
-      auto keyColCudaType = getHTKeyType(columns);
+      auto keyColCudaType = getKeyType(columns);
       std::string keyColumnNamesConcat = "";
       std::vector<std::string> columNames;
       std::for_each(columns.begin(), columns.end(), [&](mlir::Attribute col) {
