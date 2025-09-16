@@ -1675,8 +1675,6 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       mainArgs[filteredIdxParamName] = std::string(ROW_ID_TYPE) + "*";
       mlirToGlobalSymbol[filteredIdxParamName] = filteredIdxArgName;
 
-
-
       for (auto col : columns) {
          tuples::ColumnRefAttr keyAttr = mlir::cast<tuples::ColumnRefAttr>(col);
          ColumnDetail detail(keyAttr);
@@ -1750,7 +1748,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       std::string resultType = fmt::format("{0}_{1}_result_t", leftTupleVar, rightTupleVar);
       appendControl(fmt::format("using {0} = {1};", leftResultType, leftChunkType));
       appendControl(fmt::format("using {0} = {1};", rightResultType, rightChunkType));
-      appendControl(fmt::format("using {0} = {1};", resultType, resultChunkType));
+      appendControlDecl(fmt::format("using {0} = {1};", resultType, resultChunkType));
 
       // Create input tuples
       appendControl(fmt::format("{0} {1};", leftResultType, leftTupleVar));
@@ -1763,8 +1761,11 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       // Set column data pointers for each tuple
       AddColumnsToChunk(leftTupleVar, materializedLeftKeys);
       AddColumnsToChunk(rightTupleVar, materializedRightKeys);
-      
-      appendControl(fmt::format("auto {0} = partitionHashJoinHelper<{1}>({2}, {3});", resultVar, resultType, leftTupleVar, rightTupleVar));
+
+      appendControlDecl(fmt::format("{0} {1};", resultType, resultVar));
+      // calling free_mem here since it gets called in a loop and we want to release previously allocated output.
+      appendControl(fmt::format("{0}.free_mem();", resultVar));
+      appendControl(fmt::format("{0} = partitionHashJoinHelper<{1}>({2}, {3});", resultVar, resultType, leftTupleVar, rightTupleVar));
 
       // Materialize join count.
       appendControlDecl(fmt::format("uint64_t {0};", COUNT(joinOp)));
