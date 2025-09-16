@@ -123,7 +123,7 @@ rm -f build/*.codegen.so # do this so that we don't run other queries by mistake
 
 # generate the cuda files
 for QUERY in "${QUERIES[@]}"; do
-  MAKE_QUERY="make query Q=$QUERY CUCO_SRC_PATH=$CUCO_SRC_PATH"
+  MAKE_QUERY="make query Q=$QUERY$FILE_SUFFIX CUCO_SRC_PATH=$CUCO_SRC_PATH"
   echo $MAKE_QUERY
   $MAKE_QUERY &
   
@@ -134,7 +134,7 @@ wait
 
 FAILED_QUERIES=()
 for QUERY in "${QUERIES[@]}"; do
-  if [ ! -f build/q$QUERY.codegen.so ]; then
+  if [ ! -f build/q$QUERY$FILE_SUFFIX.codegen.so ]; then
     echo -e "\033[0;31mError compiling Query $QUERY\033[0m"
     FAILED_QUERIES+=($QUERY)
     exit 1
@@ -143,7 +143,13 @@ done
 
 # run all the queries
 # Convert QUERIES array to comma-separated string
-QUERIES_STR=$(IFS=,; echo "${QUERIES[*]}")
+QUERIES_WITH_SUFFIX=()
+for Q in "${QUERIES[@]}"; do
+  QUERIES_WITH_SUFFIX+=("$Q$FILE_SUFFIX")
+done
+QUERIES_STR=$(IFS=,; echo "${QUERIES_WITH_SUFFIX[*]}")
+
+echo $QUERIES_STR
 
 RUN_QUERY_CMD="build/dbruntime --data_dir $TPCH_DATA_DIR/ --query_num $QUERIES_STR --op_file $OUTPUT_FILE --scale_factor $SCALE_FACTOR"
 echo $RUN_QUERY_CMD
