@@ -1,12 +1,12 @@
 #!/bin/bash
 
-CODEGEN_OPTIONS="--smaller-hash-tables --threads-always-alive"
+CODEGEN_OPTIONS="--threads-always-alive" # --smaller-hash-tables"
 $FILE_SUFFIX=""
 # for each arg in args
 for arg in "$@"; do
   case $arg in
     --smaller-hash-tables)
-      # CODEGEN_OPTIONS="$CODEGEN_OPTIONS --smaller-hash-tables" # make this default for now
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --smaller-hash-tables" # make this default for now
       # Remove this specific argument from $@
       set -- "${@/$arg/}"
       ;;
@@ -30,6 +30,10 @@ for arg in "$@"; do
       # Remove this specific argument from $@
       set -- "${@/$arg/}"
       ;;
+    --shuffle-all-ops)
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --shuffle-all-ops"
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
     --use-partition-hash-join)
       CODEGEN_OPTIONS="$CODEGEN_OPTIONS --use-partition-hash-join"
       FILE_SUFFIX=".phj"

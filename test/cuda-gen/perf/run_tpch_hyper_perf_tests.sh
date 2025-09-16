@@ -1,19 +1,25 @@
 #!/bin/bash
 
-CODEGEN_OPTIONS="--smaller-hash-tables --threads-always-alive"
+CODEGEN_OPTIONS="--threads-always-alive"
 $FILE_SUFFIX=""
 # for each arg in args
+SUB_DIR="."
+SUFFIX=""
 for arg in "$@"; do
   case $arg in
     --smaller-hash-tables)
-      # CODEGEN_OPTIONS="$CODEGEN_OPTIONS --smaller-hash-tables" # make this default for now
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --smaller-hash-tables" # make this default for now
       # Remove this specific argument from $@
       set -- "${@/$arg/}"
+      SUB_DIR="HT32"
+      SUFFIX="-ht32"
       ;;
     --use-bloom-filters)
       CODEGEN_OPTIONS="$CODEGEN_OPTIONS --use-bloom-filters"
       # Remove this specific argument from $@
       set -- "${@/$arg/}"
+      SUB_DIR="HT32_BF"
+      SUFFIX="-ht32-bf"
       ;;
     --threads-always-alive)
       # CODEGEN_OPTIONS="$CODEGEN_OPTIONS --threads-always-alive" # make this default for now
@@ -24,7 +30,21 @@ for arg in "$@"; do
       CODEGEN_OPTIONS="$CODEGEN_OPTIONS --pyper-shuffle"
       # Remove this specific argument from $@
       set -- "${@/$arg/}"
+      SUB_DIR="HT32_Pyper_Two_Warps_128"
+      SUFFIX="-ht32-pyper-two-warps-128"
       ;;
+    --shuffle-all-ops)
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --shuffle-all-ops"
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      SUB_DIR="HT32_Pyper_Shuffle_All_128"
+      SUFFIX="-ht32-pyper-shuffle-all-128"
+      ;;
+    --print-hash-table-sizes)
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --print-hash-table-sizes"
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      SUFFIX="$SUFFIX-HTSIZE"
     --use-partition-hash-join)
       CODEGEN_OPTIONS="$CODEGEN_OPTIONS --use-partition-hash-join"
       FILE_SUFFIX=".phj"
@@ -40,8 +60,6 @@ if [ -z "$SCALE_FACTOR" ]; then
   exit 1
 fi
 
-SUFFIX=$2
-
 # Check if SQL_PLAN_COMPILER_DIR environment variable is set
 if [ -n "$SQL_PLAN_COMPILER_DIR" ]; then
   echo "Using SQL_PLAN_COMPILER_DIR from environment variable: $SQL_PLAN_COMPILER_DIR"
@@ -55,6 +73,13 @@ if [ -n "$CUCO_SRC_PATH" ]; then
   echo "Using CUCO_SRC_PATH from environment variable: $CUCO_SRC_PATH"
 else
   echo "CUCO_SRC_PATH environment variable is not set."
+  exit 1
+fi
+
+if [ -n "$CUR_GPU" ]; then
+  echo "Using CUR_GPU from environment variable: $CUR_GPU"
+else
+  echo "CUR_GPU environment variable is not set."
   exit 1
 fi
 
@@ -81,6 +106,9 @@ fi
 
 
 QUERIES=(1 3 4 5 6 7 8 9 10 12 13 14 16 17 18 19 20)
+if [ $SCALE_FACTOR -gt 60 ]; then
+  QUERIES=(1 3 5 6 7 8 10 12 13 14 16 17 19 20) # Queries 4, 9 and 18 have large hash tables. Run out of memory on A6000
+fi
 
 TPCH_CUDA_GEN_DIR="$SQL_PLAN_COMPILER_DIR/gpu-db/tpch-$SCALE_FACTOR"
 echo "TPCH_CUDA_GEN_DIR: $TPCH_CUDA_GEN_DIR"
@@ -95,7 +123,9 @@ if [ $? -ne 0 ]; then
   exit 1
 fi
 
-OUTPUT_FILE=$SCRIPT_DIR/tpch-$SCALE_FACTOR-hyper$SUFFIX-perf.csv
+OUTPUT_DIR=$SQL_PLAN_COMPILER_DIR/reports/ncu/$CUR_GPU/tpch-$SCALE_FACTOR/$SUB_DIR
+mkdir -p $OUTPUT_DIR
+OUTPUT_FILE=$OUTPUT_DIR/tpch-$SCALE_FACTOR-hyper$SUFFIX-perf.csv
 echo "Output file: $OUTPUT_FILE"
 
 # Empty the output file

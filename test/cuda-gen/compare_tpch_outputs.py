@@ -59,7 +59,7 @@ def compare_numeric_columns(df1_numeric, df2_numeric, float_comparison_method, p
     return comparison_result
 
 def compare_csv_files_fuzzy(file1_path, file2_path, float_tolerance=1e-5, percent_diff_threshold=0.005, 
-                            abs_tolerance_for_percent=1e-5, sort_columns=None):
+                            abs_tolerance_for_percent=1e-5, sort_columns=None, test_has_header=False):
     """
     Compares two CSV files for equality, allowing for out-of-order rows
     and fuzzy comparison of floating-point numbers using np.isclose.
@@ -81,7 +81,7 @@ def compare_csv_files_fuzzy(file1_path, file2_path, float_tolerance=1e-5, percen
     try:
         # Read the CSV files
         df1 = pd.read_csv(file1_path, header=0, delimiter='|')
-        df2 = pd.read_csv(file2_path, header=None, delimiter='|')
+        df2 = pd.read_csv(file2_path, header=0 if test_has_header else None, delimiter='|')
         df2.columns = df1.columns # Set df2's columns to match df1's
 
         # --- Basic Checks ---
@@ -311,103 +311,107 @@ def compare_csv_files_fuzzy(file1_path, file2_path, float_tolerance=1e-5, percen
         return False, f"An unexpected error occurred: {e}"
 
 if __name__ == "__main__":
-	import sys
+    import sys
     
-	if (len(sys.argv) < 3):
-		print("Usage: python compare_csv.py <csv_file1> <csv_file2>")
-		sys.exit(1)
-	
-	csv_file1 = sys.argv[1]
-	csv_file2 = sys.argv[2]
-	float_tolerance = 1e-5 # Default tolerance for float comparison
-	are_equal, message = compare_csv_files_fuzzy(csv_file1, csv_file2, float_tolerance=float_tolerance) 
-	print(f"Comparison result: {are_equal}")
-	print(f"Message: {message}")
+    if (len(sys.argv) < 3):
+        print("Usage: python compare_csv.py <csv_file1> <csv_file2> [--test-has-header]")
+        sys.exit(1)
+          
+    test_has_header = False
+    if len(sys.argv) == 4 and sys.argv[3] == '--test-has-header':
+        test_has_header = True
     
-	# if are_equal is False, exit with non-zero status
-	if not are_equal:
-		sys.exit(1)
+    csv_file1 = sys.argv[1]
+    csv_file2 = sys.argv[2]
+    float_tolerance = 1e-5 # Default tolerance for float comparison
+    are_equal, message = compare_csv_files_fuzzy(csv_file1, csv_file2, float_tolerance=float_tolerance, test_has_header=test_has_header) 
+    print(f"Comparison result: {are_equal}")
+    print(f"Message: {message}")
+    
+    # if are_equal is False, exit with non-zero status
+    if not are_equal:
+        sys.exit(1)
      
-	def test_compare():
-		# --- Example Usage (as used in the last execution) ---
-		# Create dummy CSV files for demonstration
-		data1 = {'ID': [1, 2, 3, 4],
-				'Name': ['Alice', 'Bob', 'Charlie', 'David'],
-				'Value': [100.0, 200.5, 300.99999, 400.12345],
-				'Category': ['A', 'B', 'A', 'C']}
-		df_a = pd.DataFrame(data1)
+    def test_compare():
+        # --- Example Usage (as used in the last execution) ---
+        # Create dummy CSV files for demonstration
+        data1 = {'ID': [1, 2, 3, 4],
+                'Name': ['Alice', 'Bob', 'Charlie', 'David'],
+                'Value': [100.0, 200.5, 300.99999, 400.12345],
+                'Category': ['A', 'B', 'A', 'C']}
+        df_a = pd.DataFrame(data1)
 
-		# File 2: Different row order, floats fuzzily equal, different non-float ('Category')
-		data2 = {'ID': [3, 1, 4, 2],
-				'Name': ['Charlie', 'Alice', 'David', 'Bob'],
-				'Value': [300.999991, 100.000001, 400.123456, 200.500004],
-				'Category': ['X', 'A', 'C', 'B']} # 'X' differs from 'A' for Charlie
-		df_b = pd.DataFrame(data2)
+        # File 2: Different row order, floats fuzzily equal, different non-float ('Category')
+        data2 = {'ID': [3, 1, 4, 2],
+                'Name': ['Charlie', 'Alice', 'David', 'Bob'],
+                'Value': [300.999991, 100.000001, 400.123456, 200.500004],
+                'Category': ['X', 'A', 'C', 'B']} # 'X' differs from 'A' for Charlie
+        df_b = pd.DataFrame(data2)
 
-		# File 3: Different row order, floats fuzzily equal, non-floats equal
-		data3 = {'ID': [4, 1, 3, 2],
-				'Name': ['David', 'Alice', 'Charlie', 'Bob'],
-				'Value': [400.1234501, 100.0000009, 300.999999, 200.5000005],
-				'Category': ['C', 'A', 'A', 'B']}
-		df_c = pd.DataFrame(data3)
+        # File 3: Different row order, floats fuzzily equal, non-floats equal
+        data3 = {'ID': [4, 1, 3, 2],
+                'Name': ['David', 'Alice', 'Charlie', 'Bob'],
+                'Value': [400.1234501, 100.0000009, 300.999999, 200.5000005],
+                'Category': ['C', 'A', 'A', 'B']}
+        df_c = pd.DataFrame(data3)
 
-		# File 4: Same as File 1 but one float is significantly different (Value: 301.1)
-		data4 = {'ID': [1, 2, 3, 4],
-				'Name': ['Alice', 'Bob', 'Charlie', 'David'],
-				'Value': [100.0, 200.5, 301.1, 400.12345],
-				'Category': ['A', 'B', 'A', 'C']}
-		df_d = pd.DataFrame(data4)
+        # File 4: Same as File 1 but one float is significantly different (Value: 301.1)
+        data4 = {'ID': [1, 2, 3, 4],
+                'Name': ['Alice', 'Bob', 'Charlie', 'David'],
+                'Value': [100.0, 200.5, 301.1, 400.12345],
+                'Category': ['A', 'B', 'A', 'C']}
+        df_d = pd.DataFrame(data4)
 
-		# Save to CSV
-		csv_path1 = 'file_A.csv'
-		csv_path2 = 'file_B_diff_cat.csv'
-		csv_path3 = 'file_C_equal.csv'
-		csv_path4 = 'file_D_diff_val.csv'
-		df_a.to_csv(csv_path1, index=False)
-		df_b.to_csv(csv_path2, index=False)
-		df_c.to_csv(csv_path3, index=False)
-		df_d.to_csv(csv_path4, index=False)
+        # Save to CSV
+        csv_path1 = 'file_A.csv'
+        csv_path2 = 'file_B_diff_cat.csv'
+        csv_path3 = 'file_C_equal.csv'
+        csv_path4 = 'file_D_diff_val.csv'
+        df_a.to_csv(csv_path1, index=False)
+        df_b.to_csv(csv_path2, index=False)
+        df_c.to_csv(csv_path3, index=False)
+        df_d.to_csv(csv_path4, index=False)
 
-		print(f"Created dummy CSV files: {csv_path1}, {csv_path2}, {csv_path3}, {csv_path4}\n")
+        print(f"Created dummy CSV files: {csv_path1}, {csv_path2}, {csv_path3}, {csv_path4}\n")
 
-		# --- Comparison Examples ---
+        # --- Comparison Examples ---
 
-		# 1. Compare A and C (should be equal with default tolerance 1e-5)
-		print(f"--- Comparing '{csv_path1}' and '{csv_path3}' (tolerance=1e-5) ---")
-		are_equal, message = compare_csv_files_fuzzy(csv_path1, csv_path3, float_tolerance=1e-5)
-		print(f"Result: {are_equal}")
-		print(f"Message: {message}\n")
+        # 1. Compare A and C (should be equal with default tolerance 1e-5)
+        print(f"--- Comparing '{csv_path1}' and '{csv_path3}' (tolerance=1e-5) ---")
+        are_equal, message = compare_csv_files_fuzzy(csv_path1, csv_path3, float_tolerance=1e-5)
+        print(f"Result: {are_equal}")
+        print(f"Message: {message}\n")
 
-		# 2. Compare A and B (should be different due to 'Category')
-		print(f"--- Comparing '{csv_path1}' and '{csv_path2}' (tolerance=1e-5) ---")
-		are_equal, message = compare_csv_files_fuzzy(csv_path1, csv_path2, float_tolerance=1e-5)
-		print(f"Result: {are_equal}")
-		print(f"Message: {message}\n")
+        # 2. Compare A and B (should be different due to 'Category')
+        print(f"--- Comparing '{csv_path1}' and '{csv_path2}' (tolerance=1e-5) ---")
+        are_equal, message = compare_csv_files_fuzzy(csv_path1, csv_path2, float_tolerance=1e-5)
+        print(f"Result: {are_equal}")
+        print(f"Message: {message}\n")
 
-		# 3. Compare A and D (should be different due to 'Value' change)
-		print(f"--- Comparing '{csv_path1}' and '{csv_path4}' (tolerance=1e-5) ---")
-		are_equal_strict, message_strict = compare_csv_files_fuzzy(csv_path1, csv_path4, float_tolerance=1e-5)
-		print(f"Result: {are_equal_strict}")
-		print(f"Message: {message_strict}\n")
+        # 3. Compare A and D (should be different due to 'Value' change)
+        print(f"--- Comparing '{csv_path1}' and '{csv_path4}' (tolerance=1e-5) ---")
+        are_equal_strict, message_strict = compare_csv_files_fuzzy(csv_path1, csv_path4, float_tolerance=1e-5)
+        print(f"Result: {are_equal_strict}")
+        print(f"Message: {message_strict}\n")
 
-		# 4. Compare A and C with very strict tolerance (should FAIL now on floats)
-		print(f"--- Comparing '{csv_path1}' and '{csv_path3}' with stricter tolerance (1e-8) ---")
-		are_equal_strict_2, message_strict_2 = compare_csv_files_fuzzy(csv_path1, csv_path3, float_tolerance=1e-8)
-		print(f"Result: {are_equal_strict_2}")
-		print(f"Message: {message_strict_2}\n")
+        # 4. Compare A and C with very strict tolerance (should FAIL now on floats)
+        print(f"--- Comparing '{csv_path1}' and '{csv_path3}' with stricter tolerance (1e-8) ---")
+        are_equal_strict_2, message_strict_2 = compare_csv_files_fuzzy(csv_path1, csv_path3, float_tolerance=1e-8)
+        print(f"Result: {are_equal_strict_2}")
+        print(f"Message: {message_strict_2}\n")
 
-		# 5. Compare using specific columns for sorting (e.g., 'ID')
-		print(f"--- Comparing '{csv_path1}' and '{csv_path3}' sorting only by 'ID' ---")
-		are_equal_sort_id, message_sort_id = compare_csv_files_fuzzy(csv_path1, csv_path3, sort_columns=['ID'])
-		print(f"Result: {are_equal_sort_id}")
-		print(f"Message: {message_sort_id}\n")
+        # 5. Compare using specific columns for sorting (e.g., 'ID')
+        print(f"--- Comparing '{csv_path1}' and '{csv_path3}' sorting only by 'ID' ---")
+        are_equal_sort_id, message_sort_id = compare_csv_files_fuzzy(csv_path1, csv_path3, sort_columns=['ID'])
+        print(f"Result: {are_equal_sort_id}")
+        print(f"Message: {message_sort_id}\n")
 
-		# Clean up dummy files
-		try:
-			os.remove(csv_path1)
-			os.remove(csv_path2)
-			os.remove(csv_path3)
-			os.remove(csv_path4)
-			print("Cleaned up dummy CSV files.")
-		except OSError as e:
-			print(f"Error removing dummy files: {e}")
+        # Clean up dummy files
+        try:
+            os.remove(csv_path1)
+            os.remove(csv_path2)
+            os.remove(csv_path3)
+            os.remove(csv_path4)
+            print("Cleaned up dummy CSV files.")
+        except OSError as e:
+            print(f"Error removing dummy files: {e}")

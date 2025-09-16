@@ -31,6 +31,7 @@ void emitControlFunctionSignature(std::ostream& outputFile);
 void emitTimingEventCreation(std::ostream& outputFile);
 bool isPrimaryKey(const std::set<std::string>& keysSet);
 std::vector<std::string> split(std::string s, std::string delimiter);
+extern bool gPrintHashTableSizes;
 
 // -- [start] kernel timing code generation --
 
@@ -257,6 +258,55 @@ protected:
       return "";
    }
 
+   void printHashTableSize(const std::string& count_var, const std::string& key_size, const std::string& value_size, const std::string& load_factor, mlir::Operation *op) {
+      if (gPrintHashTableSizes) {
+         auto rightHashAttr = op->getAttrOfType<mlir::ArrayAttr>("rightHash");
+         auto leftHashAttr = op->getAttrOfType<mlir::ArrayAttr>("leftHash");
+         
+         // Convert ArrayAttr to string representation
+         std::string rightHashStr = "null";
+         std::string leftHashStr = "null";
+         
+         if (rightHashAttr) {
+            rightHashStr = "[";
+            for (size_t i = 0; i < rightHashAttr.size(); ++i) {
+               if (auto colRefAttr = mlir::dyn_cast<tuples::ColumnRefAttr>(rightHashAttr[i])) {
+                  ColumnDetail detail(colRefAttr);
+                  rightHashStr += detail.getMlirSymbol();
+               } else {
+                  rightHashStr += "unknown";
+               }
+               if (i < rightHashAttr.size() - 1) rightHashStr += ", ";
+            }
+            rightHashStr += "]";
+         }
+         
+         if (leftHashAttr) {
+            leftHashStr = "[";
+            for (size_t i = 0; i < leftHashAttr.size(); ++i) {
+               if (auto colRefAttr = mlir::dyn_cast<tuples::ColumnRefAttr>(leftHashAttr[i])) {
+                  ColumnDetail detail(colRefAttr);
+                  leftHashStr += detail.getMlirSymbol();
+               } else {
+                  leftHashStr += "unknown";
+               }
+               if (i < leftHashAttr.size() - 1) leftHashStr += ", ";
+            }
+            leftHashStr += "]";
+         }
+
+         auto kernel_name = "main_" +  GetId((void*) this);
+         appendControl(fmt::format("if (runCountKernel) std::cout << \"-- HT Size: \" << (int)({0} * {1}) * (sizeof({2}) + sizeof({3})) << \" bytes, Op: {6}, OpId : {7}, Left: {4}, Right: {5}, Kernel: {8} --\" << std::endl;", count_var, load_factor, key_size, value_size, leftHashStr, rightHashStr, op->getName().getStringRef().str(), GetId((void*) op), kernel_name));
+      }
+   }
+
+   void printBufferSize(const std::string& size_str, mlir::Operation* op)
+   {
+      if (!gPrintHashTableSizes)
+         return;
+      auto kernel_name = "main_" +  GetId((void*) this);
+      appendControl(fmt::format("if (runCountKernel) std::cout << \"-- Buffer Size: \" << {0} << \" bytes, Op:  {1}, OpId : {2}, Kernel: {3} --\" << std::endl;", size_str, op->getName().getStringRef().str(), GetId((void*) op), kernel_name));
+   }
 public:
    void printControlDeclarations(std::ostream& stream) {
       for (auto line : controlDeclarations) {
@@ -289,10 +339,11 @@ void checkForCodeGenSwitches(int& argc, char** argv);
 // --- [end] code generation switches helpers ---
 
 // --- [start] Pyper ---
-extern bool gGeneratingShuffles; // TODO: Move to a getter
+extern bool gPyperShuffle; // TODO: Move to a getter
 extern bool gThreadsAlwaysAlive; // TODO: Move to a getter
 // -- [end] Pyper ---
 extern bool gUseBloomFiltersForJoin; // TODO: Move to a getter
+extern bool gShuffleAllOps; // TODO: Move to a getter
 
 bool isPrimaryKey(const std::set<std::string>& keysSet);
 bool invertJoinIfPossible(std::set<std::string>& rightkeysSet, bool left_pk);
