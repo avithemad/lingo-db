@@ -43,6 +43,8 @@ struct PartitionHashJoinResultInfo {
    }
 };
 
+#define ROW_ID_TYPE "uint64_t"
+
 struct JoinOpDownstreamColumnUseInfo {
    JoinOpDownstreamColumnUseInfo() = default;
 
@@ -1536,7 +1538,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       assert(rowIdColToPtrIdMap.contains(rowId) && "RowId's pointer ID information is missing");
       int32_t ptrId = rowIdColToPtrIdMap[rowId];
 
-      appendControl(fmt::format("uint64_t* {0} = {1}.get_typed_ptr<{2}>();", rowIdVarName, resultVar, ptrId));
+      appendControl(fmt::format("{3}* {0} = {1}.get_typed_ptr<{2}>();", rowIdVarName, resultVar, ptrId, ROW_ID_TYPE));
 
       columnInfo.rowIdColumnVarNames.push_back(rowIdVarName);
       columnInfo.tableToRowIdMap[tableName] = rowIdVarName;
@@ -1636,8 +1638,8 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       columnInfo.columnCudaType = keyColCudaType;
       columnInfo.rowIdColumnVarNames.push_back(filteredIdxArgName);
 
-      appendControlDecl(fmt::format("uint64_t* {0} = nullptr;", filteredIdxArgName));
-      appendControl(fmt::format("cudaMallocExt(&{0}, sizeof(uint64_t) * {1});", filteredIdxArgName, countVarName));
+      appendControlDecl(fmt::format("{1}* {0} = nullptr;", filteredIdxArgName, ROW_ID_TYPE));
+      appendControl(fmt::format("cudaMallocExt(&{0}, sizeof({2}) * {1});", filteredIdxArgName, countVarName, ROW_ID_TYPE));
       if (shouldEmitColMaterialization) {
          appendControlDecl(fmt::format("{1}* {0} = nullptr;", filteredArgName, keyColCudaType));
          appendControlDecl(fmt::format("uint64_t* {0} = nullptr;", filteredCountArgName));
@@ -1670,7 +1672,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       
       deviceFrees.insert(filteredIdxArgName);
      
-      mainArgs[filteredIdxParamName] = "uint64_t*";
+      mainArgs[filteredIdxParamName] = std::string(ROW_ID_TYPE) + "*";
       mlirToGlobalSymbol[filteredIdxParamName] = filteredIdxArgName;
 
 
@@ -1695,7 +1697,8 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
    std::string BuildPartitionHashJoinChunkType(const MaterializedColumnInfo& info) {
       std::string chunkType = "Chunk<" + info.columnCudaType;
       for (size_t i = 0; i < info.rowIdColumnVarNames.size(); i++) {
-         chunkType += ", uint64_t";
+         chunkType += ", ";
+         chunkType += ROW_ID_TYPE;
       }
       chunkType += ">";
       return chunkType;
