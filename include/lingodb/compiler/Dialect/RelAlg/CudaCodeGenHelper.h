@@ -38,6 +38,7 @@ extern bool gPrintHashTableSizes;
 bool generateKernelTimingCode();
 bool generatePerOperationProfile();
 bool isProfiling();
+bool usePartitionHashJoin();
 
 // -- [end] kernel timing code generation --
 
@@ -122,6 +123,7 @@ struct ColumnMetadata {
    int streamId;
    std::vector<tuples::ColumnRefAttr> dependencies; // valid if type is Mapped
    std::string globalId;
+   std::string tableName;
    ColumnMetadata(const std::string& le, ColumnType ty, int streamId, const std::string& globalId) : loadExpression(le), type(ty), streamId(streamId), globalId(globalId) {}
    ColumnMetadata(const std::string& le, ColumnType ty, int streamId, const std::vector<tuples::ColumnRefAttr>& dep)
       : loadExpression(le), type(ty), streamId(streamId), dependencies(dep) {}

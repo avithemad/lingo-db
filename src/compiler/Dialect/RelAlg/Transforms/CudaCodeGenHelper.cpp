@@ -20,10 +20,12 @@ std::vector<std::string> split(std::string s, std::string delimiter) {
 static bool gGenKernelTimingCode = false;
 static bool gGenPerOperationProfile = false;
 static bool gGenIsProfiling = false; // Do not generate multiple iteration loops if we are profiling
+static bool gPartitionHashJoinCodeGenEnabled = false;
 
 bool generateKernelTimingCode() { return gGenKernelTimingCode; }
 bool generatePerOperationProfile() { return gGenPerOperationProfile; }
 bool isProfiling() { return gGenIsProfiling; }
+bool usePartitionHashJoin() { return gPartitionHashJoinCodeGenEnabled; }
 
 // -- [end] kernel timing code generation --
 
@@ -270,6 +272,7 @@ void checkForCodeGenSwitches(int& argc, char** argv) {
       std::make_tuple(&gGenIsProfiling, "--profiling", "profiling code generation"),
       std::make_tuple(&gShuffleAllOps, "--shuffle-all-ops", "shuffling all ops"),
       std::make_tuple(&gPrintHashTableSizes, "--print-hash-table-sizes", "print hash table sizes"),
+      std::make_tuple(&gPartitionHashJoinCodeGenEnabled, "--use-partition-hash-join", "partitioned hash join code generation"),
    };
    for (const auto& [switchPtr, switchName, descr] : switches) {
       checkForCodegenSwitch(argc, argv, switchPtr, switchName, descr);

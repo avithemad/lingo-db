@@ -1,6 +1,7 @@
 #!/bin/bash
 
 CODEGEN_OPTIONS="--threads-always-alive" # --smaller-hash-tables"
+$FILE_SUFFIX=""
 # for each arg in args
 for arg in "$@"; do
   case $arg in
@@ -31,6 +32,12 @@ for arg in "$@"; do
       ;;
     --shuffle-all-ops)
       CODEGEN_OPTIONS="$CODEGEN_OPTIONS --shuffle-all-ops"
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      ;;
+    --use-partition-hash-join)
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --use-partition-hash-join"
+      FILE_SUFFIX=".phj"
       # Remove this specific argument from $@
       set -- "${@/$arg/}"
   esac
@@ -79,7 +86,6 @@ if [ -z "$TPCH_DATA_DIR" ]; then
   TPCH_DATA_DIR="$REPO_DIR/resources/data/tpch-$SCALE_FACTOR"
 fi
 
-
 QUERIES=(1 3 4 5 6 7 8 9 10 12 13 14 16 17 18 19 20)
 
 TPCH_CUDA_GEN_DIR="$SQL_PLAN_COMPILER_DIR/gpu-db/tpch-$SCALE_FACTOR"
@@ -98,7 +104,7 @@ fi
 # cleanup the result files, built shared objects
 rm -f build/*.codegen.so # do this so that we don't run other queries by mistake
 rm -f $SCRIPT_DIR/*.csv
-rm -f $TPCH_CUDA_GEN_DIR/*.codegen.cu
+rm -f $TPCH_CUDA_GEN_DIR/q*$FILE_SUFFIX.codegen.cu
 rm -f $TPCH_CUDA_GEN_DIR/*.csv
 rm -f $TPCH_CUDA_GEN_DIR/*.log
 
@@ -121,15 +127,18 @@ for QUERY in "${QUERIES[@]}"; do
   $FORMAT_CMD
 
   # Now run the generated CUDA code
-  CP_CMD="cp output.cu $TPCH_CUDA_GEN_DIR/q$QUERY.codegen.cu"
+  CP_CMD="cp output.cu $TPCH_CUDA_GEN_DIR/q$QUERY$FILE_SUFFIX.codegen.cu"
   echo $CP_CMD
   $CP_CMD
 done
 
+# delete the temporary output.cu file
+rm output.cu
 
-# generate the cuda files
+
+# compile the cuda files
 for QUERY in "${QUERIES[@]}"; do
-  MAKE_QUERY="make query Q=$QUERY CUCO_SRC_PATH=$CUCO_SRC_PATH"
+  MAKE_QUERY="make query Q=$QUERY$FILE_SUFFIX CUCO_SRC_PATH=$CUCO_SRC_PATH"
   echo $MAKE_QUERY
   $MAKE_QUERY &
   
@@ -140,7 +149,7 @@ wait
 
 FAILED_QUERIES=()
 for QUERY in "${QUERIES[@]}"; do
-  if [ ! -f build/q$QUERY.codegen.so ]; then
+  if [ ! -f build/q$QUERY$FILE_SUFFIX.codegen.so ]; then
     echo -e "\033[0;31mError compiling Query $QUERY\033[0m"
     exit 1
     FAILED_QUERIES+=($QUERY)
@@ -149,7 +158,13 @@ done
 
 # run all the queries
 # Convert QUERIES array to comma-separated string
-QUERIES_STR=$(IFS=,; echo "${QUERIES[*]}")
+QUERIES_WITH_SUFFIX=()
+for Q in "${QUERIES[@]}"; do
+  QUERIES_WITH_SUFFIX+=("$Q$FILE_SUFFIX")
+done
+QUERIES_STR=$(IFS=,; echo "${QUERIES_WITH_SUFFIX[*]}")
+
+echo $QUERIES_STR
 
 RUN_QUERY_CMD="build/dbruntime --data_dir $TPCH_DATA_DIR/ --query_num $QUERIES_STR"
 echo $RUN_QUERY_CMD
@@ -159,7 +174,7 @@ cd -
 
 for QUERY in "${QUERIES[@]}"; do
   OUTPUT_FILE="tpch-$QUERY-ref.csv"
-  PYTHON_CMD="python $SCRIPT_DIR/compare_tpch_outputs.py $SCRIPT_DIR/$OUTPUT_FILE $TPCH_CUDA_GEN_DIR/cuda-tpch-$QUERY.csv"
+  PYTHON_CMD="python $SCRIPT_DIR/compare_tpch_outputs.py $SCRIPT_DIR/$OUTPUT_FILE $TPCH_CUDA_GEN_DIR/cuda-tpch-$QUERY$FILE_SUFFIX.csv"
   echo $PYTHON_CMD
   $PYTHON_CMD
 
