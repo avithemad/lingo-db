@@ -122,7 +122,6 @@ bool hasAnUpstreamFilter(mlir::Operation* op) {
 
 class HyperTupleStreamCode : public TupleStreamCode {
    std::map<KernelType, size_t> m_threadActiveScopeCount;
-   std::map<mlir::Operation*, std::string> m_joinResultVariables;
    PartitionHashJoinResultInfo m_joinInfo;
    std::string launchKernel(KernelType ty) override {
       std::string _kernelName;
@@ -1792,7 +1791,6 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       std::string rightResultType = fmt::format("Right_{0}_result_t", cudacodegen::GetId(joinOp));
 
       std::string resultVar = fmt::format("{0}_{1}_result", leftTupleVar, rightTupleVar);
-      m_joinResultVariables[joinOp] = resultVar;
 
       std::string leftChunkType = BuildPartitionHashJoinChunkType(materializedLeftKeys);
       std::string rightChunkType = BuildPartitionHashJoinChunkType(materializedRightKeys);
