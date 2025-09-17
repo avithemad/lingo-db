@@ -187,6 +187,7 @@ protected:
 
    std::map<std::string, std::string> mainArgs;
    std::map<std::string, std::string> countArgs;
+   std::set<mlir::Operation*> probedHashTables;
    bool m_hasInsertedSelection = false;
    bool m_genSelectionCheckUniversally = true;
    ShuffleData m_shuffleData;
@@ -236,6 +237,8 @@ protected:
          appendControl(fmt::format("cudaEventElapsedTime(&{0}, start, stop);", kernelTimeVarName));
          appendControl(fmt::format("std::cout << \"{0}\" << \", \" << {1} << std::endl;", kernelName, kernelTimeVarName));
       }
+      if (ty == KernelType::Main)
+         printHashTableProbes();
    }
 
    std::vector<std::pair<int, std::string>> getBaseRelations(const std::map<std::string, ColumnMetadata*>& columnData) {
@@ -301,11 +304,19 @@ protected:
       }
    }
 
-   void printProbeHashTableEntry(mlir::Operation* op) {
+   void recordHashTableProbe(mlir::Operation* op) {
       if (!gPrintHashTableSizes)
          return;
-      auto kernel_name = "main_" +  GetId((void*) this);
-      appendControl(fmt::format("if (runCountKernel) std::cout << \"-- HT_Probe: {0}, Op:  {1}, OpId : {2}, Kernel: {3} --\" << std::endl;", HT((void*) op), op->getName().getStringRef().str(), GetId((void*) op), kernel_name));
+      probedHashTables.insert(op);      
+   }
+
+   void printHashTableProbes() {
+      if (!gPrintHashTableSizes)
+         return;
+      for (auto op : probedHashTables) {
+         auto kernel_name = "main_" +  GetId((void*) this);
+         appendControl(fmt::format("if (runCountKernel) std::cout << \"-- HT_Probe: {0}, Op:  {1}, OpId : {2}, Kernel: {3} --\" << std::endl;", HT((void*) op), op->getName().getStringRef().str(), GetId((void*) op), kernel_name));
+      }
    }
 
    void printBufferSize(const std::string& size_str, mlir::Operation* op)

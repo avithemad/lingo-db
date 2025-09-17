@@ -738,7 +738,7 @@ class HyperTupleStreamCode : public TupleStreamCode {
       auto key = MakeKeys(op, keys, KernelType::Main);
       appendKernel("// Probe Hash table");
       appendKernel(fmt::format("auto {0} = {1}.find({2});", SLOT(op), HT(op), key));
-      printProbeHashTableEntry(op);
+      recordHashTableProbe(op);
       if (shouldUseThreadsAliveCodeGen()) {
          startThreadActiveScope(fmt::format("{0} != {1}.end()", SLOT(op), HT(op)));
          if (shouldGenerateShuffle()) {
@@ -762,7 +762,7 @@ class HyperTupleStreamCode : public TupleStreamCode {
 
       appendKernel("// Probe Hash table");
       appendKernel(fmt::format("auto {0} = {1}.find({2});", SLOT(op), HT(op), key));
-      printProbeHashTableEntry(op);
+      recordHashTableProbe(op);
       if (shouldUseThreadsAliveCodeGen()) {
          startThreadActiveScope(fmt::format("{0} == {1}.end()", SLOT(op), HT(op)));
          if (shouldGenerateShuffle()) {
@@ -889,7 +889,7 @@ class HyperTupleStreamCode : public TupleStreamCode {
          if (shouldUseThreadsAliveCodeGen()) { 
             // we are not inside a forEach lambda function, so we can use the threadActive variable
             appendKernel(fmt::format("auto {0} = {1}.find({2});", SLOT(op), HT(op), key));
-            printProbeHashTableEntry(op);
+            recordHashTableProbe(op);
             auto threadActiveCondition = fmt::format("{0} != {1}.end()", SLOT(op), HT(op));
             startThreadActiveScope(threadActiveCondition);
             if (shouldGenerateShuffle()) {
