@@ -311,12 +311,21 @@ protected:
    }
 
    void printHashTableProbes() {
-      if (!gPrintHashTableSizes)
+      if (!gPrintHashTableSizes || probedHashTables.size() == 0)
          return;
+      appendControl("if (runCountKernel) {");
       for (auto op : probedHashTables) {
          auto kernel_name = "main_" +  GetId((void*) this);
-         appendControl(fmt::format("if (runCountKernel) std::cout << \"-- HT_Probe: {0}, Op:  {1}, OpId : {2}, Kernel: {3} --\" << std::endl;", HT((void*) op), op->getName().getStringRef().str(), GetId((void*) op), kernel_name));
+         auto OpId = GetId((void*) op);
+         auto opName = op->getName().getStringRef().str();
+         appendControl(fmt::format("std::cout << \"-- HT_Probe: {0}, Op:  {1}, OpId : {2}, Kernel: {3} --\" << std::endl;", HT((void*) op), opName, OpId, kernel_name));
+
+         appendControl(fmt::format("cudaMemcpy(&{0}_PreCounter, d_{0}_PreCounter, sizeof(uint64_t), cudaMemcpyDeviceToHost);", HT(op)));
+         appendControl(fmt::format("std::cout << \"-- {0} Pre-Probe Count: \" << {0}_PreCounter << \", Op:  {1}, OpId : {2}, Kernel: {3} --\" << std::endl;", HT(op), opName, OpId, kernel_name));
+         appendControl(fmt::format("cudaMemcpy(&{0}_PostCounter, d_{0}_PostCounter, sizeof(uint64_t), cudaMemcpyDeviceToHost);", HT(op)));
+         appendControl(fmt::format("std::cout << \"-- {0} Post-Probe Count: \" << {0}_PostCounter << \", Op:  {1}, OpId : {2}, Kernel: {3} --\" << std::endl;", HT(op), opName, OpId, kernel_name));
       }
+      appendControl("} // runCountKernel");
    }
 
    void printBufferSize(const std::string& size_str, mlir::Operation* op)
