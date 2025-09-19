@@ -834,15 +834,19 @@ class HyperTupleStreamCode : public TupleStreamCode {
       genLaunchKernel(KernelType::Main);
       
       if (gUseBloomFiltersForJoin) {
+         auto l2CacheSize = 6 * 1024 * 1024; // 6MB of L2 cache on A6000. TODO: Take this as an argument
+         appendControl(fmt::format("auto d_{0} = cuco::bloom_filter<{1}>(max(d_{2}.size()/32, 1));", BF(op), getHTKeyType(keys), HT(op))); // 32 is an arbitrary constant. We need to fix this.
+         appendControl(fmt::format("auto skip_{0} = false;", BF(op)));
+         appendControl(fmt::format("auto ht_size_{0} = d_{1}.size() * 2 * (sizeof({2}) + sizeof({3}));", GetId(op), HT(op), getHTKeyType(keys), getHTValueType()));
+         appendControl(fmt::format("if (ht_size_{0} > {1}) {{", GetId(op), std::to_string(l2CacheSize)));
          appendControl(fmt::format("thrust::device_vector<{0}> keys_{1}(d_{2}.size()), vals_{1}(d_{2}.size());", getHTKeyType(keys), GetId(op), HT(op)));
-         appendControl(fmt::format("d_{0}.retrieve_all(keys_{1}.begin(), vals_{1}.begin());", HT(op), GetId(op))); // retrieve all the keys from the hash table into the keys vector
+         appendControl(fmt::format("d_{0}.retrieve_all(keys_{1}.begin(), vals_{1}.begin());", HT(op), GetId(op))); // retrieve all the keys from the hash table into the keys vector        
 
          // create a bloom filter
-         appendControl(fmt::format("auto d_{0} = cuco::bloom_filter<{1}>(max(d_{2}.size()/32, 1));", BF(op), getHTKeyType(keys), HT(op))); // 32 is an arbitrary constant. We need to fix this.
-         appendControl(fmt::format("d_{0}.add(keys_{1}.begin(), keys_{1}.end());", BF(op), GetId(op))); // insert all the keys into the bloom filter         
+         appendControl(fmt::format("d_{0}.add(keys_{1}.begin(), keys_{1}.end());", BF(op), GetId(op))); // insert all the keys into the bloom filter
+         appendControl(fmt::format("}} else {{ skip_{0} = true; }}", BF(op))); // end of if (ht_size < l2CacheSize)
       }
 
-      // appendControl(fmt::format("cudaFree(d_{0});", BUF_IDX(op)));
       return columnData;
    }
 
@@ -853,15 +857,18 @@ class HyperTupleStreamCode : public TupleStreamCode {
       if (pk) {
          appendKernel("// Probe Bloom filter");
          if (shouldUseThreadsAliveCodeGen()) {
-            auto threadActiveCondition = fmt::format("{0}.contains({1})", BF(op), key);
+            auto threadActiveCondition = fmt::format("(skip_{0} || {0}.contains({1}))", BF(op), key);
             startThreadActiveScope(threadActiveCondition);
          }
          else
             appendKernel(fmt::format("if (!{0}.contains({1})) return;", BF(op), key));
 
          mainArgs[BF(op)] = "BLOOM_FILTER_CONTAINS";
+         mainArgs[fmt::format("skip_{0}", BF(op))] = "bool";
          countArgs[BF(op)] = "BLOOM_FILTER_CONTAINS";
+         countArgs[fmt::format("skip_{0}", BF(op))] = "bool";
          mlirToGlobalSymbol[BF(op)] = fmt::format("d_{}.ref()", BF(op));
+         mlirToGlobalSymbol[fmt::format("skip_{0}", BF(op))] = fmt::format("skip_{}", BF(op));
       } else {
          // assert(false && "Bloom filter for multi-map not implemented yet.");
       }
