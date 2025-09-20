@@ -20,6 +20,11 @@ for arg in "$@"; do
       # Remove this specific argument from $@
       set -- "${@/$arg/}"
       ;;
+    --use-bloom-filters-for-large-ht-small-bf)
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --use-bloom-filters"
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      ;;
     --threads-always-alive)
       # CODEGEN_OPTIONS="$CODEGEN_OPTIONS --threads-always-alive"
       # Remove this specific argument from $@ # make this default for now
