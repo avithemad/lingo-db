@@ -35,6 +35,13 @@ for arg in "$@"; do
       SUB_DIR="HT32_BF_LargeHT_SmallBF"
       SUFFIX="-ht32-bf-largeht-smallbf"
       ;;
+    --use-bloom-filters-for-large-ht-fit-bf)
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --use-bloom-filters"
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      SUB_DIR="HT32_BF_LargeHT_FitBF"
+      SUFFIX="-ht32-bf-largeht-fitbf"
+      ;;
     --threads-always-alive)
       # CODEGEN_OPTIONS="$CODEGEN_OPTIONS --threads-always-alive" # make this default for now
       # Remove this specific argument from $@
