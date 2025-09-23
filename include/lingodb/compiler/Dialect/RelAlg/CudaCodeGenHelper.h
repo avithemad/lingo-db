@@ -83,6 +83,11 @@ class IdGenerator {
       }
       return m_objectIds[obj];
    }
+
+   void reset() {
+      m_objectIds.clear();
+      m_id = 0;
+   }
 };
 
 std::string GetId(const void* op);

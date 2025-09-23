@@ -9,6 +9,7 @@ static bool gCudaCodeGenEnabled = false;
 static bool gCudaCodeGenNoCountEnabled = false;
 static bool gCudaCrystalCodeGenEnabled = false;
 static bool gCudaCrystalCodeGenNoCountEnabled = false;
+std::string gOpFilePath = "output.cu";
 
 using NameTypePairs = std::vector<std::pair<std::string, std::string>>;
 
@@ -1977,6 +1978,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
    }
 };
 
+extern IdGenerator<const void*> idGen;
 class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<mlir::func::FuncOp>> {
    virtual llvm::StringRef getArgument() const override { return "relalg-cuda-code-gen"; }
 
@@ -2116,6 +2118,7 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
 
    void runOnOperation() override {
       // dumpModuleToFile();
+      idGen.reset();
       bool usedPartitionHashJoin = false;
       JoinOpDownstreamColumnUseInfo useInfo = getJoinOpDownstreamColumnUseInfo(getOperation());
       getOperation().walk([&](mlir::Operation* op) {
@@ -2298,7 +2301,7 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
             streamCodeMap[op] = leftStreamCode;
          }
       });
-      std::ofstream outputFile("output.cu");
+      std::ofstream outputFile(gOpFilePath);
       outputFile << "#include <cuco/static_map.cuh>\n\
             #include <cuco/static_multimap.cuh>\n\
             #include <thrust/copy.h>\n\

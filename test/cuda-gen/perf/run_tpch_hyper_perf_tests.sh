@@ -158,24 +158,43 @@ echo "Output file: $OUTPUT_FILE"
 
 # Empty the output file
 echo -n "" > $OUTPUT_FILE
+USE_RUN_SQL=0
 
-# generate the cuda files
-for QUERY in "${QUERIES[@]}"; do
-  # First run the run-sql tool to generate CUDA and get reference output
-  RUN_SQL="$BUILD_DIR/run-sql $TPCH_DIR/$QUERY.sql $TPCH_DATA_DIR --gen-cuda-code --gen-kernel-timing $CODEGEN_OPTIONS"
-  echo $RUN_SQL
-  $RUN_SQL > /dev/null # ignore the output. We are not comparing the results.
+if [ $USE_RUN_SQL -eq 1 ]; then
+  # generate the cuda files
+  for QUERY in "${QUERIES[@]}"; do
+    # First run the run-sql tool to generate CUDA and get reference output
+    RUN_SQL="$BUILD_DIR/run-sql $TPCH_DIR/$QUERY.sql $TPCH_DATA_DIR --gen-cuda-code --gen-kernel-timing $CODEGEN_OPTIONS"
+    echo $RUN_SQL
+    $RUN_SQL > /dev/null # ignore the output. We are not comparing the results.
 
-  # format the generated cuda code
-  FORMAT_CMD="clang-format -i output.cu -style=Microsoft"
-  echo $FORMAT_CMD
-  $FORMAT_CMD
+    # format the generated cuda code
+    FORMAT_CMD="clang-format -i output.cu -style=Microsoft"
+    echo $FORMAT_CMD
+    $FORMAT_CMD
 
-  # Now run the generated CUDA code
-  CP_CMD="cp output.cu $TPCH_CUDA_GEN_DIR/q$QUERY$FILE_SUFFIX.codegen.cu"
-  echo $CP_CMD
-  $CP_CMD
-done
+    # Now run the generated CUDA code
+    CP_CMD="cp output.cu $TPCH_CUDA_GEN_DIR/q$QUERY$FILE_SUFFIX.codegen.cu"
+    echo $CP_CMD
+    $CP_CMD
+  done
+else
+  echo "Using batch gen-cuda"
+  GEN_CUDF="$BUILD_DIR/gen-cuda $TPCH_DATA_DIR --gen-cuda-code --gen-kernel-timing $CODEGEN_OPTIONS"
+  for QUERY in "${QUERIES[@]}"; do
+    # First run the run-sql tool to generate CUDA and get reference output
+    GEN_CUDF="$GEN_CUDF $TPCH_DIR/$QUERY.sql $TPCH_CUDA_GEN_DIR/q$QUERY$FILE_SUFFIX.codegen.cu  " 
+  done
+  echo $GEN_CUDF
+  $GEN_CUDF > /dev/null # ignore the output. We are not comparing
+
+  for QUERY in "${QUERIES[@]}"; do
+    # format the generated cuda code
+    FORMAT_CMD="clang-format -i $TPCH_CUDA_GEN_DIR/q$QUERY$FILE_SUFFIX.codegen.cu -style=Microsoft"
+    echo $FORMAT_CMD
+    $FORMAT_CMD
+  done
+fi
 
 rm -f build/*.codegen.so # do this so that we don't run other queries by mistake
 

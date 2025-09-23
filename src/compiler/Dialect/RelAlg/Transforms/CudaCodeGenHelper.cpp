@@ -74,6 +74,8 @@ std::string getBufPtrType() {
 
 namespace cudacodegen {
 
+IdGenerator<const void*> idGen;
+
 std::string HT(const void* op) {
     return "HT_" + GetId(op);
 }
@@ -123,8 +125,7 @@ std::string SHUF_BUF_VAL(const void* op) {
    return (op == nullptr ? "tid" : "slot_val_" + GetId(op));
 }
 
-std::string GetId(const void* op){
-   static IdGenerator<const void*> idGen;
+std::string GetId(const void* op){   
    std::string result = idGen.getId(op);
    return result;
 }
