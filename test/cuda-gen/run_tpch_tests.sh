@@ -1,7 +1,7 @@
 #!/bin/bash
 
 CODEGEN_OPTIONS="--threads-always-alive" # --smaller-hash-tables"
-$FILE_SUFFIX=""
+FILE_SUFFIX=""
 # for each arg in args
 for arg in "$@"; do
   case $arg in
@@ -17,7 +17,6 @@ for arg in "$@"; do
       ;;
     --use-bloom-filters-for-large-ht)
       CODEGEN_OPTIONS="$CODEGEN_OPTIONS --use-bloom-filters --bloom-filter-policy-large-ht"
-      echo $CODEGEN_OPTIONS
       # Remove this specific argument from $@
       set -- "${@/$arg/}"
       ;;
@@ -109,6 +108,7 @@ if [ -z "$TPCH_DATA_DIR" ]; then
 fi
 
 QUERIES=(1 3 4 5 6 7 8 9 10 12 13 14 16 17 18 19 20)
+QUERIES=(14)
 
 TPCH_CUDA_GEN_DIR="$SQL_PLAN_COMPILER_DIR/gpu-db/tpch-$SCALE_FACTOR"
 echo "TPCH_CUDA_GEN_DIR: $TPCH_CUDA_GEN_DIR"

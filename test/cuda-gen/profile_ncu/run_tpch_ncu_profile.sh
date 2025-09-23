@@ -24,21 +24,21 @@ for arg in "$@"; do
       SUFFIX="-ht32-bf"
       ;;
     --use-bloom-filters-for-large-ht)
-      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --use-bloom-filters"
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --use-bloom-filters --bloom-filter-policy-large-ht"
       # Remove this specific argument from $@
       set -- "${@/$arg/}"
       SUB_DIR="HT32_BF_LargeHT"
       SUFFIX="-ht32-bf-largeht"
       ;;
     --use-bloom-filters-for-large-ht-small-bf)
-      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --use-bloom-filters"
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --use-bloom-filters --bloom-filter-policy-large-ht-small-bf"
       # Remove this specific argument from $@
       set -- "${@/$arg/}"
       SUB_DIR="HT32_BF_LargeHT_SmallBF"
       SUFFIX="-ht32-bf-largeht-smallbf"
       ;;
     --use-bloom-filters-for-large-ht-fit-bf)
-      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --use-bloom-filters"
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --use-bloom-filters --bloom-filter-policy-large-ht-fit-bf"
       # Remove this specific argument from $@
       set -- "${@/$arg/}"
       SUB_DIR="HT32_BF_LargeHT_FitBF"
@@ -113,6 +113,8 @@ fi
 
 # List of queries to run - 1, 3, 5, 6, 7, 8, 9
 QUERIES=(1 3 4 5 6 7 8 9 10 12 13 14 16 17 18 19 20)
+
+
 
 SRC_DIR="$SQL_PLAN_COMPILER_DIR/gpu-db/tpch-$SCALE_FACTOR"
 CD_CMD="cd $SRC_DIR"

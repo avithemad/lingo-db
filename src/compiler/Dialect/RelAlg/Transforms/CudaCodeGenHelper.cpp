@@ -263,10 +263,7 @@ static void checkForCodegenSwitch(int &argc, char** argv, bool* config, const st
 }
 
 void checkForBloomFilterOptions(int& args, char **argv) {
-   if (!gUseBloomFiltersForJoin) {
-      std::cerr << "Warning: Bloom filters for join are disabled. To enable, use --use-bloom-filters option.\n";
-      exit(1);
-   }
+   bool hasBloomFilterFlags = false;
    auto bloom_filter_configs = {
       std::make_tuple("--bloom-filter-policy-large-ht", BloomFilterLargeHT, "Add bloom filter only when HT is larger than L2 cache"),
       std::make_tuple("--bloom-filter-policy-large-ht-small-bf", BloomFilterLargeHTSmallBF, "Add bloom filter only when HT is larger than L2 cache and the bloom filter can fit in L2 cache"),
@@ -281,10 +278,15 @@ void checkForBloomFilterOptions(int& args, char **argv) {
             }
             std::clog << "Enabled " << descr << "\n";
             gBloomFilterPolicy = policy;
+            hasBloomFilterFlags = true;
             removeCodeGenSwitch(args, argv, i);
             break;
          }
       }
+   }
+   if (!gUseBloomFiltersForJoin && hasBloomFilterFlags) {
+      std::cerr << "Warning: Bloom filters for join are disabled. To enable, use --use-bloom-filters option.\n";
+      exit(1);
    }
 }
 

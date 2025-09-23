@@ -2338,7 +2338,8 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
          outputFile << "for (size_t iter = 0; iter < numIterations; iter++) {\n";
          outputFile << "bool runCountKernel = (iter == 0);\n";
          outputFile << "if (iter == 1) startTime = std::chrono::high_resolution_clock::now();\n"; // start the timer after the warp up iteration
-      }
+      } else
+         outputFile << "bool runCountKernel = true;\n"; // easier than using isProfiling everywhere
       for (auto code : kernelSchedule) {
          code->printControl(outputFile);
       }

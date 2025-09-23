@@ -22,21 +22,21 @@ for arg in "$@"; do
       SUFFIX="-ht32-bf"
       ;;
     --use-bloom-filters-for-large-ht)
-      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --use-bloom-filters"
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --use-bloom-filters --bloom-filter-policy-large-ht"
       # Remove this specific argument from $@
       set -- "${@/$arg/}"
       SUB_DIR="HT32_BF_LargeHT"
       SUFFIX="-ht32-bf-largeht"
       ;;
     --use-bloom-filters-for-large-ht-small-bf)
-      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --use-bloom-filters"
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --use-bloom-filters --bloom-filter-policy-large-ht-small-bf"
       # Remove this specific argument from $@
       set -- "${@/$arg/}"
       SUB_DIR="HT32_BF_LargeHT_SmallBF"
       SUFFIX="-ht32-bf-largeht-smallbf"
       ;;
     --use-bloom-filters-for-large-ht-fit-bf)
-      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --use-bloom-filters"
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --use-bloom-filters --bloom-filter-policy-large-ht-fit-bf"
       # Remove this specific argument from $@
       set -- "${@/$arg/}"
       SUB_DIR="HT32_BF_LargeHT_FitBF"
@@ -72,6 +72,12 @@ for arg in "$@"; do
       FILE_SUFFIX=".phj"
       # Remove this specific argument from $@
       set -- "${@/$arg/}"
+      ;;
+    --enable-logging)
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --enable-logging"
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      ;;
   esac
 done
 
