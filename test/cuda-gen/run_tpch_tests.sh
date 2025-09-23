@@ -16,17 +16,18 @@ for arg in "$@"; do
       set -- "${@/$arg/}"
       ;;
     --use-bloom-filters-for-large-ht)
-      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --use-bloom-filters"
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --use-bloom-filters --bloom-filter-policy-large-ht"
+      echo $CODEGEN_OPTIONS
       # Remove this specific argument from $@
       set -- "${@/$arg/}"
       ;;
     --use-bloom-filters-for-large-ht-small-bf)
-      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --use-bloom-filters"
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --use-bloom-filters --bloom-filter-policy-large-ht-small-bf"
       # Remove this specific argument from $@
       set -- "${@/$arg/}"
       ;;
     --use-bloom-filters-for-large-ht-fit-bf)
-      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --use-bloom-filters"
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --use-bloom-filters --bloom-filter-policy-large-ht-fit-bf"
       # Remove this specific argument from $@
       set -- "${@/$arg/}"
       ;;
@@ -55,6 +56,12 @@ for arg in "$@"; do
       FILE_SUFFIX=".phj"
       # Remove this specific argument from $@
       set -- "${@/$arg/}"
+      ;;
+    --enable-logging)
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --enable-logging"
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      ;;
   esac
 done
 

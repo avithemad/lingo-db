@@ -225,6 +225,8 @@ bool gPyperShuffle = false;
 bool gCompilingSSB = false;
 bool gShuffleAllOps = false;
 bool gPrintHashTableSizes = false;
+bool gEnableLogging = false;
+BloomFilterPolicy gBloomFilterPolicy = AddBloomFiltersToAllJoins;
 
 void removeCodeGenSwitch(int& argc, char** argv, int i) {
    // Remove --gen-cuda-code from the argument list
@@ -258,7 +260,33 @@ static void checkForCodegenSwitch(int &argc, char** argv, bool* config, const st
          break;
       }
    }
-} 
+}
+
+void checkForBloomFilterOptions(int& args, char **argv) {
+   if (!gUseBloomFiltersForJoin) {
+      std::cerr << "Warning: Bloom filters for join are disabled. To enable, use --use-bloom-filters option.\n";
+      exit(1);
+   }
+   auto bloom_filter_configs = {
+      std::make_tuple("--bloom-filter-policy-large-ht", BloomFilterLargeHT, "Add bloom filter only when HT is larger than L2 cache"),
+      std::make_tuple("--bloom-filter-policy-large-ht-small-bf", BloomFilterLargeHTSmallBF, "Add bloom filter only when HT is larger than L2 cache and the bloom filter can fit in L2 cache"),
+      std::make_tuple("--bloom-filter-policy-large-ht-fit-bf", BloomFilterLargeHTFitBF, "Add bloom filter only when HT is larger than L2 cache, but fit the bloom filter to L2 cache")
+   };
+   for (const auto& [switchName, policy, descr] : bloom_filter_configs) {
+      for (int i = 0; i < args; i++) {
+         if (std::string(argv[i]) == switchName) {
+            if (gBloomFilterPolicy != AddBloomFiltersToAllJoins) {
+               std::cerr << "A bloom filter policy has already been set. Only one bloom filter policy can be set at a time." << std::endl;
+               exit(1);
+            }
+            std::clog << "Enabled " << descr << "\n";
+            gBloomFilterPolicy = policy;
+            removeCodeGenSwitch(args, argv, i);
+            break;
+         }
+      }
+   }
+}
 
 void checkForCodeGenSwitches(int& argc, char** argv) {
    std::tuple<bool*, std::string, std::string> switches[]  = {
@@ -273,6 +301,7 @@ void checkForCodeGenSwitches(int& argc, char** argv) {
       std::make_tuple(&gShuffleAllOps, "--shuffle-all-ops", "shuffling all ops"),
       std::make_tuple(&gPrintHashTableSizes, "--print-hash-table-sizes", "print hash table sizes"),
       std::make_tuple(&gPartitionHashJoinCodeGenEnabled, "--use-partition-hash-join", "partitioned hash join code generation"),
+      std::make_tuple(&gEnableLogging, "--enable-logging", "enable logging"),
    };
    for (const auto& [switchPtr, switchName, descr] : switches) {
       checkForCodegenSwitch(argc, argv, switchPtr, switchName, descr);
@@ -281,6 +310,8 @@ void checkForCodeGenSwitches(int& argc, char** argv) {
    // assert that gShuffleAllOps and gPyperShuffle can only be enabled if gThreadsAlwaysAlive is true
    assert((gThreadsAlwaysAlive || !gShuffleAllOps || !gPyperShuffle) && "gThreadsAlwaysAlive must be true if gShuffleAllOps or gPyperShuffle is enabled");
    // assert that only one of gShuffleAllOps or gGeneratingShuffles must be enabled. Or both must be disabled.
+
+   checkForBloomFilterOptions(argc, argv);
 }
 
 // --- [end] code generation switches helpers ---

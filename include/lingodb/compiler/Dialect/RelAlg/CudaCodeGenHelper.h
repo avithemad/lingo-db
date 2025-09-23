@@ -32,6 +32,7 @@ void emitTimingEventCreation(std::ostream& outputFile);
 bool isPrimaryKey(const std::set<std::string>& keysSet);
 std::vector<std::string> split(std::string s, std::string delimiter);
 extern bool gPrintHashTableSizes;
+extern bool gEnableLogging;
 
 // -- [start] kernel timing code generation --
 
@@ -335,6 +336,11 @@ protected:
       auto kernel_name = "main_" +  GetId((void*) this);
       appendControl(fmt::format("if (runCountKernel) std::cout << \"-- Buffer Size: \" << {0} << \" bytes, Op:  {1}, OpId : {2}, Kernel: {3} --\" << std::endl;", size_str, op->getName().getStringRef().str(), GetId((void*) op), kernel_name));
    }
+
+   void log(const std::string& msg) {
+      if (gEnableLogging)
+         appendControl(fmt::format("std::clog << \"[LOG] {0}\" << std::endl;", msg));
+   }
 public:
    void printControlDeclarations(std::ostream& stream) {
       for (auto line : controlDeclarations) {
@@ -370,11 +376,21 @@ void checkForCodeGenSwitches(int& argc, char** argv);
 extern bool gPyperShuffle; // TODO: Move to a getter
 extern bool gThreadsAlwaysAlive; // TODO: Move to a getter
 // -- [end] Pyper ---
-extern bool gUseBloomFiltersForJoin; // TODO: Move to a getter
+
 extern bool gShuffleAllOps; // TODO: Move to a getter
 
 bool isPrimaryKey(const std::set<std::string>& keysSet);
 bool invertJoinIfPossible(std::set<std::string>& rightkeysSet, bool left_pk);
 void emitTimingEventCreation(std::ostream& outputFile);
+
+// bloom filter related
+extern bool gUseBloomFiltersForJoin; // TODO: Move to a getter
+enum BloomFilterPolicy { 
+   AddBloomFiltersToAllJoins, // default bloom filter policy
+   BloomFilterLargeHT, // add bloom filter only when HT is larger than L2 cache
+   BloomFilterLargeHTSmallBF, // add bloom filter only when HT is larger than L2 cache and the bloom filter can fit in L2 cache
+   BloomFilterLargeHTFitBF // add bloom filter only when HT is larger than L2 cache, but fit the bloom filter to L2 cache
+};
+extern BloomFilterPolicy gBloomFilterPolicy;
 
 #endif // LINGODB_COMPILER_DIALECT_RELALG_CUDA_CODE_GEN_HELPER_H
