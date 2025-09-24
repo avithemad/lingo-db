@@ -107,16 +107,25 @@ run_hyper_test_config "Smaller Hash Tables" $SCALE_FACTOR --smaller-hash-tables 
 # Test Configuration 3: With bloom filters
 run_hyper_test_config "Bloom Filters" $SCALE_FACTOR --smaller-hash-tables --use-bloom-filters
 
-# Test Configuration 4: With pyper shuffle
+# Test Configuration 4: With bloom filters and large hash tables
+run_hyper_test_config "Bloom Filters" $SCALE_FACTOR --smaller-hash-tables --use-bloom-filters-large-ht
+
+# Test Configuration 5: With bloom filters - large hash tables and small bf
+run_hyper_test_config "Bloom Filters" $SCALE_FACTOR --smaller-hash-tables --use-bloom-filters-for-large-ht-small-bf
+
+# Test Configuration 6: With bloom filters - large hash tables and fit bf
+run_hyper_test_config "Bloom Filters" $SCALE_FACTOR --smaller-hash-tables --use-bloom-filters-for-large-ht-fit-bf
+
+# Test Configuration 7: With pyper shuffle
 run_hyper_test_config "Pyper Shuffle" $SCALE_FACTOR --smaller-hash-tables --pyper-shuffle
 
-# Test Configuration 5: With shuffle all ops
+# Test Configuration 8: With shuffle all ops
 run_hyper_test_config "Shuffle All Ops" $SCALE_FACTOR --smaller-hash-tables --shuffle-all-ops
 
-# Test Configuration 6: Basic crystal run
+# Test Configuration 9: Basic crystal run
 run_crystal_test_config "Basic" $SCALE_FACTOR
 
-# Test Configuration 7: Crystal with smaller hash tables
+# Test Configuration 10: Crystal with smaller hash tables
 run_crystal_test_config "Smaller Hash Tables" $SCALE_FACTOR --smaller-hash-tables
 
 echo "========================================"
