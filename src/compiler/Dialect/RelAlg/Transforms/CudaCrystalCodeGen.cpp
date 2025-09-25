@@ -1,6 +1,8 @@
 #include "lingodb/compiler/Dialect/RelAlg/CudaCodeGenHelper.h"
 using namespace lingodb::compiler::dialect;
 
+extern std::string gOpFilePath;
+
 namespace cudacodegen {
 
 static int StreamId = 0;
@@ -429,6 +431,9 @@ class CrystalTupleStreamCode : public TupleStreamCode {
       genLaunchKernel(KernelType::Count);
       appendControlDecl(fmt::format("uint64_t {0};", COUNT(op)));
       appendControl(fmt::format("cudaMemcpy(&{0}, d_{0}, sizeof(uint64_t), cudaMemcpyDeviceToHost);", COUNT(op)));
+      if (mlir::isa<relalg::InnerJoinOp>(op)  || mlir::isa<relalg::SemiJoinOp>(op) || mlir::isa<relalg::AntiSemiJoinOp>(op))
+         appendControl(fmt::format("d_{0}.rehash((int)({1} * 2));", HT(op), COUNT(op)));
+      
       if (!isProfiling())
          appendControl("}\n");
    }
@@ -517,8 +522,9 @@ class CrystalTupleStreamCode : public TupleStreamCode {
       mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::insert)", HT(op));
       appendControl("// Insert hash table control;");
       printHashTableSize(COUNT(op), getHTKeyType(keys), getHTValueType(), "2", op);
-      appendControl(fmt::format("auto d_{0} = cuco::static_map{{ (int){1}*2, cuco::empty_key{{({2})-1}},cuco::empty_value{{({3})-1}},thrust::equal_to<{2}>{{}},cuco::linear_probing<1, cuco::default_hash_function<{2}>>() }};",
-                                HT(op), COUNT(op), getHTKeyType(keys), getHTValueType()));
+      appendControlDecl(fmt::format("auto d_{0} = cuco::static_map{{ (int) 1, cuco::empty_key{{({1})-1}},cuco::empty_value{{({2})-1}},thrust::equal_to<{2}>{{}},cuco::linear_probing<1, cuco::default_hash_function<{1}>>() }};",
+                                HT(op), getHTKeyType(keys), getHTValueType()));
+      appendControl(fmt::format("d_{0}.clear();", HT(op)));
       genLaunchKernel(KernelType::Main);
    }
    void BuildHashTableAntiSemiJoin(mlir::Operation* op) {
@@ -538,8 +544,9 @@ class CrystalTupleStreamCode : public TupleStreamCode {
       mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::insert)", HT(op));
       appendControl("// Insert hash table control;");
       printHashTableSize(COUNT(op), getHTKeyType(keys), getHTValueType(), "2", op);
-      appendControl(fmt::format("auto d_{0} = cuco::static_map{{ (int){1}*2, cuco::empty_key{{({2})-1}},cuco::empty_value{{({3})-1}},thrust::equal_to<{2}>{{}},cuco::linear_probing<1, cuco::default_hash_function<{2}>>() }};",
-                                HT(op), COUNT(op), getHTKeyType(keys), getHTValueType()));
+      appendControlDecl(fmt::format("auto d_{0} = cuco::static_map{{ (int) 1, cuco::empty_key{{({1})-1}},cuco::empty_value{{({2})-1}},thrust::equal_to<{1}>{{}},cuco::linear_probing<1, cuco::default_hash_function<{1}>>() }};",
+                              HT(op), getHTKeyType(keys), getHTValueType()));
+      appendControl(fmt::format("d_{0}.clear();", HT(op)));
       genLaunchKernel(KernelType::Main);
    }
    void ProbeHashTableSemiJoin(mlir::Operation* op) {
@@ -622,8 +629,9 @@ class CrystalTupleStreamCode : public TupleStreamCode {
       appendControl(fmt::format("cudaMallocExt(&d_{0}, sizeof({3}) * {1} * {2});", BUF(op), COUNT(op), baseRelations.size(), getBufEltType()));
       deviceFrees.insert(fmt::format("d_{0}", BUF(op)));
       printHashTableSize(COUNT(op), getHTKeyType(keys), getHTValueType(), "2", op);
-      appendControl(fmt::format("auto d_{0} = cuco::static_map{{ (int){1}*2, cuco::empty_key{{({2})-1}},cuco::empty_value{{(int64_t)-1}},thrust::equal_to<{2}>{{}},cuco::linear_probing<1, cuco::default_hash_function<{2}>>() }};",
-                                HT(op), COUNT(op), getHTKeyType(keys), getHTValueType()));
+      appendControlDecl(fmt::format("auto d_{0} = cuco::static_map{{ (int) 1, cuco::empty_key{{({1})-1}},cuco::empty_value{{({2})-1}},thrust::equal_to<{1}>{{}},cuco::linear_probing<1, cuco::default_hash_function<{1}>>() }};",
+                                   HT(op), getHTKeyType(keys), getHTValueType()));
+      appendControl(fmt::format("d_{0}.clear();", HT(op)));
       genLaunchKernel(KernelType::Main);
       // appendControl(fmt::format("cudaFree(d_{0});", BUF_IDX(op)));
       return columnData;
@@ -1280,6 +1288,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
    }
 };
 
+extern IdGenerator<const void*> idGen;
 class CudaCrystalCodeGen : public mlir::PassWrapper<CudaCrystalCodeGen, mlir::OperationPass<mlir::func::FuncOp>> {
    virtual llvm::StringRef getArgument() const override { return "relalg-cuda-code-gen-crystal"; }
 
@@ -1290,6 +1299,7 @@ class CudaCrystalCodeGen : public mlir::PassWrapper<CudaCrystalCodeGen, mlir::Op
    std::vector<CrystalTupleStreamCode*> kernelSchedule;
 
    void runOnOperation() override {
+      idGen.reset();
       getOperation().walk([&](mlir::Operation* op) {
          if (auto selection = llvm::dyn_cast<relalg::SelectionOp>(op)) {
             mlir::Operation* stream = selection.getRelMutable().get().getDefiningOp();
@@ -1569,7 +1579,7 @@ class CudaCrystalCodeGen : public mlir::PassWrapper<CudaCrystalCodeGen, mlir::Op
             streamCodeMap[op] = leftStreamCode;
          }
       });
-      std::ofstream outputFile("output.cu");
+      std::ofstream outputFile(gOpFilePath);
       outputFile << "#include <cuco/static_map.cuh>\n\
 #include <cuco/static_multimap.cuh>\n\
 #include <thrust/copy.h>\n\

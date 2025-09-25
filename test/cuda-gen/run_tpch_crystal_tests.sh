@@ -1,6 +1,8 @@
 #!/bin/bash
 
 CODEGEN_OPTIONS=""
+USE_RUN_SQL=0 # set to 1 to use run-sql to generate cuda code. 0 to use batch gen-cuda
+PROFILING=0
 # for each arg in args
 for arg in "$@"; do
   case $arg in
@@ -31,6 +33,7 @@ for arg in "$@"; do
       CODEGEN_OPTIONS="$CODEGEN_OPTIONS --profiling"
       # Remove this specific argument from $@
       set -- "${@/$arg/}"
+      PROFILING=1
       ;;
     --shuffle-all-ops)
       CODEGEN_OPTIONS="$CODEGEN_OPTIONS --shuffle-all-ops"
@@ -105,31 +108,54 @@ rm -f $TPCH_CUDA_GEN_DIR/*.codegen.cu
 rm -f $TPCH_CUDA_GEN_DIR/*.csv
 rm -f $TPCH_CUDA_GEN_DIR/*.log
 
-# generate the cuda files
-for QUERY in "${QUERIES[@]}"; do
-  # First run the run-sql tool to generate CUDA and get reference output
-  OUTPUT_FILE=$SCRIPT_DIR/"tpch-$QUERY-ref.csv"
-  RUN_SQL="$BUILD_DIR/run-sql $TPCH_DIR/$QUERY.sql $TPCH_DATA_DIR --gen-cuda-crystal-code $CODEGEN_OPTIONS"
-  echo $RUN_SQL
-  $RUN_SQL > $OUTPUT_FILE
+if [ $USE_RUN_SQL -eq 1 ]; then
+  # generate the cuda files
+  for QUERY in "${QUERIES[@]}"; do
+    # First run the run-sql tool to generate CUDA and get reference output
+    OUTPUT_FILE=$SCRIPT_DIR/"tpch-$QUERY-ref.csv"
+    RUN_SQL="$BUILD_DIR/run-sql $TPCH_DIR/$QUERY.sql $TPCH_DATA_DIR --gen-cuda-crystal-code $CODEGEN_OPTIONS"
+    echo $RUN_SQL
+    $RUN_SQL > $OUTPUT_FILE
 
-  if [ $? -ne 0 ]; then
-    echo -e "\033[0;31mError running run-sql for Query $QUERY\033[0m"
-    exit 1
-  fi
+    if [ $? -ne 0 ]; then
+      echo -e "\033[0;31mError running run-sql for Query $QUERY\033[0m"
+      exit 1
+    fi
 
-  # format the generated cuda code
-  FORMAT_CMD="clang-format -i output.cu -style=Microsoft"
-  echo $FORMAT_CMD
-  $FORMAT_CMD
+    # format the generated cuda code
+    FORMAT_CMD="clang-format -i output.cu -style=Microsoft"
+    echo $FORMAT_CMD
+    $FORMAT_CMD
 
-  # Now run the generated CUDA code
-  CP_CMD="cp output.cu $TPCH_CUDA_GEN_DIR/q$QUERY.crystal.codegen.cu"
-  echo $CP_CMD
-  $CP_CMD
-done
+    # Now run the generated CUDA code
+    CP_CMD="cp output.cu $TPCH_CUDA_GEN_DIR/q$QUERY.crystal.codegen.cu"
+    echo $CP_CMD
+    $CP_CMD
+  done
+else
+ echo "Using batch gen-cuda"
+  FILE_SUFFIX=".crystal"
+  GEN_CUDF="$BUILD_DIR/gen-cuda $TPCH_DATA_DIR --gen-cuda-crystal-code $CODEGEN_OPTIONS"
+  for QUERY in "${QUERIES[@]}"; do
+    # First run the run-sql tool to generate CUDA and get reference output
+    GEN_CUDF="$GEN_CUDF $TPCH_DIR/$QUERY.sql $TPCH_CUDA_GEN_DIR/q$QUERY$FILE_SUFFIX.codegen.cu  " 
+  done
+  echo $GEN_CUDF
+  $GEN_CUDF > /dev/null # ignore the output. We are not comparing
 
-# generate the cuda files
+  for QUERY in "${QUERIES[@]}"; do
+    # format the generated cuda code
+    FORMAT_CMD="clang-format -i $TPCH_CUDA_GEN_DIR/q$QUERY$FILE_SUFFIX.codegen.cu -style=Microsoft"
+    echo $FORMAT_CMD
+    $FORMAT_CMD
+  done
+fi
+
+# delete the temporary output.cu file
+rm output.cu
+
+
+# compile the cuda files
 for QUERY in "${QUERIES[@]}"; do
   MAKE_QUERY="make query Q=$QUERY.crystal CUCO_SRC_PATH=$CUCO_SRC_PATH"
   echo $MAKE_QUERY
@@ -147,6 +173,11 @@ for QUERY in "${QUERIES[@]}"; do
     FAILED_QUERIES+=($QUERY)
   fi
 done
+
+if [ $PROFILING -eq 1 ]; then
+  echo "Profiling enabled. Skipping execution and output comparison."
+  exit 0
+fi
 
 # run all the queries
 # Convert QUERIES array to comma-separated string
@@ -190,6 +221,7 @@ echo -e "\n"
 if [ ${#FAILED_QUERIES[@]} -eq 0 ]; then
   # Print "TEST PASSED" in green
   echo -e "\033[0;32mTEST PASSED!\033[0m"
+  exit 0
 else
   # Print "TEST FAILED" in red
   echo -e "\033[0;31mTEST FAILED!\033[0m"
