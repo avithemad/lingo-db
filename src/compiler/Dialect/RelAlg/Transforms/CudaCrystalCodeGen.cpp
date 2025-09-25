@@ -431,8 +431,10 @@ class CrystalTupleStreamCode : public TupleStreamCode {
       genLaunchKernel(KernelType::Count);
       appendControlDecl(fmt::format("uint64_t {0};", COUNT(op)));
       appendControl(fmt::format("cudaMemcpy(&{0}, d_{0}, sizeof(uint64_t), cudaMemcpyDeviceToHost);", COUNT(op)));
-      if (mlir::isa<relalg::InnerJoinOp>(op)  || mlir::isa<relalg::SemiJoinOp>(op) || mlir::isa<relalg::AntiSemiJoinOp>(op))
-         appendControl(fmt::format("d_{0}.rehash((int)({1} * 2));", HT(op), COUNT(op)));
+      if (mlir::isa<relalg::InnerJoinOp>(op)  || mlir::isa<relalg::SemiJoinOp>(op) || mlir::isa<relalg::AntiSemiJoinOp>(op)) {
+         // appendControl(fmt::format("d_{0}.rehash((int)({1} * 2));", HT(op), COUNT(op)));
+         
+      }
       
       if (!isProfiling())
          appendControl("}\n");
@@ -505,6 +507,18 @@ class CrystalTupleStreamCode : public TupleStreamCode {
       return KEY(op);
    }
 
+   void _CreateHashTable(mlir::Operation* op, std::string keyType, std::string valueType) {
+      appendControlDecl(fmt::format("cuco_static_map_t<{0}, {1}> *d_{2} = nullptr;", keyType, valueType, HT(op)));
+      if (!isProfiling())
+         appendControl("if (runCountKernel){\n");
+      appendControl(fmt::format("d_{0} = new cuco::static_map{{ (int) {3} * 2, cuco::empty_key{{({1})-1}},cuco::empty_value{{({2})-1}},thrust::equal_to<{1}>{{}},cuco::linear_probing<1, cuco::default_hash_function<{1}>>() }};",
+                              HT(op), keyType, valueType, COUNT(op)));
+      if (!isProfiling())
+         appendControl("}\n");
+      appendControl(fmt::format("if (d_{0}->size() != 0) d_{0}->clear();", HT(op)));
+      deviceFrees.insert(fmt::format("d_{}", HT(op)));
+   }
+
    void BuildHashTableSemiJoin(mlir::Operation* op) {
       auto joinOp = mlir::dyn_cast_or_null<relalg::SemiJoinOp>(op);
       if (!joinOp) assert(false && "Build hash table accepts only semi join operation.");
@@ -519,12 +533,10 @@ class CrystalTupleStreamCode : public TupleStreamCode {
       appendKernel("}", KernelType::Main);
 
       mainArgs[HT(op)] = "HASHTABLE_INSERT_SJ";
-      mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::insert)", HT(op));
+      mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}->ref(cuco::insert)", HT(op));
       appendControl("// Insert hash table control;");
       printHashTableSize(COUNT(op), getHTKeyType(keys), getHTValueType(), "2", op);
-      appendControlDecl(fmt::format("auto d_{0} = cuco::static_map{{ (int) 1, cuco::empty_key{{({1})-1}},cuco::empty_value{{({2})-1}},thrust::equal_to<{2}>{{}},cuco::linear_probing<1, cuco::default_hash_function<{1}>>() }};",
-                                HT(op), getHTKeyType(keys), getHTValueType()));
-      appendControl(fmt::format("d_{0}.clear();", HT(op)));
+      _CreateHashTable(op, getHTKeyType(keys), getHTValueType());
       genLaunchKernel(KernelType::Main);
    }
    void BuildHashTableAntiSemiJoin(mlir::Operation* op) {
@@ -541,12 +553,10 @@ class CrystalTupleStreamCode : public TupleStreamCode {
       appendKernel("}", KernelType::Main);
 
       mainArgs[HT(op)] = "HASHTABLE_INSERT_SJ";
-      mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::insert)", HT(op));
+      mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}->ref(cuco::insert)", HT(op));
       appendControl("// Insert hash table control;");
       printHashTableSize(COUNT(op), getHTKeyType(keys), getHTValueType(), "2", op);
-      appendControlDecl(fmt::format("auto d_{0} = cuco::static_map{{ (int) 1, cuco::empty_key{{({1})-1}},cuco::empty_value{{({2})-1}},thrust::equal_to<{1}>{{}},cuco::linear_probing<1, cuco::default_hash_function<{1}>>() }};",
-                              HT(op), getHTKeyType(keys), getHTValueType()));
-      appendControl(fmt::format("d_{0}.clear();", HT(op)));
+      _CreateHashTable(op, getHTKeyType(keys), getHTValueType());
       genLaunchKernel(KernelType::Main);
    }
    void ProbeHashTableSemiJoin(mlir::Operation* op) {
@@ -567,7 +577,7 @@ class CrystalTupleStreamCode : public TupleStreamCode {
 
       mainArgs[HT(op)] = "HASHTABLE_PROBE_SJ";
       countArgs[HT(op)] = "HASHTABLE_PROBE_SJ";
-      mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::find)", HT(op));
+      mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}->ref(cuco::find)", HT(op));
    }
    void ProbeHashTableAntiSemiJoin(mlir::Operation* op) {
       auto joinOp = mlir::dyn_cast_or_null<relalg::AntiSemiJoinOp>(op);
@@ -587,7 +597,7 @@ class CrystalTupleStreamCode : public TupleStreamCode {
 
       mainArgs[HT(op)] = "HASHTABLE_PROBE_SJ";
       countArgs[HT(op)] = "HASHTABLE_PROBE_SJ";
-      mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::find)", HT(op));
+      mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}->ref(cuco::find)", HT(op));
    }
    std::map<std::string, ColumnMetadata*> BuildHashTable(mlir::Operation* op, bool right) {
       auto joinOp = mlir::dyn_cast_or_null<relalg::InnerJoinOp>(op);
@@ -618,7 +628,7 @@ class CrystalTupleStreamCode : public TupleStreamCode {
       mainArgs[HT(op)] = "HASHTABLE_INSERT";
       mainArgs[BUF(op)] = getBufPtrType();
       mlirToGlobalSymbol[BUF_IDX(op)] = fmt::format("d_{}", BUF_IDX(op));
-      mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::insert)", HT(op));
+      mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}->ref(cuco::insert)", HT(op));
       mlirToGlobalSymbol[BUF(op)] = fmt::format("d_{}", BUF(op));
       appendControl("// Insert hash table control;");
       appendControlDecl(fmt::format("{1} d_{0} = nullptr;", BUF_IDX(op), getBufIdxPtrType()));
@@ -629,9 +639,7 @@ class CrystalTupleStreamCode : public TupleStreamCode {
       appendControl(fmt::format("cudaMallocExt(&d_{0}, sizeof({3}) * {1} * {2});", BUF(op), COUNT(op), baseRelations.size(), getBufEltType()));
       deviceFrees.insert(fmt::format("d_{0}", BUF(op)));
       printHashTableSize(COUNT(op), getHTKeyType(keys), getHTValueType(), "2", op);
-      appendControlDecl(fmt::format("auto d_{0} = cuco::static_map{{ (int) 1, cuco::empty_key{{({1})-1}},cuco::empty_value{{({2})-1}},thrust::equal_to<{1}>{{}},cuco::linear_probing<1, cuco::default_hash_function<{1}>>() }};",
-                                   HT(op), getHTKeyType(keys), getHTValueType()));
-      appendControl(fmt::format("d_{0}.clear();", HT(op)));
+      _CreateHashTable(op, getHTKeyType(keys), "int64_t");
       genLaunchKernel(KernelType::Main);
       // appendControl(fmt::format("cudaFree(d_{0});", BUF_IDX(op)));
       return columnData;
@@ -683,7 +691,7 @@ class CrystalTupleStreamCode : public TupleStreamCode {
       mainArgs[BUF(op)] = getBufPtrType();
       countArgs[HT(op)] = "HASHTABLE_PROBE";
       countArgs[BUF(op)] = getBufPtrType();
-      mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::find)", HT(op));
+      mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}->ref(cuco::find)", HT(op));
       mlirToGlobalSymbol[BUF(op)] = fmt::format("d_{}", BUF(op));
    }
    void CreateAggregationHashTable(mlir::Operation* op) {
@@ -707,7 +715,7 @@ class CrystalTupleStreamCode : public TupleStreamCode {
       appendKernel("}", KernelType::Count);
       countArgs[HT(op)] = "HASHTABLE_INSERT";
       
-      mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::insert)", HT(op));
+      mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}->ref(cuco::insert)", HT(op));
       
       std::string ht_size = "0";
       static bool useQueryOptimizerEstimate = false;
@@ -729,7 +737,7 @@ class CrystalTupleStreamCode : public TupleStreamCode {
          ht_size = "1";  // create an empty table for now
 
       appendControlDecl("// Create aggregation hash table");
-      appendControlDecl(fmt::format("auto d_{0} = cuco::static_map{{ (int)({1}*1.25), cuco::empty_key{{({2})-1}},\
+      appendControlDecl(fmt::format("auto *d_{0} = new cuco::static_map{{ (int)({1}*1.25), cuco::empty_key{{({2})-1}},\
 cuco::empty_value{{({3})-1}},\
 thrust::equal_to<{2}>{{}},\
 cuco::linear_probing<1, cuco::default_hash_function<{2}>>() }};",
@@ -757,17 +765,17 @@ cuco::linear_probing<1, cuco::default_hash_function<{2}>>() }};",
       // appendControl(fmt::format("cudaMemcpy(&{0}, d_{0}, sizeof(uint64_t), cudaMemcpyDeviceToHost);", COUNT(op)));      
       appendControl(fmt::format("{0} = estimator_{1}.estimate();", COUNT(op), GetId(op)));
       auto aggTableLoadFactor = 1.2;
-      appendControl(fmt::format("d_{1}.rehash((int)({0} * {2}));", COUNT(op), HT(op), aggTableLoadFactor));
+      appendControl(fmt::format("d_{1}->rehash((int)({0} * {2}));", COUNT(op), HT(op), aggTableLoadFactor));
       printHashTableSize(COUNT(op), getHTKeyType(groupByKeys), getHTValueType(), std::to_string(aggTableLoadFactor), op);
       mlirToGlobalSymbol["countKeys"] = fmt::format("false", "countKeys");
       genLaunchKernel(KernelType::Count);
-      appendControl(fmt::format("{0} = d_{1}.size();", COUNT(op), HT(op)));
+      appendControl(fmt::format("{0} = d_{1}->size();", COUNT(op), HT(op)));
       // TODO(avinash): deallocate the old hash table and create a new one to save space in gpu when estimations are way off
       appendControl(fmt::format("thrust::device_vector<{3}> keys_{0}({2}), vals_{0}({2});\n\
-d_{1}.retrieve_all(keys_{0}.begin(), vals_{0}.begin());\n\
-d_{1}.clear();\n\
+d_{1}->retrieve_all(keys_{0}.begin(), vals_{0}.begin());\n\
+d_{1}->clear();\n\
 {3}* raw_keys{0} = thrust::raw_pointer_cast(keys_{0}.data());\n\
-insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::insert), {2});",
+insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}->ref(cuco::insert), {2});",
                                 GetId(op), HT(op), COUNT(op), getHTKeyType(groupByKeys)));
       if (!isProfiling())
          appendControl("}\n"); // runCountKernel
@@ -779,7 +787,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       auto key = MakeKeys(op, groupByKeys, KernelType::Main);
       if (!groupByKeys.empty()) {
          mainArgs[HT(op)] = "HASHTABLE_FIND";
-         mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::find)", HT(op));
+         mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}->ref(cuco::find)", HT(op));
          appendKernel("// Aggregate in hashtable", KernelType::Main);
       }else {
          appendKernel(fmt::format("auto {0} = 0;", buf_idx(op)), KernelType::Main);
