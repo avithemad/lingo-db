@@ -120,6 +120,7 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Get the path of the parent directory
+CUDA_GEN_DIR="$(dirname "$SCRIPT_DIR")"
 TEST_DIR="$(dirname $(dirname "$SCRIPT_DIR"))"
 REPO_DIR="$(dirname "$TEST_DIR")"
 
@@ -183,7 +184,8 @@ else
   GEN_CUDF="$BUILD_DIR/gen-cuda $TPCH_DATA_DIR --gen-cuda-code --gen-kernel-timing $CODEGEN_OPTIONS"
   for QUERY in "${QUERIES[@]}"; do
     # First run the run-sql tool to generate CUDA and get reference output
-    GEN_CUDF="$GEN_CUDF $TPCH_DIR/$QUERY.sql $TPCH_CUDA_GEN_DIR/q$QUERY$FILE_SUFFIX.codegen.cu  " 
+    RES_CSV=$CUDA_GEN_DIR/"tpch-$QUERY-ref.csv"
+    GEN_CUDF="$GEN_CUDF $TPCH_DIR/$QUERY.sql $TPCH_CUDA_GEN_DIR/q$QUERY$FILE_SUFFIX.codegen.cu $RES_CSV"
   done
   echo $GEN_CUDF
   $GEN_CUDF > /dev/null # ignore the output. We are not comparing
