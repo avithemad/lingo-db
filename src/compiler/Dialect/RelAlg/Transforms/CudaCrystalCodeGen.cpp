@@ -629,7 +629,7 @@ class CrystalTupleStreamCode : public TupleStreamCode {
       appendControl(fmt::format("cudaMallocExt(&d_{0}, sizeof({3}) * {1} * {2});", BUF(op), COUNT(op), baseRelations.size(), getBufEltType()));
       deviceFrees.insert(fmt::format("d_{0}", BUF(op)));
       printHashTableSize(COUNT(op), getHTKeyType(keys), getHTValueType(), "2", op);
-      appendControlDecl(fmt::format("auto d_{0} = cuco::static_map{{ (int) 1, cuco::empty_key{{({1})-1}},cuco::empty_value{{({2})-1}},thrust::equal_to<{1}>{{}},cuco::linear_probing<1, cuco::default_hash_function<{1}>>() }};",
+      appendControlDecl(fmt::format("auto d_{0} = cuco::static_map{{ (int) 1, cuco::empty_key{{({1})-1}},cuco::empty_value{{(int64_t)-1}},thrust::equal_to<{1}>{{}},cuco::linear_probing<1, cuco::default_hash_function<{1}>>() }};",
                                    HT(op), getHTKeyType(keys), getHTValueType()));
       appendControl(fmt::format("d_{0}.clear();", HT(op)));
       genLaunchKernel(KernelType::Main);
