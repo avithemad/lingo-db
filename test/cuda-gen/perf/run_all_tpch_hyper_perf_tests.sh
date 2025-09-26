@@ -127,7 +127,7 @@ run_hyper_test_config "Shuffle All Ops" $SCALE_FACTOR --smaller-hash-tables --sh
 run_crystal_test_config "Basic" $SCALE_FACTOR
 
 # Test Configuration 10: Crystal with smaller hash tables
-run_crystal_test_config "Smaller Hash Tables" $SCALE_FACTOR --smaller-hash-tables -ht32
+run_crystal_test_config "Smaller Hash Tables" $SCALE_FACTOR --smaller-hash-tables
 
 echo "========================================"
 echo "FINAL RESULTS SUMMARY"
