@@ -109,7 +109,7 @@ run_hyper_test_config "Smaller Hash Tables" $SCALE_FACTOR --smaller-hash-tables
 run_hyper_test_config "Bloom Filters" $SCALE_FACTOR --smaller-hash-tables --use-bloom-filters
 
 # Test Configuration 4: With bloom filters and large hash tables
-run_hyper_test_config "Bloom Filters" $SCALE_FACTOR --smaller-hash-tables --use-bloom-filters-large-ht
+run_hyper_test_config "Bloom Filters" $SCALE_FACTOR --smaller-hash-tables --use-bloom-filters-for-large-ht
 
 # Test Configuration 5: With bloom filters - large hash tables and small bf
 run_hyper_test_config "Bloom Filters" $SCALE_FACTOR --smaller-hash-tables --use-bloom-filters-for-large-ht-small-bf
