@@ -1,7 +1,7 @@
 #!/bin/bash
 
 CODEGEN_OPTIONS=""
-USE_RUN_SQL=0 # set to 1 to use run-sql to generate cuda code. 0 to use batch gen-cuda
+USE_RUN_SQL=1 # set to 1 to use run-sql to generate cuda code. 0 to use batch gen-cuda
 PROFILING=0
 # for each arg in args
 for arg in "$@"; do
@@ -171,6 +171,7 @@ for QUERY in "${QUERIES[@]}"; do
   if [ ! -f build/q$QUERY.crystal.codegen.so ]; then
     echo -e "\033[0;31mError compiling Query $QUERY\033[0m"
     FAILED_QUERIES+=($QUERY)
+    exit 1
   fi
 done
 
