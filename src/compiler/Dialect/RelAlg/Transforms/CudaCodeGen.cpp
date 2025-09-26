@@ -863,6 +863,7 @@ class HyperTupleStreamCode : public TupleStreamCode {
             appendControl(fmt::format("d_{0} = new cuco::bloom_filter<{1}>({0}_count);", BF(op), getHTKeyType(keys))); // 32 is an arbitrary constant. We need to fix this.
             log(fmt::format("Bloom filter {0} created", BF(op)));
          }
+         appendControl(fmt::format("d_{0}->clear();", BF(op)));
          appendControl(fmt::format("thrust::device_vector<{0}> keys_{1}(d_{2}.size()), vals_{1}(d_{2}.size());", getHTKeyType(keys), GetId(op), HT(op)));
          appendControl(fmt::format("d_{0}.retrieve_all(keys_{1}.begin(), vals_{1}.begin());", HT(op), GetId(op))); // retrieve all the keys from the hash table into the keys vector        
          appendControl(fmt::format("d_{0}->add(keys_{1}.begin(), keys_{1}.end());", BF(op), GetId(op))); // insert all the keys into the bloom filter
