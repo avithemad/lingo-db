@@ -174,7 +174,7 @@ typedef struct  {
 } ShuffleData;
 
 // -- [Start] TupleStreamCode ---
-
+class ScopedRunCountKernel;
 class TupleStreamCode {
 protected:
    std::vector<std::string> mainCode;
@@ -216,6 +216,7 @@ protected:
       controlDeclarations.push_back(stmt);
    }
 
+   friend class ScopedRunCountKernel;
    void appendControl(std::string stmt) {
       controlCode.push_back(stmt);
    }
@@ -346,6 +347,8 @@ protected:
       if (gEnableLogging)
          appendControl(fmt::format("std::clog << \"[LOG] {0}\" << std::endl;", msg));
    }
+
+   size_t getL2CacheSize();
 public:
    void printControlDeclarations(std::ostream& stream) {
       for (auto line : controlDeclarations) {
@@ -367,7 +370,23 @@ public:
    }
 };
 
-}
+class ScopedRunCountKernel {
+public:
+   ScopedRunCountKernel(TupleStreamCode* stream) : m_stream(stream)
+   {
+      if (!isProfiling())
+         m_stream->appendControl("if (runCountKernel) {");
+   }
+   ~ScopedRunCountKernel() {
+      if (!isProfiling())
+         m_stream->appendControl("} // runCountKernel");
+      m_stream = nullptr;
+   }
+private:
+   TupleStreamCode* m_stream;
+};
+
+} // namespace cudacodegen
 
 // --- [start] code generation switches helpers ---
 

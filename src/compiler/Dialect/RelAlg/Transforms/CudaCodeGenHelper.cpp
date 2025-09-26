@@ -215,6 +215,22 @@ std::string translateConstantOp(db::ConstantOp& constantOp) {
    }
 }
 
+size_t TupleStreamCode::getL2CacheSize() {
+   const char* envVar = std::getenv("CUR_GPU");
+   if (envVar != nullptr) {
+      std::string gpuName(envVar);
+      if (gpuName == "A6000") {
+         return 6 * 1024 * 1024; // 6MB for A6000
+      } else if (gpuName == "4090") {
+         return 72 * 1024 * 1024; // 72MB for RTX 4090
+      } else if (gpuName == "4060") {
+         return 24 * 1024 * 1024; // 24MB for RTX 4060
+      }
+   } 
+   std::cerr << "Warning: Unknown GPU name in CUR_GPU environment variable.\n";
+   exit(1);
+}
+
 } // namespace cudacodegen
 
 // --- [start] code generation switches helpers ---

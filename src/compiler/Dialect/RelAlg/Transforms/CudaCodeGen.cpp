@@ -629,23 +629,21 @@ class HyperTupleStreamCode : public TupleStreamCode {
       countArgs[countVarName] = "uint64_t*";
       mlirToGlobalSymbol[countVarName] = fmt::format("d_{}", countVarName);
       appendKernel("// Materialize count", KernelType::Count);
-      
       appendKernel(fmt::format("atomicAdd((int*){0}, 1);", countVarName), KernelType::Count);
 
       appendControl("// Materialize count");
       appendControlDecl(fmt::format("uint64_t* d_{0} = nullptr;", countVarName));
-      if (!isProfiling())
-         appendControl("if (runCountKernel){\n");
-      appendControl(fmt::format("cudaMallocExt(&d_{0}, sizeof(uint64_t));", countVarName));
-      deviceFrees.insert(fmt::format("d_{0}", countVarName));
-      appendControl(fmt::format("cudaMemset(d_{0}, 0, sizeof(uint64_t));", countVarName));
-      genLaunchKernel(KernelType::Count);
-      appendControlDecl(fmt::format("uint64_t {0};", countVarName));
-      appendControl(fmt::format("cudaMemcpy(&{0}, d_{0}, sizeof(uint64_t), cudaMemcpyDeviceToHost);", countVarName));
-      if (mlir::isa<relalg::InnerJoinOp>(op)  || mlir::isa<relalg::SemiJoinOp>(op) || mlir::isa<relalg::AntiSemiJoinOp>(op))
-         appendControl(fmt::format("d_{0}.rehash((int)({1} * 2));", HT(op), countVarName));
-      if (!isProfiling())
-         appendControl("}\n");
+      {
+         ScopedRunCountKernel rck(this);
+         appendControl(fmt::format("cudaMallocExt(&d_{0}, sizeof(uint64_t));", countVarName));
+         deviceFrees.insert(fmt::format("d_{0}", countVarName));
+         appendControl(fmt::format("cudaMemset(d_{0}, 0, sizeof(uint64_t));", countVarName));
+         genLaunchKernel(KernelType::Count);
+         appendControlDecl(fmt::format("uint64_t {0};", countVarName));
+         appendControl(fmt::format("cudaMemcpy(&{0}, d_{0}, sizeof(uint64_t), cudaMemcpyDeviceToHost);", countVarName));
+         if (mlir::isa<relalg::InnerJoinOp>(op)  || mlir::isa<relalg::SemiJoinOp>(op) || mlir::isa<relalg::AntiSemiJoinOp>(op))
+            appendControl(fmt::format("d_{0}.rehash((int)({1} * 2));", HT(op), countVarName));
+      }
    }
    std::string MakeKeys(mlir::Operation* op, const mlir::ArrayAttr& keys, KernelType kernelType) {
       //TODO(avinash, p3): figure a way out for double keys
@@ -842,7 +840,7 @@ class HyperTupleStreamCode : public TupleStreamCode {
       genLaunchKernel(KernelType::Main);
       
       if (gUseBloomFiltersForJoin) {
-         auto l2CacheSize = 6 * 1024 * 1024; // 6MB of L2 cache on A6000. TODO: Take this as an argument         
+         auto l2CacheSize = getL2CacheSize();
          if (gBloomFilterPolicy == BloomFilterLargeHTFitBF) // get the max subfilters that can fit in the L2 cache given the default bloom filter policy
             appendControl(fmt::format("auto {0}_count = max(min((uint32_t)d_{1}.size()/32, (uint32_t)({2}/(sizeof(uint32_t)*8))), 1);", BF(op), HT(op), std::to_string(l2CacheSize)));
          else
@@ -854,20 +852,27 @@ class HyperTupleStreamCode : public TupleStreamCode {
          else {            
             appendControl(fmt::format("auto ht_size_{0} = d_{1}.size() * 2 * (sizeof({2}) + sizeof({3}));", GetId(op), HT(op), getHTKeyType(keys), getHTValueType()));
             if (gBloomFilterPolicy == BloomFilterLargeHT) // append the conditions
-               appendControl(fmt::format("if (ht_size_{0} > {1}) {{", GetId(op), std::to_string(l2CacheSize), BF(op)));
+               appendControl(fmt::format("if (ht_size_{0} > {1}) {{", GetId(op), std::to_string(l2CacheSize), BF(op))); // If hash table size greater than L2 cache size
             else {
                appendControl(fmt::format("auto {0}_size = {0}_count * sizeof(uint32_t) * 8;", BF(op), HT(op)));
                appendControl(fmt::format("if (ht_size_{0} > {1} && {2}_size <= {1}) {{", GetId(op), std::to_string(l2CacheSize), BF(op)));
             }
          }
-         appendControl(fmt::format("if (runCountKernel) {{ d_{0} = new cuco::bloom_filter<{1}>({0}_count); }}", BF(op), getHTKeyType(keys))); // 32 is an arbitrary constant. We need to fix this.
+         {
+            ScopedRunCountKernel rck(this);
+            appendControl(fmt::format("d_{0} = new cuco::bloom_filter<{1}>({0}_count);", BF(op), getHTKeyType(keys))); // 32 is an arbitrary constant. We need to fix this.
+            log(fmt::format("Bloom filter {0} created", BF(op)));
+         }
          appendControl(fmt::format("thrust::device_vector<{0}> keys_{1}(d_{2}.size()), vals_{1}(d_{2}.size());", getHTKeyType(keys), GetId(op), HT(op)));
          appendControl(fmt::format("d_{0}.retrieve_all(keys_{1}.begin(), vals_{1}.begin());", HT(op), GetId(op))); // retrieve all the keys from the hash table into the keys vector        
          appendControl(fmt::format("d_{0}->add(keys_{1}.begin(), keys_{1}.end());", BF(op), GetId(op))); // insert all the keys into the bloom filter
-         log(fmt::format("Bloom filter {0} created", BF(op)));
-         appendControl(fmt::format("}} else {{ skip_{0} = true;", BF(op))); // end of if (ht_size < l2CacheSize)
-         appendControl(fmt::format("if (runCountKernel) {{ d_{0} = new cuco::bloom_filter<{1}>(1); }}", BF(op), getHTKeyType(keys))); // 32 is an arbitrary constant. We need to fix this.
-         log(fmt::format("Bloom filter {0} skipped", BF(op)));
+         appendControl(fmt::format("}} else {{ skip_{0} = true;", BF(op))); // end of if (ht_size < l2CacheSize)         
+         {
+            ScopedRunCountKernel rck(this);
+            appendControl(fmt::format("d_{0} = new cuco::bloom_filter<{1}>(1);", BF(op), getHTKeyType(keys)));
+            log(fmt::format("Bloom filter {0} skipped", BF(op)));
+         }
+         
          appendControl("}"); // end of else
       }
 
@@ -1072,43 +1077,43 @@ cuco::empty_value{{({3})-1}},\
 thrust::equal_to<{2}>{{}},\
 cuco::linear_probing<1, cuco::default_hash_function<{2}>>() }};",
                                 HT(op), ht_size, getHTKeyType(groupByKeys), getHTValueType()));
-      if (!isProfiling())
-         appendControl("if (runCountKernel){\n");
+      {
+         ScopedRunCountKernel rck(this);
 
-      appendControlDecl(fmt::format("uint64_t *d_{0} = nullptr;", COUNT(op)));
-      appendControl(fmt::format("cudaMallocExt(&d_{0}, sizeof(uint64_t));", COUNT(op)));
-      appendControl(fmt::format("cudaMemset(d_{0}, 0, sizeof(uint64_t));", COUNT(op)));
-      appendControlDecl(fmt::format("size_t {0} = 0;", COUNT(op)));
+         appendControlDecl(fmt::format("uint64_t *d_{0} = nullptr;", COUNT(op)));
+         appendControl(fmt::format("cudaMallocExt(&d_{0}, sizeof(uint64_t));", COUNT(op)));
+         appendControl(fmt::format("cudaMemset(d_{0}, 0, sizeof(uint64_t));", COUNT(op)));
+         appendControlDecl(fmt::format("size_t {0} = 0;", COUNT(op)));
 
-      countArgs[COUNT(op)] = "uint64_t*";
-      countArgs["countKeys"] = "bool";
-      mlirToGlobalSymbol[COUNT(op)] = fmt::format("d_{0}", COUNT(op));
-      mlirToGlobalSymbol["countKeys"] = fmt::format("true", "countKeys");
-      countArgs["estimator"] = "HLL_ESTIMATOR_REF";
-      mlirToGlobalSymbol["estimator"] = fmt::format("estimator_{0}.ref()", GetId(op));
+         countArgs[COUNT(op)] = "uint64_t*";
+         countArgs["countKeys"] = "bool";
+         mlirToGlobalSymbol[COUNT(op)] = fmt::format("d_{0}", COUNT(op));
+         mlirToGlobalSymbol["countKeys"] = fmt::format("true", "countKeys");
+         countArgs["estimator"] = "HLL_ESTIMATOR_REF";
+         mlirToGlobalSymbol["estimator"] = fmt::format("estimator_{0}.ref()", GetId(op));
 
-      // TODO: Check if we need a bigger sketch size than 32_KB
-      appendControl(fmt::format("cuco::hyperloglog<{0}> estimator_{1}(32_KB);", getHTKeyType(groupByKeys), GetId(op)));
-      genLaunchKernel(KernelType::Count);
+         // TODO: Check if we need a bigger sketch size than 32_KB
+         appendControl(fmt::format("cuco::hyperloglog<{0}> estimator_{1}(32_KB);", getHTKeyType(groupByKeys), GetId(op)));
+         genLaunchKernel(KernelType::Count);
 
-      // Pass 2: Actually use the hash table
-      // appendControl(fmt::format("cudaMemcpy(&{0}, d_{0}, sizeof(uint64_t), cudaMemcpyDeviceToHost);", COUNT(op)));      
-      appendControl(fmt::format("{0} = estimator_{1}.estimate();", COUNT(op), GetId(op)));
-      auto aggTableLoadFactor = "1.2";
-      appendControl(fmt::format("d_{1}.rehash((int)({0} * {2}));", COUNT(op), HT(op), aggTableLoadFactor));
-      printHashTableSize(COUNT(op), getHTKeyType(groupByKeys), getHTValueType(), aggTableLoadFactor, op);
-      mlirToGlobalSymbol["countKeys"] = fmt::format("false", "countKeys");
-      genLaunchKernel(KernelType::Count);
-      appendControl(fmt::format("{0} = d_{1}.size();", COUNT(op), HT(op)));
-      // TODO(avinash): deallocate the old hash table and create a new one to save space in gpu when estimations are way off
-      appendControl(fmt::format("thrust::device_vector<{3}> keys_{0}({2}), vals_{0}({2});\n\
-d_{1}.retrieve_all(keys_{0}.begin(), vals_{0}.begin());\n\
-d_{1}.clear();\n\
-{3}* raw_keys{0} = thrust::raw_pointer_cast(keys_{0}.data());\n\
-insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::insert), {2});",
-                                GetId(op), HT(op), COUNT(op), getHTKeyType(groupByKeys)));
-      if (!isProfiling())
-         appendControl("}\n"); // runCountKernel
+         // Pass 2: Actually use the hash table
+         // appendControl(fmt::format("cudaMemcpy(&{0}, d_{0}, sizeof(uint64_t), cudaMemcpyDeviceToHost);", COUNT(op)));      
+         appendControl(fmt::format("{0} = estimator_{1}.estimate();", COUNT(op), GetId(op)));
+         auto aggTableLoadFactor = "1.2";
+         appendControl(fmt::format("d_{1}.rehash((int)({0} * {2}));", COUNT(op), HT(op), aggTableLoadFactor));
+         printHashTableSize(COUNT(op), getHTKeyType(groupByKeys), getHTValueType(), aggTableLoadFactor, op);
+         mlirToGlobalSymbol["countKeys"] = fmt::format("false", "countKeys");
+         genLaunchKernel(KernelType::Count);
+         appendControl(fmt::format("{0} = d_{1}.size();", COUNT(op), HT(op)));
+         // TODO(avinash): deallocate the old hash table and create a new one to save space in gpu when estimations are way off
+         appendControl(fmt::format("thrust::device_vector<{3}> keys_{0}({2}), vals_{0}({2});\n\
+   d_{1}.retrieve_all(keys_{0}.begin(), vals_{0}.begin());\n\
+   d_{1}.clear();\n\
+   {3}* raw_keys{0} = thrust::raw_pointer_cast(keys_{0}.data());\n\
+   insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::insert), {2});",
+                                 GetId(op), HT(op), COUNT(op), getHTKeyType(groupByKeys)));
+         } // end of scope for run count kernel
+
    }
    void AggregateInHashTable(mlir::Operation* op) {
       auto aggOp = mlir::dyn_cast_or_null<relalg::AggregationOp>(op);
@@ -1125,7 +1130,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
       }
       auto& aggRgn = aggOp.getAggrFunc();
       mlir::ArrayAttr computedCols = aggOp.getComputedCols(); // these are columndefs
-      appendControl("//Aggregate in hashtable");
+      appendControl("// Aggregate in hashtable");
       if (auto returnOp = mlir::dyn_cast_or_null<tuples::ReturnOp>(aggRgn.front().getTerminator())) {
          int i = 0;
          for (mlir::Value col : returnOp.getResults()) {
@@ -2348,8 +2353,7 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
          outputFile << "for (size_t iter = 0; iter < numIterations; iter++) {\n";
          outputFile << "bool runCountKernel = (iter == 0);\n";
          outputFile << "if (iter == 1) startTime = std::chrono::high_resolution_clock::now();\n"; // start the timer after the warp up iteration
-      } else
-         outputFile << "bool runCountKernel = true;\n"; // easier than using isProfiling everywhere
+      }
       for (auto code : kernelSchedule) {
          code->printControl(outputFile);
       }
