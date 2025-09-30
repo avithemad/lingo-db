@@ -6,6 +6,7 @@
 #include <iostream>
 #include <unordered_map>
 #include <vector>
+#include <fstream>
 namespace lingodb::execution {
 class TimingProcessor {
    public:
@@ -49,6 +50,36 @@ class TimingPrinter : public TimingProcessor {
          } else {
             std::cerr << std::setw(15) << "";
          }
+      }
+   }
+};
+class CPUTimingPrinter : public TimingProcessor {
+   std::unordered_map<std::string, double> timing;
+   std::string queryName;
+   std::string perf_file;
+
+   public:
+   CPUTimingPrinter(std::string perf_file, std::string queryFile) : perf_file(perf_file) {
+      if (queryFile.find('/') != std::string::npos) {
+         queryName = queryFile.substr(queryFile.find_last_of("/\\") + 1);
+      } else {
+         queryName = queryFile;
+      }
+   }
+   void addTiming(const std::unordered_map<std::string, double>& timing) override {
+      this->timing.insert(timing.begin(), timing.end());
+   }
+   void process() override {
+      double total = 0.0;
+      for (auto [name, t] : timing) {
+         total += t;
+      }
+      timing["total"] = total;
+      std::ofstream outfile(perf_file, std::ios::app);
+      if (outfile.good()) {
+         outfile << "---" << std::endl;
+         outfile << "tpch-q" << queryName << std::endl;
+         outfile << "total_query, " << timing["executionTime"] << std::endl;
       }
    }
 };

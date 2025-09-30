@@ -4,6 +4,7 @@
 #include "lingodb/execution/Timing.h"
 #include "lingodb/scheduler/Scheduler.h"
 #include "lingodb/utility/Setting.h"
+#include <fmt/format.h>
 
 #include <fstream>
 #include <iostream>
@@ -44,6 +45,20 @@ private:
     int m_streamId; // Could be stderr or stdout
 };
 
+std::string getScaleFactor(std::string database) {
+    size_t pos = database.find_last_of('-');
+    if (pos != std::string::npos && pos + 1 < database.size()) {
+        return database.substr(pos + 1);
+    } else {
+        throw std::runtime_error("Database name does not contain a scale factor.");
+    }
+}
+
+std::string getTimingFileName(std::string database, std::string sqlFile) {
+    std::string scaleFactor = getScaleFactor(database);
+    return fmt::format("output.csv", scaleFactor);
+}
+
 int main(int argc, char** argv) {
    using namespace lingodb;
    if (argc <= 2) {
@@ -70,8 +85,18 @@ int main(int argc, char** argv) {
       return 1;
    }
 
+   if (sql_files.size() == 0) {
+      std::cerr << "No SQL files provided." << std::endl;
+      return 1;
+   }
+
    std::cerr << "Loading Database from: " << directory << '\n';
    auto session = runtime::Session::createSession(directory, eagerLoading.getValue());
+
+   auto timingFileName = getTimingFileName(directory, sql_files[0]);
+   std::cerr << "Timing file: " << timingFileName << std::endl;
+   // erase the timingFile if it exists
+   std::ofstream timingFile(timingFileName, std::ios::trunc);
 
    for (size_t i = 0; i < sql_files.size(); i++) {
       std::string inputFileName = sql_files[i];
@@ -88,7 +113,7 @@ int main(int argc, char** argv) {
       }
       unsetenv("PERF_BUILDID_DIR");
       // Set timing processor to print timings to a file named after the input SQL file
-      // queryExecutionConfig->timingProcessor = std::make_unique<execution::TimingPrinter>(inputFileName);
+      queryExecutionConfig->timingProcessor = std::make_unique<execution::CPUTimingPrinter>(timingFileName, inputFileName);
 
       auto scheduler = scheduler::startScheduler();
       auto executer = execution::QueryExecuter::createDefaultExecuter(std::move(queryExecutionConfig), *session);
