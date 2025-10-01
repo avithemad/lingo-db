@@ -1584,15 +1584,21 @@ class CudaCrystalCodeGen : public mlir::PassWrapper<CudaCrystalCodeGen, mlir::Op
 #include <cuco/static_multimap.cuh>\n\
 #include <thrust/copy.h>\n\
 #include <thrust/device_vector.h>\n\
-#include <thrust/host_vector.h>\n";
-      outputFile << "#include \"cudautils.cuh\"\n\
+#include <thrust/host_vector.h>\n\
+#include \"cudautils.cuh\"\n\
 #include \"db_types.h\"\n\
 #include \"dbruntime.h\"\n\
 #include <chrono>\n\
-#include <cuco/hyperloglog.cuh>\n\
-#define ITEMS_PER_THREAD 4\n\
+#include <cuco/hyperloglog.cuh>\n";
+   if (gTwoItemsPerThread) {
+      outputFile << "#define ITEMS_PER_THREAD 2\n\
+#define TILE_SIZE 256\n\
+#define TB TILE_SIZE/ITEMS_PER_THREAD\n";
+   } else {
+      outputFile << "#define ITEMS_PER_THREAD 4\n\
 #define TILE_SIZE 512\n\
 #define TB TILE_SIZE/ITEMS_PER_THREAD\n";
+   }
       for (auto code : kernelSchedule) {
          code->printKernel(KernelType::Count, outputFile);
          code->printKernel(KernelType::Main, outputFile);
@@ -1607,7 +1613,7 @@ class CudaCrystalCodeGen : public mlir::PassWrapper<CudaCrystalCodeGen, mlir::Op
 
       // generate timing start
       if (!isProfiling()) {
-      outputFile << "auto startTime = std::chrono::high_resolution_clock::now();\n";
+         outputFile << "auto startTime = std::chrono::high_resolution_clock::now();\n";
          outputFile << fmt::format("size_t numIterations = {0};\n", generateKernelTimingCode() ? 10 : 2);
          outputFile << "for (size_t iter = 0; iter < numIterations; iter++) {\n";
          outputFile << "bool runCountKernel = (iter == 0);\n";

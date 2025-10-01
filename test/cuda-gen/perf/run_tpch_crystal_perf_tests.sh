@@ -43,6 +43,13 @@ for arg in "$@"; do
       # Remove this specific argument from $@
       set -- "${@/$arg/}"
       SUFFIX="-HTSIZE"
+      ;;
+    --two-items-per-thread)
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --two-items-per-thread"
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      SUB_DIR+="Two_Items_Per_Thread"
+      SUFFIX+="-two-items-per-thread"
   esac
 done
 

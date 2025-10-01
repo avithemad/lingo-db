@@ -1,7 +1,7 @@
 #!/bin/bash
 
 CODEGEN_OPTIONS=""
-USE_RUN_SQL=1 # set to 1 to use run-sql to generate cuda code. 0 to use batch gen-cuda
+USE_RUN_SQL=0 # set to 1 to use run-sql to generate cuda code. 0 to use batch gen-cuda
 PROFILING=0
 # for each arg in args
 for arg in "$@"; do
@@ -39,6 +39,11 @@ for arg in "$@"; do
       CODEGEN_OPTIONS="$CODEGEN_OPTIONS --shuffle-all-ops"
       echo "Shuffle all ops option is not supported in crystal codegen."
       exit 1
+      ;;
+    --two-items-per-thread)
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --two-items-per-thread"
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
       ;;
   esac
 done
@@ -138,7 +143,8 @@ else
   GEN_CUDF="$BUILD_DIR/gen-cuda $TPCH_DATA_DIR --gen-cuda-crystal-code $CODEGEN_OPTIONS"
   for QUERY in "${QUERIES[@]}"; do
     # First run the run-sql tool to generate CUDA and get reference output
-    GEN_CUDF="$GEN_CUDF $TPCH_DIR/$QUERY.sql $TPCH_CUDA_GEN_DIR/q$QUERY$FILE_SUFFIX.codegen.cu  " 
+    OUTPUT_FILE=$SCRIPT_DIR/"tpch-$QUERY-ref.csv"
+    GEN_CUDF="$GEN_CUDF $TPCH_DIR/$QUERY.sql $TPCH_CUDA_GEN_DIR/q$QUERY$FILE_SUFFIX.codegen.cu $OUTPUT_FILE" 
   done
   echo $GEN_CUDF
   $GEN_CUDF > /dev/null # ignore the output. We are not comparing

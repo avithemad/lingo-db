@@ -244,6 +244,7 @@ bool gShuffleAllOps = false;
 bool gPrintHashTableSizes = false;
 bool gEnableLogging = false;
 BloomFilterPolicy gBloomFilterPolicy = AddBloomFiltersToAllJoins;
+bool gTwoItemsPerThread = false;
 
 void removeCodeGenSwitch(int& argc, char** argv, int i) {
    // Remove --gen-cuda-code from the argument list
@@ -321,6 +322,7 @@ void checkForCodeGenSwitches(int& argc, char** argv) {
       std::make_tuple(&gPrintHashTableSizes, "--print-hash-table-sizes", "print hash table sizes"),
       std::make_tuple(&gPartitionHashJoinCodeGenEnabled, "--use-partition-hash-join", "partitioned hash join code generation"),
       std::make_tuple(&gEnableLogging, "--enable-logging", "enable logging"),
+      std::make_tuple(&gTwoItemsPerThread, "--two-items-per-thread", "use two element tile for crystal codegen"),
    };
    for (const auto& [switchPtr, switchName, descr] : switches) {
       checkForCodegenSwitch(argc, argv, switchPtr, switchName, descr);
