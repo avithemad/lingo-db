@@ -50,6 +50,7 @@ for arg in "$@"; do
       set -- "${@/$arg/}"
       SUB_DIR+="_Two_Items_Per_Thread"
       SUFFIX+="-two-items-per-thread"
+      ;;
     --one-item-per-thread)
       CODEGEN_OPTIONS="$CODEGEN_OPTIONS --one-item-per-thread"
       # Remove this specific argument from $@
