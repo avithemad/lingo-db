@@ -1590,7 +1590,12 @@ class CudaCrystalCodeGen : public mlir::PassWrapper<CudaCrystalCodeGen, mlir::Op
 #include \"dbruntime.h\"\n\
 #include <chrono>\n\
 #include <cuco/hyperloglog.cuh>\n";
-   if (gTwoItemsPerThread) {
+   if (gOneItemPerThread) {
+      outputFile << "#define ITEMS_PER_THREAD 1\n\
+#define TILE_SIZE 128\n\
+#define TB TILE_SIZE/ITEMS_PER_THREAD\n";
+   }
+   else if (gTwoItemsPerThread) {
       outputFile << "#define ITEMS_PER_THREAD 2\n\
 #define TILE_SIZE 256\n\
 #define TB TILE_SIZE/ITEMS_PER_THREAD\n";

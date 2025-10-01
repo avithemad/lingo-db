@@ -83,6 +83,17 @@ for arg in "$@"; do
       CRYSTAL_FLAG=true
       CRYSTAL_SUFFIX="-crystal"
       QUERY_SUFFIX=".crystal"
+      ;;
+    --one-item-per-thread)
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --one-item-per-thread"
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      SUB_DIR+="_One_Item_Per_Thread"
+      SUFFIX+="-one-item-per-thread"
+      CRYSTAL_FLAG=true
+      CRYSTAL_SUFFIX="-crystal"
+      QUERY_SUFFIX=".crystal"
+      ;;
   esac
 done
 

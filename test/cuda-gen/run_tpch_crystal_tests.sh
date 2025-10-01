@@ -45,6 +45,11 @@ for arg in "$@"; do
       # Remove this specific argument from $@
       set -- "${@/$arg/}"
       ;;
+    --one-item-per-thread)
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --one-item-per-thread"
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      ;;
   esac
 done
 

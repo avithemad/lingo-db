@@ -419,5 +419,6 @@ extern BloomFilterPolicy gBloomFilterPolicy;
 
 // crystal tiling
 extern bool gTwoItemsPerThread; // TODO: Move to a getter
+extern bool gOneItemPerThread; // TODO: Move to a getter
 
 #endif // LINGODB_COMPILER_DIALECT_RELALG_CUDA_CODE_GEN_HELPER_H

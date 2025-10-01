@@ -48,8 +48,15 @@ for arg in "$@"; do
       CODEGEN_OPTIONS="$CODEGEN_OPTIONS --two-items-per-thread"
       # Remove this specific argument from $@
       set -- "${@/$arg/}"
-      SUB_DIR+="Two_Items_Per_Thread"
+      SUB_DIR+="_Two_Items_Per_Thread"
       SUFFIX+="-two-items-per-thread"
+    --one-item-per-thread)
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --one-item-per-thread"
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      SUB_DIR+="_One_Item_Per_Thread"
+      SUFFIX+="-one-item-per-thread"
+      ;;
   esac
 done
 
