@@ -74,8 +74,23 @@ for arg in "$@"; do
       QUERY_SUFFIX=".crystal"
       set -- "${@/$arg/}"
       ;;
+    --two-items-per-thread)
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --two-items-per-thread"
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      SUB_DIR+="_Two_Items_Per_Thread"
+      SUFFIX+="-two-items-per-thread"
+      CRYSTAL_FLAG=true
+      CRYSTAL_SUFFIX="-crystal"
+      QUERY_SUFFIX=".crystal"
   esac
 done
+
+# Assert that --two-items-per-thread is only used with --smaller-hash-tables
+if [[ "$CODEGEN_OPTIONS" == *"--two-items-per-thread"* ]] && [[ "$CODEGEN_OPTIONS" != *"--smaller-hash-tables"* ]]; then
+  echo "Error: --two-items-per-thread can only be used with --smaller-hash-tables"
+  exit 1
+fi
 
 if [ -n "$CUR_GPU" ]; then
   echo "Using CUR_GPU from environment variable: $CUR_GPU"
@@ -99,8 +114,8 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Get the path of the parent directory
-PROFILE_DIR="$(dirname "$SCRIPT_DIR")"
-TEST_DIR="$(dirname "$PROFILE_DIR")"
+CUDA_GEN_DIR="$(dirname "$SCRIPT_DIR")"
+TEST_DIR="$(dirname "$CUDA_GEN_DIR")"
 REPO_DIR="$(dirname "$TEST_DIR")"
 
 TPCH_DIR="$REPO_DIR/resources/sql/tpch"
@@ -113,8 +128,6 @@ fi
 
 # List of queries to run - 1, 3, 5, 6, 7, 8, 9
 QUERIES=(1 3 4 5 6 7 8 9 10 12 13 14 16 17 18 19 20)
-
-
 
 SRC_DIR="$SQL_PLAN_COMPILER_DIR/gpu-db/tpch-$SCALE_FACTOR"
 CD_CMD="cd $SRC_DIR"

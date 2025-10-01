@@ -128,6 +128,9 @@ run_crystal_test_config "Basic" $SCALE_FACTOR
 # Test Configuration 10: Crystal with smaller hash tables
 run_crystal_test_config "Smaller Hash Tables" $SCALE_FACTOR --smaller-hash-tables
 
+# Test Configuration 11: Crystal with two items per thread
+run_crystal_test_config "Two Items Per Thread" $SCALE_FACTOR --smaller-hash-tables --two-items-per-thread
+
 echo "========================================"
 echo "FINAL RESULTS SUMMARY"
 echo "========================================"
