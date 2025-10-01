@@ -24,7 +24,7 @@ fi
 
 # Set build name variable if not already set
 if [ -z "$BUILD_NAME" ]; then
-  BUILD_NAME="lingodb-debug"
+  BUILD_NAME="lingodb-release"
 fi
 
 # Get the path of the current script
@@ -37,7 +37,7 @@ REPO_DIR="$(dirname "$TEST_DIR")"
 
 TPCH_DIR="$REPO_DIR/resources/sql/tpch"
 BUILD_DIR="$REPO_DIR/build/$BUILD_NAME"
-
+export QUERY_RUNS=10
 
 # Set the data directory if not already set
 if [ -z "$TPCH_DATA_DIR" ]; then
