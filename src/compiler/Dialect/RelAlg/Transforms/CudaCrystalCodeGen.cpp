@@ -564,6 +564,7 @@ class CrystalTupleStreamCode : public TupleStreamCode {
       appendKernel(fmt::format("auto {0} = {1}.find({2}[ITEM]);", SLOT(op), HT(op), key));
       appendKernel(fmt::format("if ({0} == {1}.end()) {{selection_flags[ITEM] = 0;}}", SLOT(op), HT(op)));
       appendKernel("}");
+      m_hasInsertedSelection = true;
 
       mainArgs[HT(op)] = "HASHTABLE_PROBE_SJ";
       countArgs[HT(op)] = "HASHTABLE_PROBE_SJ";
@@ -584,6 +585,7 @@ class CrystalTupleStreamCode : public TupleStreamCode {
       appendKernel(fmt::format("auto {0} = {1}.find({2}[ITEM]);", SLOT(op), HT(op), key));
       appendKernel(fmt::format("if (!({0} == {1}.end())) {{selection_flags[ITEM] = 0;}}", SLOT(op), HT(op)));
       appendKernel("}");
+      m_hasInsertedSelection = true;
 
       mainArgs[HT(op)] = "HASHTABLE_PROBE_SJ";
       countArgs[HT(op)] = "HASHTABLE_PROBE_SJ";
@@ -655,6 +657,7 @@ class CrystalTupleStreamCode : public TupleStreamCode {
       appendKernel(fmt::format("if ({0} == {1}.end()) {{selection_flags[ITEM] = 0; continue;}}", SLOT(op), HT(op)));
       appendKernel(fmt::format("{0}[ITEM] = {1}->second;", slot_second(op), SLOT(op)));
       appendKernel("}");
+      m_hasInsertedSelection = true;
 
       // add all leftColumn data to this data
       auto baseRelations = getBaseRelations(leftColumnData);
