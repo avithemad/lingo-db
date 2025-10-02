@@ -31,6 +31,14 @@ class CrystalTupleStreamCode : public TupleStreamCode {
       return fmt::format("{0}_{1}<<<std::ceil((float){2}/(float)TILE_SIZE), TILE_SIZE/ITEMS_PER_THREAD>>>({3});", _kernelName, GetId((void*) this), size, args);
    }
 
+   void addLoopBoilerPlate(KernelType ty = KernelType::Main_And_Count) {
+      std::string kernelSize = getKernelSizeVariable();
+      appendKernel("#pragma unroll", ty);
+      appendKernel(fmt::format("for (int ITEM = 0; ITEM < ITEMS_PER_THREAD && (ITEM*TB + tid < {0}); ++ITEM) {{", kernelSize), ty);
+      if (m_genSelectionCheckUniversally || m_hasInsertedSelection )
+         appendKernel("if (!selection_flags[ITEM]) continue;", ty);
+   }
+
    public:
    CrystalTupleStreamCode(relalg::BaseTableOp& baseTableOp) {
       std::string tableName = baseTableOp.getTableIdentifier().data();
@@ -43,6 +51,8 @@ class CrystalTupleStreamCode : public TupleStreamCode {
          appendKernel("int64_t start, stop, cycles_per_warp;", KernelType::Main);
       appendKernel("size_t tile_offset = blockIdx.x * TILE_SIZE;");
       appendKernel("size_t tid = tile_offset + threadIdx.x;");
+      std::string kernelSize = getKernelSizeVariable();
+      appendKernel(fmt::format("if (tid >= {0}) return;", kernelSize));
       appendKernel("int selection_flags[ITEMS_PER_THREAD];");
       appendKernel("for (int i=0; i<ITEMS_PER_THREAD; i++) selection_flags[i] = 1;");
 
@@ -80,6 +90,8 @@ class CrystalTupleStreamCode : public TupleStreamCode {
          appendKernel("int64_t start, stop, cycles_per_warp;", KernelType::Main);
       appendKernel("size_t tile_offset = blockIdx.x * TILE_SIZE;");
       appendKernel("size_t tid = tile_offset + threadIdx.x;");
+      std::string kernelSize = getKernelSizeVariable();
+      appendKernel(fmt::format("if (tid >= {0}) return;", kernelSize));
       appendKernel("int selection_flags[ITEMS_PER_THREAD];");
       appendKernel("for (int i=0; i<ITEMS_PER_THREAD; i++) selection_flags[i] = 1;");
 
@@ -460,11 +472,7 @@ class CrystalTupleStreamCode : public TupleStreamCode {
             loadedColumnIds.push_back(LoadColumn(key, kernelType));
          }
       }
-      std::string kernelSize = getKernelSizeVariable();
-      appendKernel("#pragma unroll", kernelType);
-      appendKernel(fmt::format("for (int ITEM = 0; ITEM < ITEMS_PER_THREAD && (ITEM*TB + tid < {0}); ++ITEM) {{", kernelSize), kernelType);
-      if (m_genSelectionCheckUniversally || m_hasInsertedSelection )
-         appendKernel("if (!selection_flags[ITEM]) continue;", kernelType);
+      addLoopBoilerPlate(kernelType);
       appendKernel(fmt::format("{0}[ITEM] = 0;", KEY(op)), kernelType);
       int totalKeySize = 0;
       int j = 0;
