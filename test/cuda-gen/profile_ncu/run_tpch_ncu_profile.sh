@@ -138,7 +138,9 @@ if [ -z "$TPCH_DATA_DIR" ]; then
 fi
 
 # List of queries to run - 1, 3, 5, 6, 7, 8, 9
-QUERIES=(1 3 4 5 6 7 8 9 10 12 13 14 16 17 18 19 20)
+if [ -z "$QUERIES" ]; then
+  QUERIES=(1 3 4 5 6 7 8 9 10 12 13 14 16 17 18 19 20)
+fi
 
 SRC_DIR="$SQL_PLAN_COMPILER_DIR/gpu-db/tpch-$SCALE_FACTOR"
 CD_CMD="cd $SRC_DIR"

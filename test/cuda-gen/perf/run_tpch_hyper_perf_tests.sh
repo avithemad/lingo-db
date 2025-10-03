@@ -5,6 +5,7 @@ FILE_SUFFIX=""
 # for each arg in args
 SUB_DIR="."
 SUFFIX=""
+SKIP_GEN=0
 for arg in "$@"; do
   case $arg in
     --smaller-hash-tables)
@@ -78,6 +79,11 @@ for arg in "$@"; do
       # Remove this specific argument from $@
       set -- "${@/$arg/}"
       ;;
+    --skip-gen)
+      SKIP_GEN=1
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      ;;
   esac
 done
 
@@ -134,9 +140,11 @@ if [ -z "$TPCH_DATA_DIR" ]; then
 fi
 
 
-QUERIES=(1 3 4 5 6 7 8 9 10 12 13 14 16 17 18 19 20)
-if [ $SCALE_FACTOR -gt 60 ]; then
-  QUERIES=(1 3 5 6 7 8 10 12 13 14 16 17 19 20) # Queries 4, 9 and 18 have large hash tables. Run out of memory on A6000
+if [ -z "$QUERIES" ]; then
+  QUERIES=(1 3 4 5 6 7 8 9 10 12 13 14 16 17 18 19 20)
+  if [ $SCALE_FACTOR -gt 60 ]; then
+    QUERIES=(1 3 5 6 7 8 10 12 13 14 16 17 19 20) # Queries 4, 9 and 18 have large hash tables. Run out of memory on A6000
+  fi
 fi
 
 TPCH_CUDA_GEN_DIR="$SQL_PLAN_COMPILER_DIR/gpu-db/tpch-$SCALE_FACTOR"
@@ -159,28 +167,7 @@ echo "Output file: $OUTPUT_FILE"
 
 # Empty the output file
 echo -n "" > $OUTPUT_FILE
-USE_RUN_SQL=0
-
-if [ $USE_RUN_SQL -eq 1 ]; then
-  # generate the cuda files
-  for QUERY in "${QUERIES[@]}"; do
-    # First run the run-sql tool to generate CUDA and get reference output
-    RUN_SQL="$BUILD_DIR/run-sql $TPCH_DIR/$QUERY.sql $TPCH_DATA_DIR --gen-cuda-code --gen-kernel-timing $CODEGEN_OPTIONS"
-    echo $RUN_SQL
-    $RUN_SQL > /dev/null # ignore the output. We are not comparing the results.
-
-    # format the generated cuda code
-    FORMAT_CMD="clang-format -i output.cu -style=Microsoft"
-    echo $FORMAT_CMD
-    $FORMAT_CMD
-
-    # Now run the generated CUDA code
-    CP_CMD="cp output.cu $TPCH_CUDA_GEN_DIR/q$QUERY$FILE_SUFFIX.codegen.cu"
-    echo $CP_CMD
-    $CP_CMD
-  done
-else
-  echo "Using batch gen-cuda"
+if [ $SKIP_GEN -eq 0 ]; then
   GEN_CUDF="$BUILD_DIR/gen-cuda $TPCH_DATA_DIR --gen-cuda-code --gen-kernel-timing $CODEGEN_OPTIONS"
   for QUERY in "${QUERIES[@]}"; do
     # First run the run-sql tool to generate CUDA and get reference output
