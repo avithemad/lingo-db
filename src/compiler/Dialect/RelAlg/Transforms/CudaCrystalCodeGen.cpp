@@ -451,7 +451,8 @@ class CrystalTupleStreamCode : public TupleStreamCode {
    }
    std::string MakeKeys(mlir::Operation* op, const mlir::ArrayAttr& keys, KernelType kernelType) {
       //TODO(avinash, p3): figure a way out for double keys
-      appendKernel(fmt::format("uint64_t {0}[ITEMS_PER_THREAD];", KEY(op)), kernelType);
+      auto keyType = getHTKeyType(keys);
+      appendKernel(fmt::format("{1} {0}[ITEMS_PER_THREAD];", KEY(op), keyType), kernelType);
       std::map<std::string, int> allowedKeysToSize;
       allowedKeysToSize["DBCharType"] = 1;
       allowedKeysToSize["DBStringType"] = 2;
@@ -639,7 +640,7 @@ class CrystalTupleStreamCode : public TupleStreamCode {
       appendControl(fmt::format("cudaMallocExt(&d_{0}, sizeof({3}) * {1} * {2});", BUF(op), COUNT(op), baseRelations.size(), getBufEltType()));
       deviceFrees.insert(fmt::format("d_{0}", BUF(op)));
       printHashTableSize(COUNT(op), getHTKeyType(keys), getHTValueType(), "2", op);
-      appendControlDecl(fmt::format("auto d_{0} = cuco::static_map{{ (int) 1, cuco::empty_key{{({1})-1}},cuco::empty_value{{(int64_t)-1}},thrust::equal_to<{1}>{{}},cuco::linear_probing<1, cuco::default_hash_function<{1}>>() }};",
+      appendControlDecl(fmt::format("auto d_{0} = cuco::static_map{{ (int) 1, cuco::empty_key{{({1})-1}},cuco::empty_value{{({2})-1}},thrust::equal_to<{1}>{{}},cuco::linear_probing<1, cuco::default_hash_function<{1}>>() }};",
                                    HT(op), getHTKeyType(keys), getHTValueType()));
       appendControl(fmt::format("d_{0}.clear();", HT(op)));
       genLaunchKernel(KernelType::Main);
