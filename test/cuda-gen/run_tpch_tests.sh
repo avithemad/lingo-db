@@ -4,6 +4,7 @@ CODEGEN_OPTIONS="--threads-always-alive" # --smaller-hash-tables"
 FILE_SUFFIX="" 
 USE_RUN_SQL=0 # set to 1 to use run-sql to generate cuda code. 0 to use batch gen-cuda
 PROFILING=0
+SKIP_GEN=0
 # for each arg in args
 for arg in "$@"; do
   case $arg in
@@ -62,6 +63,11 @@ for arg in "$@"; do
       ;;
     --enable-logging)
       CODEGEN_OPTIONS="$CODEGEN_OPTIONS --enable-logging"
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      ;;
+    --skip-gen)
+      SKIP_GEN=1
       # Remove this specific argument from $@
       set -- "${@/$arg/}"
       ;;
@@ -135,31 +141,7 @@ rm -f $TPCH_CUDA_GEN_DIR/q*$FILE_SUFFIX.codegen.cu
 rm -f $TPCH_CUDA_GEN_DIR/*.csv
 rm -f $TPCH_CUDA_GEN_DIR/*.log
 
-if [ $USE_RUN_SQL -eq 1 ]; then
-  # generate the cuda files
-  for QUERY in "${QUERIES[@]}"; do
-    # First run the run-sql tool to generate CUDA and get reference output
-    OUTPUT_FILE=$SCRIPT_DIR/"tpch-$QUERY-ref.csv"
-    RUN_SQL="$BUILD_DIR/run-sql $TPCH_DIR/$QUERY.sql $TPCH_DATA_DIR --gen-cuda-code $CODEGEN_OPTIONS"
-    echo $RUN_SQL
-    $RUN_SQL > $OUTPUT_FILE
-
-    if [ $? -ne 0 ]; then
-      echo -e "\033[0;31mError running run-sql for Query $QUERY\033[0m"
-      exit 1
-    fi
-
-    # format the generated cuda code
-    FORMAT_CMD="clang-format -i output.cu -style=Microsoft"
-    echo $FORMAT_CMD
-    $FORMAT_CMD
-
-    # Now run the generated CUDA code
-    CP_CMD="cp output.cu $TPCH_CUDA_GEN_DIR/q$QUERY$FILE_SUFFIX.codegen.cu"
-    echo $CP_CMD
-    $CP_CMD
-  done
-else
+if [ $SKIP_GEN -eq 0 ]; then
   echo "Using batch gen-cuda"    
   GEN_CUDF="$BUILD_DIR/gen-cuda $TPCH_DATA_DIR --gen-cuda-code $CODEGEN_OPTIONS"
   # First run the run-sql tool to generate CUDA and get reference output
