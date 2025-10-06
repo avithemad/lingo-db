@@ -611,18 +611,25 @@ class CrystalTupleStreamCode : public TupleStreamCode {
       appendKernel("#pragma unroll", KernelType::Main);
       appendKernel(fmt::format("for (int ITEM = 0; ITEM < ITEMS_PER_THREAD && (ITEM*TB + tid < {0}); ++ITEM) {{", kernelSize), KernelType::Main);
       appendKernel(fmt::format("if (!selection_flags[ITEM]) continue;"), KernelType::Main);
-      appendKernel(fmt::format("auto {0} = atomicAdd((int*){1}, 1);", buf_idx(op), BUF_IDX(op)), KernelType::Main);
-      appendKernel(fmt::format("{0}.insert(cuco::pair{{{1}[ITEM], {2}}});", HT(op), key, buf_idx(op)), KernelType::Main);
       auto baseRelations = getBaseRelations(columnData);
-      int i = 0;
-      for (auto br : baseRelations) {
-         appendKernel(fmt::format("{0}[({1}) * {2} + {3}] = {4};",
-                                  BUF(op),
-                                  buf_idx(op),
-                                  std::to_string(baseRelations.size()),
-                                  i++,
-                                  br.second),
-                      KernelType::Main);
+      bool shouldUseBuf = baseRelations.size() > 1 || !gUseHTValForRowIdx;
+      if (shouldUseBuf) {
+         appendKernel(fmt::format("auto {0} = atomicAdd((int*){1}, 1);", buf_idx(op), BUF_IDX(op)), KernelType::Main);
+         appendKernel(fmt::format("{0}.insert(cuco::pair{{{1}[ITEM], {2}}});", HT(op), key, buf_idx(op)), KernelType::Main);
+         int i = 0;
+         for (auto br : baseRelations) {
+            appendKernel(fmt::format("{0}[({1}) * {2} + {3}] = {4};",
+                                    BUF(op),
+                                    buf_idx(op),
+                                    std::to_string(baseRelations.size()),
+                                    i++,
+                                    br.second),
+                        KernelType::Main);
+         }
+      } else {
+         // insert the row id of the first base relation
+         assert(baseRelations.size() >= 1);
+         appendKernel(fmt::format("{0}.insert(cuco::pair{{{1}[ITEM], {2}}});", HT(op), key, baseRelations.begin()->second), KernelType::Main);
       }
       appendKernel("}", KernelType::Main);
       mainArgs[BUF_IDX(op)] = getBufIdxPtrType();
@@ -670,6 +677,7 @@ class CrystalTupleStreamCode : public TupleStreamCode {
 
       // add all leftColumn data to this data
       auto baseRelations = getBaseRelations(leftColumnData);
+      bool shouldUseBuf = baseRelations.size() > 1 || !gUseHTValForRowIdx;
       std::map<int, int> streamIdToBufId;
       int i = 0;
       // TODO(avinash): Check this logic, there is a bug in this refer q9.
@@ -681,11 +689,16 @@ class CrystalTupleStreamCode : public TupleStreamCode {
          if (colData.second == nullptr) continue;
 
          if (colData.second->type == ColumnType::Direct) {
-            colData.second->rid = fmt::format("{3}[{0}[ITEM] * {1} + {2}]",
-                                              slot_second(op),
-                                              std::to_string(baseRelations.size()),
-                                              streamIdToBufId[colData.second->streamId],
-                                              BUF(op));
+            if (shouldUseBuf) {
+               colData.second->rid = fmt::format("{3}[{0}[ITEM] * {1} + {2}]",
+                                                slot_second(op),
+                                                std::to_string(baseRelations.size()),
+                                                streamIdToBufId[colData.second->streamId],
+                                                BUF(op));
+            } else {
+               // just use the val from the hash table
+               colData.second->rid = fmt::format("{0}[ITEM]", slot_second(op));
+            }
             columnData[colData.first] = colData.second;
             mlirToGlobalSymbol[colData.second->loadExpression] = colData.second->globalId;
          }

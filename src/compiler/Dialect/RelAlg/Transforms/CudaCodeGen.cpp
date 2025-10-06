@@ -792,29 +792,35 @@ class HyperTupleStreamCode : public TupleStreamCode {
       auto keys = joinOp->getAttrOfType<mlir::ArrayAttr>(hash);
       auto key = MakeKeys(op, keys, KernelType::Main);
       appendKernel("// Insert hash table kernel;", KernelType::Main);
-      appendKernel(fmt::format("auto {0} = atomicAdd((int*){1}, 1);", buf_idx(op), BUF_IDX(op)), KernelType::Main);
-      appendKernel(fmt::format("{0}.insert(cuco::pair{{{1}, {2}}});", HT(op), key, buf_idx(op)), KernelType::Main);
       auto baseRelations = getBaseRelations(columnData);
-      int i = 0;
-      for (auto br : baseRelations) {
-         appendKernel(fmt::format("{0}[{1} * {2} + {3}] = {4};",
-                                  BUF(op),
-                                  buf_idx(op),
-                                  std::to_string(baseRelations.size()),
-                                  i++,
-                                  br.second),
-                      KernelType::Main);
+      bool shouldUseBuf = baseRelations.size() > 1 || !gUseHTValForRowIdx;
+      if (shouldUseBuf) {
+         appendKernel(fmt::format("auto {0} = atomicAdd((int*){1}, 1);", buf_idx(op), BUF_IDX(op)), KernelType::Main);
+         appendKernel(fmt::format("{0}.insert(cuco::pair{{{1}, {2}}});", HT(op), key, buf_idx(op)), KernelType::Main);
+         int i = 0;
+         for (auto br : baseRelations) {
+            appendKernel(fmt::format("{0}[{1} * {2} + {3}] = {4};",
+                                    BUF(op),
+                                    buf_idx(op),
+                                    std::to_string(baseRelations.size()),
+                                    i++,
+                                    br.second),
+                        KernelType::Main);
+         }
+      } else {
+         // insert the row id of the first base relation
+         assert(baseRelations.size() >= 1);
+         appendKernel(fmt::format("{0}.insert(cuco::pair{{{1}, {2}}});", HT(op), key, baseRelations.begin()->second), KernelType::Main);
       }
-
-      mainArgs[BUF_IDX(op)] = getBufIdxPtrType();
       if (pk)
          mainArgs[HT(op)] = "HASHTABLE_INSERT_PK";
       else
          mainArgs[HT(op)] = "HASHTABLE_INSERT";
+      mainArgs[BUF_IDX(op)] = getBufIdxPtrType();
       mainArgs[BUF(op)] = getBufPtrType();
       mlirToGlobalSymbol[BUF_IDX(op)] = fmt::format("d_{}", BUF_IDX(op));
-      mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::insert)", HT(op));
       mlirToGlobalSymbol[BUF(op)] = fmt::format("d_{}", BUF(op));
+      mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::insert)", HT(op));
       appendControl("// Insert hash table control;");
       appendControlDecl(fmt::format("{1} d_{0} = nullptr;", BUF_IDX(op), getBufIdxPtrType()));
       appendControl(fmt::format("cudaMallocExt(&d_{0}, sizeof({1}));", BUF_IDX(op), getBufIdxType()));
@@ -980,6 +986,7 @@ class HyperTupleStreamCode : public TupleStreamCode {
       
       // add all leftColumn data to this data
       auto baseRelations = getBaseRelations(leftColumnData);
+      bool shouldUseBuf = baseRelations.size() > 1 || !gUseHTValForRowIdx;
       std::map<int, int> streamIdToBufId;
       int i = 0;
       // TODO(avinash): Check this logic, there is a bug in this refer q9.
@@ -1000,11 +1007,17 @@ class HyperTupleStreamCode : public TupleStreamCode {
             }
             // #else
             else {
-               colData.second->rid = fmt::format("{3}[{0} * {1} + {2}]",
-                                                 slot_or_shuf_val(op),
-                                                 std::to_string(baseRelations.size()),
-                                                 streamIdToBufId[colData.second->streamId],
-                                                 BUF(op));
+               if (shouldUseBuf) {
+               
+                  colData.second->rid = fmt::format("{3}[{0} * {1} + {2}]",
+                                                   slot_or_shuf_val(op),
+                                                   std::to_string(baseRelations.size()),
+                                                   streamIdToBufId[colData.second->streamId],
+                                                   BUF(op));
+                  } else {
+                     // just use the val from the hash table
+                     colData.second->rid = slot_or_shuf_val(op);
+                  }
             }
             // #endif
             // colData.second->streamId = id;

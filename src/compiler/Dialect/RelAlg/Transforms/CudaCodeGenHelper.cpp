@@ -21,6 +21,7 @@ static bool gGenKernelTimingCode = false;
 static bool gGenPerOperationProfile = false;
 static bool gGenIsProfiling = false; // Do not generate multiple iteration loops if we are profiling
 static bool gPartitionHashJoinCodeGenEnabled = false;
+bool gUseHTValForRowIdx = true; // Use hash table value as row index instead of storing row index separately in a buf
 
 bool generateKernelTimingCode() { return gGenKernelTimingCode; }
 bool generatePerOperationProfile() { return gGenPerOperationProfile; }
