@@ -5,6 +5,7 @@ CODEGEN_OPTIONS=""
 SUB_DIR="."
 SUFFIX=""
 SKIP_GEN=0
+CONTINUOUS_ARG=""
 for arg in "$@"; do
   case $arg in
     --smaller-hash-tables)
@@ -61,6 +62,12 @@ for arg in "$@"; do
       ;;
     --skip-gen)
       SKIP_GEN=1
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      ;;
+    --continuous)
+      CONTINUOUS_ARG="--continuous"
+      echo "Continuous mode enabled."
       # Remove this specific argument from $@
       set -- "${@/$arg/}"
       ;;
@@ -147,8 +154,6 @@ echo "Output file: $OUTPUT_FILE"
 
 # Empty the output file
 echo -n "" > $OUTPUT_FILE
-USE_RUN_SQL=0
-
 if [ $SKIP_GEN -eq 0 ]; then
   FILE_SUFFIX=".crystal"
   GEN_CUDF="$BUILD_DIR/gen-cuda $TPCH_DATA_DIR --gen-cuda-crystal-code --gen-kernel-timing $CODEGEN_OPTIONS"
@@ -200,7 +205,7 @@ done
 QUERIES_STR="${QUERIES_STR%,*}" # remove trailing comma
 echo "QUERIES_STR: $QUERIES_STR"
 
-RUN_QUERY_CMD="build/dbruntime --data_dir $TPCH_DATA_DIR/ --query_num $QUERIES_STR --op_file $OUTPUT_FILE --scale_factor $SCALE_FACTOR"
+RUN_QUERY_CMD="build/dbruntime --data_dir $TPCH_DATA_DIR/ --query_num $QUERIES_STR --op_file $OUTPUT_FILE --scale_factor $SCALE_FACTOR $CONTINUOUS_ARG"
 echo $RUN_QUERY_CMD
 $RUN_QUERY_CMD
 

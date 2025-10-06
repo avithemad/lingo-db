@@ -6,6 +6,7 @@ FILE_SUFFIX=""
 SUB_DIR="."
 SUFFIX=""
 SKIP_GEN=0
+CONTINUOUS_ARG=""
 for arg in "$@"; do
   case $arg in
     --smaller-hash-tables)
@@ -81,6 +82,12 @@ for arg in "$@"; do
       ;;
     --skip-gen)
       SKIP_GEN=1
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      ;;
+    --continuous)
+      CONTINUOUS_ARG="--continuous"
+      echo "Continuous mode enabled."
       # Remove this specific argument from $@
       set -- "${@/$arg/}"
       ;;
@@ -217,7 +224,7 @@ QUERIES_STR=$(IFS=,; echo "${QUERIES_WITH_SUFFIX[*]}")
 
 echo $QUERIES_STR
 
-RUN_QUERY_CMD="build/dbruntime --data_dir $TPCH_DATA_DIR/ --query_num $QUERIES_STR --op_file $OUTPUT_FILE --scale_factor $SCALE_FACTOR"
+RUN_QUERY_CMD="build/dbruntime --data_dir $TPCH_DATA_DIR/ --query_num $QUERIES_STR --op_file $OUTPUT_FILE --scale_factor $SCALE_FACTOR $CONTINUOUS_ARG"
 echo $RUN_QUERY_CMD
 $RUN_QUERY_CMD
 
