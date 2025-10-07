@@ -72,6 +72,7 @@ for arg in "$@"; do
     --use-partition-hash-join)
       CODEGEN_OPTIONS="$CODEGEN_OPTIONS --use-partition-hash-join"
       FILE_SUFFIX=".phj"
+      SUFFIX="$SUFFIX-phj"
       # Remove this specific argument from $@
       set -- "${@/$arg/}"
       ;;

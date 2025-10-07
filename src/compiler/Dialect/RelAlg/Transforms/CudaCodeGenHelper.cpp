@@ -226,6 +226,8 @@ size_t TupleStreamCode::getL2CacheSize() {
          return 72 * 1024 * 1024; // 72MB for RTX 4090
       } else if (gpuName == "4060") {
          return 24 * 1024 * 1024; // 24MB for RTX 4060
+      } else if (gpuName == "A100") {
+         return 40 * 1024 * 1024; // 40MB for A100
       }
    } 
    std::cerr << "Warning: Unknown GPU name in CUR_GPU environment variable.\n";
