@@ -149,9 +149,6 @@ if [ $SKIP_GEN -eq 0 ]; then
   done
 fi
 
-# delete the temporary output.cu file
-rm output.cu
-
 
 # compile the cuda files
 for QUERY in "${QUERIES[@]}"; do
