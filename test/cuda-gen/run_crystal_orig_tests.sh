@@ -1,5 +1,8 @@
 #!/bin/bash
 
+CODEGEN_OPTIONS="--smaller-hash-tables"
+PROFILING=0
+SKIP_GEN=0
 # The first argument is the scale factor
 SCALE_FACTOR="$1"
 if [ -z "$SCALE_FACTOR" ]; then
@@ -27,11 +30,6 @@ if [ -z "$BUILD_NAME" ]; then
   BUILD_NAME="lingodb-debug"
 fi
 
-# Set the data directory if not already set
-if [ -z "$SSB_DATA_DIR" ]; then
-  SSB_DATA_DIR="$REPO_DIR/resources/data/ssb-$SCALE_FACTOR"
-fi
-
 if [ -n "$CUR_GPU" ]; then
   echo "Using CUR_GPU from environment variable: $CUR_GPU"
 else
@@ -46,19 +44,52 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEST_DIR="$(dirname "$SCRIPT_DIR")"
 REPO_DIR="$(dirname "$TEST_DIR")"
 
+# Set the data directory if not already set
+if [ -z "$SSB_DATA_DIR" ]; then
+  SSB_DATA_DIR="$REPO_DIR/resources/data/ssb-$SCALE_FACTOR"
+fi
+
 SSB_QUERY_DIR="$REPO_DIR/resources/sql/ssb"
 BUILD_DIR="$REPO_DIR/build/$BUILD_NAME"
+
+# Set the data directory if not already set
+if [ -z "$SSB_DATA_DIR" ]; then
+  SSB_DATA_DIR="$REPO_DIR/resources/data/ssb-$SCALE_FACTOR"
+fi
 
 OUTPUT_DIR=$SQL_PLAN_COMPILER_DIR/reports/ncu/$CUR_GPU/ssb-$SCALE_FACTOR/crystal-orig
 mkdir -p $OUTPUT_DIR
 echo "Output directory: $OUTPUT_DIR"
 
-QUERIES=(11 12 13 21 22 23 31 32 33 34 41 42 43)
+if [ -z "$QUERIES" ]; then
+  QUERIES=(11 12 13 21 22 23 31 32 33 34 41 42 43)
+fi
 
-# cleanup the result files and logs
-rm -f $SCRIPT_DIR/*.csv
-rm -f $TPCH_CUDF_PY_DIR/*.csv
-rm -f $TPCH_CUDF_PY_DIR/*.log
+SSB_CUDA_GEN_DIR="$SQL_PLAN_COMPILER_DIR/gpu-db/ssb-$SCALE_FACTOR"
+echo "SSB_CUDA_GEN_DIR: $SSB_CUDA_GEN_DIR"
+pushd $SSB_CUDA_GEN_DIR
+
+
+if [ $SKIP_GEN -eq 0 ]; then
+
+  # cleanup the result files, built shared objects
+  rm -f build/*.codegen.so # do this so that we don't run other queries by mistake
+  rm -f $SCRIPT_DIR/*.csv
+  rm -f $SSB_CUDA_GEN_DIR/*.csv
+  rm -f $SSB_CUDA_GEN_DIR/*.log
+  rm -f $SSB_CUDA_GEN_DIR/*.codegen.cu
+
+  # generate new files
+  FILE_SUFFIX=".crystal"
+  GEN_CUDF="$BUILD_DIR/gen-cuda $SSB_DATA_DIR --ssb $CODEGEN_OPTIONS"
+  for QUERY in "${QUERIES[@]}"; do
+    # First run the run-sql tool to generate CUDA and get reference output
+    OUTPUT_FILE=$SSB_CUDA_GEN_DIR/ssb-$QUERY-ref.csv
+    GEN_CUDF="$GEN_CUDF $SSB_QUERY_DIR/$QUERY.sql $SSB_CUDA_GEN_DIR/q$QUERY$FILE_SUFFIX.codegen.cu $OUTPUT_FILE" 
+  done
+  echo $GEN_CUDF
+  $GEN_CUDF > /dev/null # ignore the output. We are not comparing
+fi
 
 # run the crystal orig tests
 SSB_UTILS_H="$CRYSTAL_PATH/src/ssb/ssb_utils.h"
@@ -74,7 +105,7 @@ SETUP_CRYSTAL="make setup"
 echo $SETUP_CRYSTAL
 $SETUP_CRYSTAL
 
-# compiler the queries
+# compile the queries
 for QUERY in "${QUERIES[@]}"; do
   MAKE_QUERY="make bin/ssb/q$QUERY"
   echo $MAKE_QUERY
@@ -93,45 +124,10 @@ for QUERY in "${QUERIES[@]}"; do
   $RUN_QUERY > $OUTPUT_FILE
 done
 
-exit 1
-
-# generate the ref csv files
-FILE_SUFFIX=".crystal"
-GEN_CUDF="$BUILD_DIR/gen-cuda $TPCH_DATA_DIR --gen-cuda-crystal-code $CODEGEN_OPTIONS"
-for QUERY in "${QUERIES[@]}"; do
-  # First run the run-sql tool to generate CUDA and get reference output
-  OUTPUT_FILE=$SCRIPT_DIR/"tpch-$QUERY-ref.csv"
-  GEN_CUDF="$GEN_CUDF $TPCH_DIR/$QUERY.sql $TPCH_CUDA_GEN_DIR/q$QUERY$FILE_SUFFIX.codegen.cu $OUTPUT_FILE" 
-done
-echo $GEN_CUDF
-$GEN_CUDF > /dev/null # ignore the output. We are not comparing
-
-for QUERY in "${QUERIES[@]}"; do
-  # format the generated cuda code
-  FORMAT_CMD="clang-format -i $TPCH_CUDA_GEN_DIR/q$QUERY$FILE_SUFFIX.codegen.cu -style=Microsoft"
-  echo $FORMAT_CMD
-  $FORMAT_CMD
-done
-
 FAILED_QUERIES=()
-
-# run all the queries
-# Convert QUERIES array to comma-separated string
-QUERIES_STR=$(IFS=,; echo "${QUERIES[*]}")
-
-TPCH_CUDF_PY_DIR="$SQL_PLAN_COMPILER_DIR/cudf/tpch"
-echo "TPCH_CUDF_PY_DIR: $TPCH_CUDF_PY_DIR"
-pushd $TPCH_CUDF_PY_DIR
-
-RUN_QUERY_CMD="python run_cudf_tpch_queries.py $SSB_DATA_DIR/ $QUERIES_STR $OUTPUT_DIR/ssb-$SCALE_FACTOR-cudf.csv"
-echo $RUN_QUERY_CMD
-$RUN_QUERY_CMD
-
-cd -
-
 for QUERY in "${QUERIES[@]}"; do
   OUTPUT_FILE="ssb-$QUERY-ref.csv"
-  PYTHON_CMD="python $SCRIPT_DIR/compare_tpch_outputs.py $SCRIPT_DIR/$OUTPUT_FILE $TPCH_CUDF_PY_DIR/cudf-ssb-$QUERY.csv --test-has-header"
+  PYTHON_CMD="python $SCRIPT_DIR/compare_tpch_outputs.py $SSB_CUDA_GEN_DIR/$OUTPUT_FILE $CRYSTAL_OP_PATH/ssb-$QUERY-crystal-orig.csv --test-has-header"
   echo $PYTHON_CMD
   $PYTHON_CMD
 
@@ -149,7 +145,7 @@ done
 # Print some new lines and then a seperator
 echo -e "\n"
 echo "=============================="
-echo "TPCH TEST RESULTS"
+echo "SSB TEST RESULTS"
 echo "=============================="
 echo "Passed queries: ${PASSED_QUERIES[@]}"
 echo "Failed queries: ${FAILED_QUERIES[@]}"

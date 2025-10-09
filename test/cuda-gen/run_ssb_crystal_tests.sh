@@ -1,7 +1,6 @@
 #!/bin/bash
 
 CODEGEN_OPTIONS="--smaller-hash-tables"
-USE_RUN_SQL=0 # set to 1 to use run-sql to generate cuda code. 0 to use batch gen-cuda
 PROFILING=0
 SKIP_GEN=0
 # The first argument is the scale factor
@@ -39,11 +38,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEST_DIR="$(dirname "$SCRIPT_DIR")"
 REPO_DIR="$(dirname "$TEST_DIR")"
 
-SSB_DIR="$REPO_DIR/resources/sql/ssb"
+SSB_QUERY_DIR="$REPO_DIR/resources/sql/ssb"
 BUILD_DIR="$REPO_DIR/build/$BUILD_NAME"
 
 # Set the data directory if not already set
-if [ -z "$TSSB_DATA_DIR" ]; then
+if [ -z "$SSB_DATA_DIR" ]; then
   SSB_DATA_DIR="$REPO_DIR/resources/data/ssb-$SCALE_FACTOR"
 fi
 
@@ -64,8 +63,6 @@ if [ $? -ne 0 ]; then
   exit 1
 fi
 
-
-
 if [ $SKIP_GEN -eq 0 ]; then
 
   # cleanup the result files, built shared objects
@@ -80,7 +77,7 @@ if [ $SKIP_GEN -eq 0 ]; then
   GEN_CUDF="$BUILD_DIR/gen-cuda $SSB_DATA_DIR --gen-cuda-crystal-code --ssb $CODEGEN_OPTIONS"
   for QUERY in "${QUERIES[@]}"; do
     # First run the run-sql tool to generate CUDA and get reference output
-    OUTPUT_FILE=$SCRIPT_DIR/"ssb-$QUERY-ref.csv"
+    OUTPUT_FILE=$SSB_CUDA_GEN_DIR/"ssb-$QUERY-ref.csv"
     GEN_CUDF="$GEN_CUDF $SSB_DIR/$QUERY.sql $SSB_CUDA_GEN_DIR/q$QUERY$FILE_SUFFIX.codegen.cu $OUTPUT_FILE" 
   done
   echo $GEN_CUDF
@@ -94,18 +91,17 @@ if [ $SKIP_GEN -eq 0 ]; then
   done
 fi
 
-
 # compile the cuda files
 for QUERY in "${QUERIES[@]}"; do
   MAKE_QUERY="make query Q=$QUERY.crystal CUCO_SRC_PATH=$CUCO_SRC_PATH"
   echo $MAKE_QUERY
   $MAKE_QUERY &
   
-  # Check if the make command was successful
 done
 
 wait
 
+# Check if the make command was successful
 FAILED_QUERIES=()
 for QUERY in "${QUERIES[@]}"; do
   if [ ! -f build/q$QUERY.crystal.codegen.so ]; then
@@ -136,7 +132,7 @@ $RUN_QUERY_CMD
 
 for QUERY in "${QUERIES[@]}"; do
   OUTPUT_FILE="ssb-$QUERY-ref.csv"
-  PYTHON_CMD="python $SCRIPT_DIR/compare_tpch_outputs.py $SCRIPT_DIR/$OUTPUT_FILE $SSB_CUDA_GEN_DIR/cuda-ssb-$QUERY.crystal.csv"
+  PYTHON_CMD="python $SCRIPT_DIR/compare_tpch_outputs.py $SSB_CUDA_GEN_DIR/$OUTPUT_FILE $SSB_CUDA_GEN_DIR/cuda-ssb-$QUERY.crystal.csv"
   echo $PYTHON_CMD
   $PYTHON_CMD
 
