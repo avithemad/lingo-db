@@ -165,6 +165,11 @@ if [ $SKIP_GEN -eq 0 ]; then
   echo $GEN_CUDF
   $GEN_CUDF > /dev/null # ignore the output. We are not comparing
 
+  if [ $? -ne 0 ]; then
+    echo -e "\033[0;31mError generating CUDA code!\033[0m"
+    exit 1
+  fi
+
   for QUERY in "${QUERIES[@]}"; do
     # format the generated cuda code
     FORMAT_CMD="clang-format -i $TPCH_CUDA_GEN_DIR/q$QUERY$FILE_SUFFIX.codegen.cu -style=Microsoft"

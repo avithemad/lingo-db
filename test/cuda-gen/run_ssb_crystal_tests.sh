@@ -3,6 +3,67 @@
 CODEGEN_OPTIONS="--smaller-hash-tables"
 PROFILING=0
 SKIP_GEN=0
+CONTINUOUS_ARG=""
+# for each arg in args
+for arg in "$@"; do
+  case $arg in
+    --smaller-hash-tables)
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --smaller-hash-tables" # make this default for now
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      ;;
+    --use-bloom-filters)
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --use-bloom-filters"
+      echo "Use bloom filters option is not supported in crystal codegen."
+      exit 1
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      ;;
+    --threads-always-alive)
+      echo "Threads always alive option is not supported in crystal codegen."
+      exit 1
+      ;;
+    --pyper-shuffle)
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --pyper-shuffle"
+      echo "Pyper shuffle option is not supported in crystal codegen."
+      exit 1
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      ;;
+    --profiling)
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --profiling"
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      PROFILING=1
+      ;;
+    --shuffle-all-ops)
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --shuffle-all-ops"
+      echo "Shuffle all ops option is not supported in crystal codegen."
+      exit 1
+      ;;
+    --two-items-per-thread)
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --two-items-per-thread"
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      ;;
+    --one-item-per-thread)
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --one-item-per-thread"
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      ;;
+    --skip-gen)
+      SKIP_GEN=1
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      ;;
+    --continuous)
+      CONTINUOUS_ARG="--continuous"
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      ;;
+  esac
+done
+
 # The first argument is the scale factor
 SCALE_FACTOR="$1"
 if [ -z "$SCALE_FACTOR" ]; then
@@ -78,10 +139,15 @@ if [ $SKIP_GEN -eq 0 ]; then
   for QUERY in "${QUERIES[@]}"; do
     # First run the run-sql tool to generate CUDA and get reference output
     OUTPUT_FILE=$SSB_CUDA_GEN_DIR/"ssb-$QUERY-ref.csv"
-    GEN_CUDF="$GEN_CUDF $SSB_DIR/$QUERY.sql $SSB_CUDA_GEN_DIR/q$QUERY$FILE_SUFFIX.codegen.cu $OUTPUT_FILE" 
+    GEN_CUDF="$GEN_CUDF $SSB_QUERY_DIR/$QUERY.sql $SSB_CUDA_GEN_DIR/q$QUERY$FILE_SUFFIX.codegen.cu $OUTPUT_FILE" 
   done
   echo $GEN_CUDF
   $GEN_CUDF > /dev/null # ignore the output. We are not comparing
+
+  if [ $? -ne 0 ]; then
+    echo -e "\033[0;31mError generating CUDA code!\033[0m"
+    exit 1
+  fi
 
   for QUERY in "${QUERIES[@]}"; do
     # format the generated cuda code
@@ -124,11 +190,16 @@ for i in "${QUERIES[@]}"; do
 done
 QUERIES_STR="${QUERIES_STR%,*}" # remove trailing comma
 
-RUN_QUERY_CMD="build/dbruntime --data_dir $SSB_DATA_DIR/ --query_num $QUERIES_STR"
+RUN_QUERY_CMD="build/dbruntime --data_dir $SSB_DATA_DIR/ --query_num $QUERIES_STR $CONTINUOUS_ARG"
 echo $RUN_QUERY_CMD
 $RUN_QUERY_CMD
 
-  cd -
+if [ $? -ne 0 ]; then
+  echo -e "\033[0;31mError running queries!\033[0m"
+  exit 1
+fi
+
+cd -
 
 for QUERY in "${QUERIES[@]}"; do
   OUTPUT_FILE="ssb-$QUERY-ref.csv"

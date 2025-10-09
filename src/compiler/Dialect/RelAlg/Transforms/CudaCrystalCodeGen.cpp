@@ -408,6 +408,8 @@ class CrystalTupleStreamCode : public TupleStreamCode {
          if (auto returnOp = mlir::dyn_cast_or_null<tuples::ReturnOp>(predicateBlock.getTerminator())) {
             mlir::Value matched = returnOp.getResults()[0];
             std::string condition = SelectionOpDfs(matched.getDefiningOp());
+            if (condition == "!(false)" || condition == "true")
+               return; // This is a null check op. No-op for now
             std::string kernelSize = getKernelSizeVariable();
             appendKernel("#pragma unroll");
             appendKernel(fmt::format("for (int ITEM = 0; ITEM < ITEMS_PER_THREAD && (ITEM*TB + tid < {0}); ++ITEM) {{", kernelSize));
