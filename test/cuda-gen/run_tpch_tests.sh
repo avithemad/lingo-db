@@ -134,14 +134,15 @@ if [ $? -ne 0 ]; then
   exit 1
 fi
 
-# cleanup the result files, built shared objects
-rm -f build/*.codegen.so # do this so that we don't run other queries by mistake
-rm -f $SCRIPT_DIR/*.csv
-rm -f $TPCH_CUDA_GEN_DIR/q*$FILE_SUFFIX.codegen.cu
-rm -f $TPCH_CUDA_GEN_DIR/*.csv
-rm -f $TPCH_CUDA_GEN_DIR/*.log
-
 if [ $SKIP_GEN -eq 0 ]; then
+
+  # cleanup the result files, built shared objects
+  rm -f build/*.codegen.so # do this so that we don't run other queries by mistake
+  rm -f $SCRIPT_DIR/*.csv
+  rm -f $TPCH_CUDA_GEN_DIR/q*$FILE_SUFFIX.codegen.cu
+  rm -f $TPCH_CUDA_GEN_DIR/*.csv
+  rm -f $TPCH_CUDA_GEN_DIR/*.log
+  
   echo "Using batch gen-cuda"    
   GEN_CUDF="$BUILD_DIR/gen-cuda $TPCH_DATA_DIR --gen-cuda-code $CODEGEN_OPTIONS"
   # First run the run-sql tool to generate CUDA and get reference output

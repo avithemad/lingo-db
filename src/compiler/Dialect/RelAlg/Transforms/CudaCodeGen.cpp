@@ -916,10 +916,9 @@ class HyperTupleStreamCode : public TupleStreamCode {
 
       recordHashTableProbe(op);
 
-      // device
       appendControlDecl(fmt::format("uint64_t* d_{0}_PreCounter = nullptr;", HT(op)));      
-      appendKernel(fmt::format("atomicAdd((int*){0}_PreCounter, 1);", HT(op)), KernelType::Count);
-      countArgs[fmt::format("{0}_PreCounter", HT(op))] = "uint64_t*";
+      appendKernel(fmt::format("atomicAdd((int*){0}_PreCounter, 1);", HT(op)), KernelType::Main);
+      mainArgs[fmt::format("{0}_PreCounter", HT(op))] = "uint64_t*";
       mlirToGlobalSymbol[fmt::format("{0}_PreCounter", HT(op))] = fmt::format("d_{0}_PreCounter", HT(op));      
       appendControl(fmt::format("cudaMallocExt(&d_{0}_PreCounter, sizeof(uint64_t));", HT(op)));
       deviceFrees.insert(fmt::format("d_{0}_PreCounter", HT(op)));
@@ -935,8 +934,8 @@ class HyperTupleStreamCode : public TupleStreamCode {
 
       // device
       appendControlDecl(fmt::format("uint64_t* d_{0}_PostCounter = nullptr;", HT(op)));      
-      appendKernel(fmt::format("atomicAdd((int*){0}_PostCounter, 1);", HT(op)), KernelType::Count);
-      countArgs[fmt::format("{0}_PostCounter", HT(op))] = "uint64_t*";
+      appendKernel(fmt::format("atomicAdd((int*){0}_PostCounter, 1);", HT(op)), KernelType::Main);
+      mainArgs[fmt::format("{0}_PostCounter", HT(op))] = "uint64_t*";
       mlirToGlobalSymbol[fmt::format("{0}_PostCounter", HT(op))] = fmt::format("d_{0}_PostCounter", HT(op));      
       appendControl(fmt::format("cudaMallocExt(&d_{0}_PostCounter, sizeof(uint64_t));", HT(op)));
       deviceFrees.insert(fmt::format("d_{0}_PostCounter", HT(op)));
@@ -1177,7 +1176,7 @@ cuco::linear_probing<1, cuco::default_hash_function<{2}>>() }};",
                }
                switch (fn) {
                   case relalg::AggrFunc::sum: {
-                     appendKernel(fmt::format("aggregate_sum(&{0}, {1});", slot, val), KernelType::Main);
+                        appendKernel(fmt::format("aggregate_sum(&{0}, {1});", slot, val), KernelType::Main);
                   } break;
                   case relalg::AggrFunc::count: {
                      appendKernel(fmt::format("aggregate_sum(&{0}, 1);", slot), KernelType::Main);
