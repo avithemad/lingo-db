@@ -816,20 +816,23 @@ class HyperTupleStreamCode : public TupleStreamCode {
          mainArgs[HT(op)] = "HASHTABLE_INSERT_PK";
       else
          mainArgs[HT(op)] = "HASHTABLE_INSERT";
-      mainArgs[BUF_IDX(op)] = getBufIdxPtrType();
-      mainArgs[BUF(op)] = getBufPtrType();
-      mlirToGlobalSymbol[BUF_IDX(op)] = fmt::format("d_{}", BUF_IDX(op));
-      mlirToGlobalSymbol[BUF(op)] = fmt::format("d_{}", BUF(op));
-      mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::insert)", HT(op));
       appendControl("// Insert hash table control;");
-      appendControlDecl(fmt::format("{1} d_{0} = nullptr;", BUF_IDX(op), getBufIdxPtrType()));
-      appendControl(fmt::format("cudaMallocExt(&d_{0}, sizeof({1}));", BUF_IDX(op), getBufIdxType()));
-      deviceFrees.insert(fmt::format("d_{0}", BUF_IDX(op)));
-      appendControl(fmt::format("cudaMemset(d_{0}, 0, sizeof({1}));", BUF_IDX(op), getBufIdxType()));
-      appendControlDecl(fmt::format("{1} d_{0} = nullptr;", BUF(op), getBufPtrType()));
-      appendControl(fmt::format("cudaMallocExt(&d_{0}, sizeof({3}) * {1} * {2});", BUF(op), COUNT(op), baseRelations.size(), getBufEltType()));
-      printBufferSize(fmt::format("(sizeof({0}) * {1} * {2})", getBufEltType(), COUNT(op), baseRelations.size()), op);
-      deviceFrees.insert(fmt::format("d_{0}", BUF(op)));
+      mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::insert)", HT(op));
+      if (shouldUseBuf) {
+         mainArgs[BUF_IDX(op)] = getBufIdxPtrType();
+         mainArgs[BUF(op)] = getBufPtrType();
+         mlirToGlobalSymbol[BUF_IDX(op)] = fmt::format("d_{}", BUF_IDX(op));
+         mlirToGlobalSymbol[BUF(op)] = fmt::format("d_{}", BUF(op));
+         
+         appendControlDecl(fmt::format("{1} d_{0} = nullptr;", BUF_IDX(op), getBufIdxPtrType()));
+         appendControl(fmt::format("cudaMallocExt(&d_{0}, sizeof({1}));", BUF_IDX(op), getBufIdxType()));
+         deviceFrees.insert(fmt::format("d_{0}", BUF_IDX(op)));
+         appendControl(fmt::format("cudaMemset(d_{0}, 0, sizeof({1}));", BUF_IDX(op), getBufIdxType()));
+         appendControlDecl(fmt::format("{1} d_{0} = nullptr;", BUF(op), getBufPtrType()));
+         appendControl(fmt::format("cudaMallocExt(&d_{0}, sizeof({3}) * {1} * {2});", BUF(op), COUNT(op), baseRelations.size(), getBufEltType()));
+         printBufferSize(fmt::format("(sizeof({0}) * {1} * {2})", getBufEltType(), COUNT(op), baseRelations.size()), op);
+         deviceFrees.insert(fmt::format("d_{0}", BUF(op)));
+      }
       // #ifdef MULTIMAP
       printHashTableSize(COUNT(op), getHTKeyType(keys), getHTValueType(), "2", op);
       if (!pk)
@@ -1027,15 +1030,15 @@ class HyperTupleStreamCode : public TupleStreamCode {
       }
       if (pk) {
          mainArgs[HT(op)] = "HASHTABLE_PROBE_PK";
-         mainArgs[BUF(op)] = getBufPtrType();
          countArgs[HT(op)] = "HASHTABLE_PROBE_PK";
-         countArgs[BUF(op)] = getBufPtrType();
-         
       } else {
          mainArgs[HT(op)] = "HASHTABLE_PROBE";
-         mainArgs[BUF(op)] = getBufPtrType();
          countArgs[HT(op)] = "HASHTABLE_PROBE";
+      }
+      if (shouldUseBuf) {
+         mainArgs[BUF(op)] = getBufPtrType();
          countArgs[BUF(op)] = getBufPtrType();
+         mlirToGlobalSymbol[BUF(op)] = fmt::format("d_{}", BUF(op));
       }
       // #ifdef MULTIMAP
       if (!pk)
@@ -1044,7 +1047,6 @@ class HyperTupleStreamCode : public TupleStreamCode {
       else
          mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::find)", HT(op));
       // #endif
-      mlirToGlobalSymbol[BUF(op)] = fmt::format("d_{}", BUF(op));
    }
    void CreateAggregationHashTable(mlir::Operation* op) {
       // We'll run the count kernels twice to get a better estimate of the aggregation hash table size.

@@ -633,21 +633,23 @@ class CrystalTupleStreamCode : public TupleStreamCode {
          assert(baseRelations.size() >= 1);
          appendKernel(fmt::format("{0}.insert(cuco::pair{{{1}[ITEM], {2}}});", HT(op), key, baseRelations.begin()->second), KernelType::Main);
       }
-      appendKernel("}", KernelType::Main);
-      mainArgs[BUF_IDX(op)] = getBufIdxPtrType();
-      mainArgs[HT(op)] = "HASHTABLE_INSERT";
-      mainArgs[BUF(op)] = getBufPtrType();
-      mlirToGlobalSymbol[BUF_IDX(op)] = fmt::format("d_{}", BUF_IDX(op));
-      mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::insert)", HT(op));
-      mlirToGlobalSymbol[BUF(op)] = fmt::format("d_{}", BUF(op));
       appendControl("// Insert hash table control;");
-      appendControlDecl(fmt::format("{1} d_{0} = nullptr;", BUF_IDX(op), getBufIdxPtrType()));
-      appendControl(fmt::format("cudaMallocExt(&d_{0}, sizeof({1}));", BUF_IDX(op), getBufIdxType()));
-      deviceFrees.insert(fmt::format("d_{0}", BUF_IDX(op)));
-      appendControl(fmt::format("cudaMemset(d_{0}, 0, sizeof({1}));", BUF_IDX(op), getBufIdxType()));
-      appendControlDecl(fmt::format("{1} d_{0} = nullptr;", BUF(op), getBufPtrType()));
-      appendControl(fmt::format("cudaMallocExt(&d_{0}, sizeof({3}) * {1} * {2});", BUF(op), COUNT(op), baseRelations.size(), getBufEltType()));
-      deviceFrees.insert(fmt::format("d_{0}", BUF(op)));
+      appendKernel("}", KernelType::Main);
+      mainArgs[HT(op)] = "HASHTABLE_INSERT";
+      mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::insert)", HT(op));
+      if (shouldUseBuf) {
+         mainArgs[BUF_IDX(op)] = getBufIdxPtrType();
+         mainArgs[BUF(op)] = getBufPtrType();
+         mlirToGlobalSymbol[BUF_IDX(op)] = fmt::format("d_{}", BUF_IDX(op));
+         mlirToGlobalSymbol[BUF(op)] = fmt::format("d_{}", BUF(op));
+         appendControlDecl(fmt::format("{1} d_{0} = nullptr;", BUF_IDX(op), getBufIdxPtrType()));
+         appendControl(fmt::format("cudaMallocExt(&d_{0}, sizeof({1}));", BUF_IDX(op), getBufIdxType()));
+         deviceFrees.insert(fmt::format("d_{0}", BUF_IDX(op)));
+         appendControl(fmt::format("cudaMemset(d_{0}, 0, sizeof({1}));", BUF_IDX(op), getBufIdxType()));
+         appendControlDecl(fmt::format("{1} d_{0} = nullptr;", BUF(op), getBufPtrType()));
+         appendControl(fmt::format("cudaMallocExt(&d_{0}, sizeof({3}) * {1} * {2});", BUF(op), COUNT(op), baseRelations.size(), getBufEltType()));
+         deviceFrees.insert(fmt::format("d_{0}", BUF(op)));
+      }
       printHashTableSize(COUNT(op), getHTKeyType(keys), getHTValueType(), "2", op);
       appendControlDecl(fmt::format("auto d_{0} = cuco::static_map{{ (int) 1, cuco::empty_key{{({1})-1}},cuco::empty_value{{({2})-1}},thrust::equal_to<{1}>{{}},cuco::linear_probing<1, cuco::default_hash_function<{1}>>() }};",
                                    HT(op), getHTKeyType(keys), getHTValueType()));
@@ -707,11 +709,13 @@ class CrystalTupleStreamCode : public TupleStreamCode {
          columnData[colData.first] = colData.second;
       }
       mainArgs[HT(op)] = "HASHTABLE_PROBE";
-      mainArgs[BUF(op)] = getBufPtrType();
       countArgs[HT(op)] = "HASHTABLE_PROBE";
-      countArgs[BUF(op)] = getBufPtrType();
       mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::find)", HT(op));
-      mlirToGlobalSymbol[BUF(op)] = fmt::format("d_{}", BUF(op));
+      if (shouldUseBuf) {
+         mainArgs[BUF(op)] = getBufPtrType();
+         countArgs[BUF(op)] = getBufPtrType();
+         mlirToGlobalSymbol[BUF(op)] = fmt::format("d_{}", BUF(op));
+      }
    }
    void CreateAggregationHashTable(mlir::Operation* op) {
       // We'll run the count kernels twice to get a better estimate of the aggregation hash table size.
