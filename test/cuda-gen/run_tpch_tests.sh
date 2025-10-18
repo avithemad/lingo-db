@@ -162,9 +162,6 @@ if [ $SKIP_GEN -eq 0 ]; then
   done
 fi
 
-# delete the temporary output.cu file
-rm output.cu
-
 # compile the cuda files
 for QUERY in "${QUERIES[@]}"; do
   MAKE_QUERY="make query Q=$QUERY$FILE_SUFFIX CUCO_SRC_PATH=$CUCO_SRC_PATH"

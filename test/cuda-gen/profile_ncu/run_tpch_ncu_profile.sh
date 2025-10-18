@@ -97,6 +97,8 @@ for arg in "$@"; do
   esac
 done
 
+SUFFIX+=$PROFILE_SUFFIX
+
 # Assert that --two-items-per-thread is only used with --smaller-hash-tables
 if [[ "$CODEGEN_OPTIONS" == *"--two-items-per-thread"* ]] && [[ "$CODEGEN_OPTIONS" != *"--smaller-hash-tables"* ]]; then
   echo "Error: --two-items-per-thread can only be used with --smaller-hash-tables"
