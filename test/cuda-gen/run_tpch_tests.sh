@@ -5,6 +5,7 @@ FILE_SUFFIX=""
 USE_RUN_SQL=0 # set to 1 to use run-sql to generate cuda code. 0 to use batch gen-cuda
 PROFILING=0
 SKIP_GEN=0
+CONTINOUS_ARG=""
 # for each arg in args
 for arg in "$@"; do
   case $arg in
@@ -68,6 +69,16 @@ for arg in "$@"; do
       ;;
     --skip-gen)
       SKIP_GEN=1
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      ;;
+    --continuous)
+      CONTINOUS_ARG="--continuous"
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      ;;
+    --tile-hashtables)
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --tile-hashtables"
       # Remove this specific argument from $@
       set -- "${@/$arg/}"
       ;;
@@ -197,7 +208,7 @@ QUERIES_STR=$(IFS=,; echo "${QUERIES_WITH_SUFFIX[*]}")
 
 echo $QUERIES_STR
 
-RUN_QUERY_CMD="build/dbruntime --data_dir $TPCH_DATA_DIR/ --query_num $QUERIES_STR"
+RUN_QUERY_CMD="build/dbruntime --data_dir $TPCH_DATA_DIR/ --query_num $QUERIES_STR $CONTINOUS_ARG"
 echo $RUN_QUERY_CMD
 $RUN_QUERY_CMD
 

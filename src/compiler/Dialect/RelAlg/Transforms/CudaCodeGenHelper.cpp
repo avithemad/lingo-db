@@ -125,7 +125,9 @@ std::string SHUF_BUF_EXPR(const void* op) {
 std::string SHUF_BUF_VAL(const void* op) {
    return (op == nullptr ? "tid" : "slot_val_" + GetId(op));
 }
-
+std::string TILE_ID(const void *op) {
+   return HT(op) + "_tile_idx";
+}
 std::string GetId(const void* op){   
    std::string result = idGen.getId(op);
    return result;
@@ -249,6 +251,7 @@ bool gEnableLogging = false;
 BloomFilterPolicy gBloomFilterPolicy = AddBloomFiltersToAllJoins;
 bool gTwoItemsPerThread = false;
 bool gOneItemPerThread = false; // TODO: Make this an enum or an int config
+bool gTileHashTables = false;
 
 void removeCodeGenSwitch(int& argc, char** argv, int i) {
    // Remove --gen-cuda-code from the argument list
@@ -328,6 +331,7 @@ void checkForCodeGenSwitches(int& argc, char** argv) {
       std::make_tuple(&gEnableLogging, "--enable-logging", "enable logging"),
       std::make_tuple(&gTwoItemsPerThread, "--two-items-per-thread", "use two items per thread for crystal codegen"),
       std::make_tuple(&gOneItemPerThread, "--one-item-per-thread", "use one item per thread for crystal codegen"),
+      std::make_tuple(&gTileHashTables, "--tile-hashtables", "tiled hash tables")
    };
    for (const auto& [switchPtr, switchName, descr] : switches) {
       checkForCodegenSwitch(argc, argv, switchPtr, switchName, descr);

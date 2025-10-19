@@ -34,6 +34,10 @@ std::vector<std::string> split(std::string s, std::string delimiter);
 extern bool gPrintHashTableSizes;
 extern bool gEnableLogging;
 
+// hash table options
+extern bool gUseHTValForRowIdx; // TODO: Move to a getter
+extern bool gTileHashTables; // TODO: Move to a getter
+
 // -- [start] kernel timing code generation --
 
 bool generateKernelTimingCode();
@@ -108,6 +112,7 @@ std::string BF(const void* op);
 std::string SHUF_BUF_NAME(const void* op);
 std::string SHUF_BUF_EXPR(const void* op);
 std::string SHUF_BUF_VAL(const void* op);
+std::string TILE_ID(const void* op);
 
 template <typename ColumnAttrTy>
 std::string getColumnName(const ColumnAttrTy& colAttr) {
@@ -420,8 +425,5 @@ extern BloomFilterPolicy gBloomFilterPolicy;
 // crystal tiling
 extern bool gTwoItemsPerThread; // TODO: Move to a getter
 extern bool gOneItemPerThread; // TODO: Move to a getter
-
-// hash table options
-extern bool gUseHTValForRowIdx; // TODO: Move to a getter
 
 #endif // LINGODB_COMPILER_DIALECT_RELALG_CUDA_CODE_GEN_HELPER_H
