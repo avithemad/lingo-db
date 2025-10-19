@@ -1589,74 +1589,34 @@ cuco::linear_probing<1, cuco::default_hash_function<{2}>>() }};",
          _kernelName = "count";
       }
       bool hasHash = false;
-      for (auto p : _args) hasHash |= (p.second == "HASHTABLE_PROBE" || p.second == "HASHTABLE_INSERT" || p.second == "HASHTABLE_PROBE" || p.second == "HASHTABLE_INSERT_SJ" || p.second == "HASHTABLE_PROBE_SJ" || p.second == "HASHTABLE_INSERT_PK" || p.second == "HASHTABLE_PROBE_PK" || p.second == "BLOOM_FILTER_CONTAINS" || p.second == "HLL_ESTIMATOR_REF");
-      if (hasHash) {
-         if (shouldGenerateSmallerHashTables()) {
-            // The hash tables can be different sized (e.g., one hash table can have a 32-bit key and another can have a 64-bit key)
-            // In this case, we just get a different template typename for each hash table
-            stream << "template<";
-            auto id = 0;
-            std::string sep = "";
-            for (auto p : _args) {
-               if (p.second == "HASHTABLE_PROBE" || p.second == "HASHTABLE_INSERT" || p.second == "HASHTABLE_PROBE" || p.second == "HASHTABLE_INSERT_SJ" || p.second == "HASHTABLE_PROBE_SJ" || p.second == "HASHTABLE_INSERT_PK" || p.second == "HASHTABLE_PROBE_PK" || p.second == "BLOOM_FILTER_CONTAINS" || p.second == "HLL_ESTIMATOR_REF") {
-                  p.second = fmt::format("{}_{}", p.second, id++);
-                  stream << fmt::format("{}typename {}", sep, p.second);
-                  _args[p.first] = p.second;
-                  sep = ", ";
-               }
+      auto templateArgs = {"HASHTABLE_PROBE", "HASHTABLE_INSERT", "HASHTABLE_PROBE_TILED", "HASHTABLE_INSERT_SJ", "HASHTABLE_PROBE_SJ", "HASHTABLE_INSERT_PK", "HASHTABLE_PROBE_PK", "BLOOM_FILTER_CONTAINS", "HLL_ESTIMATOR_REF"};
+      for (auto p: _args) {
+         for (auto tArg : templateArgs) {
+            if (p.second == tArg) {
+               hasHash = true;
+               break;
             }
-            stream << ">\n";
-         } else {
-            if (gUseBloomFiltersForJoin) {
-               std::cerr << "Bloom filter is not yet implemented for this case! Disable gUseBloomFiltersForJoin in code generation." << std::endl;
-               exit(1);
-            }
-            stream << "template<";
-            bool find = false, insert = false, probe = false;
-            bool insertSJ = false, probeSJ = false;
-            bool insertPK = false, probePK = false;
-            bool hllRef = false;
-            std::string sep = "";
-            for (auto p : _args) {
-               if (p.second == "HASHTABLE_PROBE" && !find) {
-                  find = true;
-                  stream << sep + "typename " + p.second;
-                  sep = ", ";
-               } else if (p.second == "HASHTABLE_INSERT" && !insert) {
-                  insert = true;
-                  stream << sep + "typename " + p.second;
-                  sep = ", ";
-               } else if (p.second == "HASHTABLE_PROBE" && !probe) {
-                  probe = true;
-                  stream << sep + "typename " + p.second;
-                  sep = ", ";
-               } else if (p.second == "HASHTABLE_INSERT_SJ" && !insertSJ) {
-                  insertSJ = true;
-                  stream << sep + "typename " + p.second;
-                  sep = ", ";
-               } else if (p.second == "HASHTABLE_PROBE_SJ" && !probeSJ) {
-                  probeSJ = true;
-                  stream << sep + "typename " + p.second;
-                  sep = ", ";
-               } else if (p.second == "HASHTABLE_INSERT_PK" && !insertPK) {
-                  insertPK = true;
-                  stream << sep + "typename " + p.second;
-                  sep = ", ";
-               } else if (p.second == "HASHTABLE_PROBE_PK" && !probePK) {
-                  probePK = true;
-                  stream << sep + "typename " + p.second;
-                  sep = ", ";
-               } else if (p.second == "HLL_ESTIMATOR_REF" && !hllRef) {
-                  hllRef = true;
-                  stream << sep + "typename " + p.second;
-                  sep = ", ";
-               }
-            }
-            stream << ">\n";
          }
+         if (hasHash) break;
       }
+      auto id = 0;
+      auto sep = "";
+      if (hasHash) {
+         stream << "template<";      
+         for (auto p: _args) {
+            for (auto tArg : templateArgs)
+               if (p.second == tArg) {
+                  auto uniqueTypeName = fmt::format("{}_{}", tArg, id++);
+                  stream << sep << fmt::format("typename {}", uniqueTypeName);
+                  _args[p.first] = uniqueTypeName;
+                  sep = ", ";
+               }
+         }
+         stream << ">";
+      }
+
       stream << fmt::format("__global__ void {0}_{1}(", _kernelName, GetId((void*) this));
-      std::string sep = "";
+      sep = "";
       for (auto p : _args) {
          stream << fmt::format("{0}{1} {2}", sep, p.second, p.first);
          sep = ", ";
