@@ -707,15 +707,55 @@ class HyperTupleStreamCode : public TupleStreamCode {
       appendKernel("// Insert hash table kernel - SemiJoin", KernelType::Main);
       appendKernel(fmt::format("{0}.insert(cuco::pair{{{1}, 1}});", HT(op), key), KernelType::Main);
 
-      mainArgs[HT(op)] = "HASHTABLE_INSERT_SJ";
-      mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::insert)", HT(op));
-      appendControl("// Insert hash table control;");
-      printHashTableSize(COUNT(op), getHTKeyType(keys), getHTValueType(), "2", op);
-      appendControlDecl(fmt::format("auto d_{0} = cuco::static_map{{ (int) 1, cuco::empty_key{{({1})-1}},cuco::empty_value{{({2})-1}},thrust::equal_to<{2}>{{}},cuco::linear_probing<1, cuco::default_hash_function<{1}>>() }};",
-                                HT(op), getHTKeyType(keys), getHTValueType()));
-      appendControl(fmt::format("d_{0}.clear();", HT(op)));
+      genCreateHashTable(op, keys);
       genLaunchKernel(KernelType::Main);
    }
+   void genProbeStmt(mlir::Operation* op, std::string key, std::string joinType = "") {
+      appendKernel("// Probe Hash table");
+      if (gTileHashTables)
+         appendKernel(fmt::format("auto [{0}, found_{3}] = {1}.find({2}, {4});", SLOT(op), HT(op), key, GetId(op), TILE_ID(op)));
+      else
+         appendKernel(fmt::format("auto {0} = {1}.find({2});", SLOT(op), HT(op), key));
+      std::string tiled_suffix = "";
+      if (gTileHashTables) {
+         mainArgs[TILE_ID(op)] = "size_t";
+         countArgs[TILE_ID(op)] = "size_t";
+         mlirToGlobalSymbol[TILE_ID(op)] = fmt::format("{}", TILE_ID(op));
+         tiled_suffix = "_TILED";
+      }
+      mainArgs[HT(op)] = fmt::format("HASHTABLE_PROBE{0}{1}", tiled_suffix, joinType);
+      countArgs[HT(op)] = fmt::format("HASHTABLE_PROBE{0}{1}", tiled_suffix, joinType);
+      mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::find)", HT(op));
+   }
+   void genProbeResultCheck(mlir::Operation* op, bool isAntiJoin = false) {
+      if (isAntiJoin) {
+         if (gTileHashTables)
+            startThreadActiveScope(fmt::format("!found_{0}", GetId(op)));
+         else
+            startThreadActiveScope(fmt::format("{0} == {1}.end()", SLOT(op), HT(op)));
+      } else {
+         if (gTileHashTables)
+            startThreadActiveScope(fmt::format("found_{0}", GetId(op)));
+         else
+            startThreadActiveScope(fmt::format("{0} != {1}.end()", SLOT(op), HT(op)));
+      }
+   }
+   void genCreateHashTable(mlir::Operation* op, const mlir::ArrayAttr& keys) {
+      appendControl("// Create hash table control;");
+      printHashTableSize(COUNT(op), getHTKeyType(keys), getHTValueType(), "2", op);
+      mainArgs[HT(op)] = "HASHTABLE_INSERT_PK";
+      mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::insert)", HT(op));
+      if (gTileHashTables) {
+         appendControlDecl(fmt::format("auto d_{0} = cuco::tiled_static_map{{ (int) 1, cuco::empty_key{{({1})-1}},cuco::empty_value{{({2})-1}},thrust::equal_to<{1}>{{}},cuco::linear_probing<1, cuco::default_hash_function<{1}>>() }};",
+                                 HT(op), getHTKeyType(keys), getHTValueType()));
+         appendControl(fmt::format("d_{0}.clear();", HT(op)));
+      } else {
+         appendControlDecl(fmt::format("auto d_{0} = cuco::static_map{{ (int) 1, cuco::empty_key{{({1})-1}},cuco::empty_value{{({2})-1}},thrust::equal_to<{1}>{{}},cuco::linear_probing<1, cuco::default_hash_function<{1}>>() }};",
+                              HT(op), getHTKeyType(keys), getHTValueType()));
+         appendControl(fmt::format("d_{0}.clear();", HT(op)));
+      }
+   }
+      
    void BuildHashTableAntiSemiJoin(mlir::Operation* op) {
       auto joinOp = mlir::dyn_cast_or_null<relalg::AntiSemiJoinOp>(op);
       if (!joinOp) assert(false && "Build hash table accepts only anti semi join operation.");
@@ -723,14 +763,7 @@ class HyperTupleStreamCode : public TupleStreamCode {
       auto key = MakeKeys(op, keys, KernelType::Main);
       appendKernel("// Insert hash table kernel - AntiJoin", KernelType::Main);
       appendKernel(fmt::format("{0}.insert(cuco::pair{{{1}, 1}});", HT(op), key), KernelType::Main);
-
-      mainArgs[HT(op)] = "HASHTABLE_INSERT_SJ";
-      mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::insert)", HT(op));
-      appendControl("// Insert hash table control;");
-      printHashTableSize(COUNT(op), getHTKeyType(keys), getHTValueType(), "2", op);
-      appendControlDecl(fmt::format("auto d_{0} = cuco::static_map{{ (int) 1, cuco::empty_key{{({1})-1}},cuco::empty_value{{({2})-1}},thrust::equal_to<{1}>{{}},cuco::linear_probing<1, cuco::default_hash_function<{1}>>() }};",
-                              HT(op), getHTKeyType(keys), getHTValueType()));
-      appendControl(fmt::format("d_{0}.clear();", HT(op)));
+      genCreateHashTable(op, keys);
       genLaunchKernel(KernelType::Main);
    }
    void ProbeHashTableSemiJoin(mlir::Operation* op) {
@@ -739,11 +772,10 @@ class HyperTupleStreamCode : public TupleStreamCode {
       auto keys = joinOp->getAttrOfType<mlir::ArrayAttr>("leftHash");
       MakeKeys(op, keys, KernelType::Count);
       auto key = MakeKeys(op, keys, KernelType::Main);
-      appendKernel("// Probe Hash table");
       AddPreHTProbeCounter(op);
-      appendKernel(fmt::format("auto {0} = {1}.find({2});", SLOT(op), HT(op), key));      
+      genProbeStmt(op, key, "_SJ");
       if (shouldUseThreadsAliveCodeGen()) {
-         startThreadActiveScope(fmt::format("{0} != {1}.end()", SLOT(op), HT(op)));
+         genProbeResultCheck(op);
          AddPostHTProbeCounter(op);
          if (shouldGenerateShuffle()) {
             saveOpToShuffleBuffer(op);
@@ -752,10 +784,6 @@ class HyperTupleStreamCode : public TupleStreamCode {
       } else {
          appendKernel(fmt::format("if ({0} == {1}.end()) return;", SLOT(op), HT(op)));
       }
-
-      mainArgs[HT(op)] = "HASHTABLE_PROBE_SJ";
-      countArgs[HT(op)] = "HASHTABLE_PROBE_SJ";
-      mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::find)", HT(op));
    }
    void ProbeHashTableAntiSemiJoin(mlir::Operation* op) {
       auto joinOp = mlir::dyn_cast_or_null<relalg::AntiSemiJoinOp>(op);
@@ -764,11 +792,10 @@ class HyperTupleStreamCode : public TupleStreamCode {
       MakeKeys(op, keys, KernelType::Count);
       auto key = MakeKeys(op, keys, KernelType::Main);
 
-      appendKernel("// Probe Hash table");
       AddPreHTProbeCounter(op);
-      appendKernel(fmt::format("auto {0} = {1}.find({2});", SLOT(op), HT(op), key));
+      genProbeStmt(op, key);
       if (shouldUseThreadsAliveCodeGen()) {
-         startThreadActiveScope(fmt::format("{0} == {1}.end()", SLOT(op), HT(op)));
+         genProbeResultCheck(op, true);
          AddPostHTProbeCounter(op);
          if (shouldGenerateShuffle()) {
             // We don't really need to save this op to shuffle buffer 
@@ -780,10 +807,6 @@ class HyperTupleStreamCode : public TupleStreamCode {
          // Anti-Semi join. We should only output non-matching rows of the build size
          appendKernel(fmt::format("if ({0} != {1}.end()) return;", SLOT(op), HT(op))); 
       }
-
-      mainArgs[HT(op)] = "HASHTABLE_PROBE_SJ";
-      countArgs[HT(op)] = "HASHTABLE_PROBE_SJ";
-      mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::find)", HT(op));
    }
    std::map<std::string, ColumnMetadata*> BuildHashTable(mlir::Operation* op, bool pk, bool right) {
       auto joinOp = mlir::dyn_cast_or_null<relalg::InnerJoinOp>(op);
@@ -812,12 +835,7 @@ class HyperTupleStreamCode : public TupleStreamCode {
          assert(baseRelations.size() >= 1);
          appendKernel(fmt::format("{0}.insert(cuco::pair{{{1}, {2}}});", HT(op), key, baseRelations.begin()->second), KernelType::Main);
       }
-      if (pk)
-         mainArgs[HT(op)] = "HASHTABLE_INSERT_PK";
-      else
-         mainArgs[HT(op)] = "HASHTABLE_INSERT";
-      appendControl("// Insert hash table control;");
-      mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::insert)", HT(op));
+      
       if (shouldUseBuf) {
          mainArgs[BUF_IDX(op)] = getBufIdxPtrType();
          mainArgs[BUF(op)] = getBufPtrType();
@@ -833,19 +851,15 @@ class HyperTupleStreamCode : public TupleStreamCode {
          printBufferSize(fmt::format("(sizeof({0}) * {1} * {2})", getBufEltType(), COUNT(op), baseRelations.size()), op);
          deviceFrees.insert(fmt::format("d_{0}", BUF(op)));
       }
-      // #ifdef MULTIMAP
-      printHashTableSize(COUNT(op), getHTKeyType(keys), getHTValueType(), "2", op);
-      if (!pk)
+      if (!pk) {
+         mainArgs[HT(op)] = "HASHTABLE_INSERT";
+         mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::insert)", HT(op));
          appendControl(fmt::format("auto d_{0} = cuco::experimental::static_multimap{{ (int){1}*2, cuco::empty_key{{({2})-1}},cuco::empty_value{{({3})-1}},thrust::equal_to<{2}>{{}},cuco::linear_probing<1, cuco::default_hash_function<{2}>>() }};",
                                    HT(op), COUNT(op), getHTKeyType(keys), getHTValueType()));
-      // #else
-      else {
-         appendControlDecl(fmt::format("auto d_{0} = cuco::static_map{{ (int) 1, cuco::empty_key{{({1})-1}},cuco::empty_value{{({2})-1}},thrust::equal_to<{1}>{{}},cuco::linear_probing<1, cuco::default_hash_function<{1}>>() }};",
-                                   HT(op), getHTKeyType(keys), getHTValueType()));
-         appendControl(fmt::format("d_{0}.clear();", HT(op)));
       }
-
-      // #endif
+      else {
+         genCreateHashTable(op, keys);
+      }
       genLaunchKernel(KernelType::Main);
       
       if (gUseBloomFiltersForJoin) {
@@ -960,20 +974,19 @@ class HyperTupleStreamCode : public TupleStreamCode {
       // check the bloom filter first, before probing the hash table, if bloom filters are enabled
       ProbeBloomFilter(op, key, pk);
 
-      appendKernel("// Probe Hash table");
-
       if (!pk) {
          appendKernel(fmt::format("{0}.for_each({1}, [&] __device__ (auto const {2}) {{", HT(op), key, SLOT(op)));
          appendKernel(fmt::format("auto const [{0}, {1}] = {2};", slot_first(op), slot_second(op), SLOT(op)));
             forEachScopes++;
-
+         mainArgs[HT(op)] = "HASHTABLE_PROBE";
+         countArgs[HT(op)] = "HASHTABLE_PROBE";
+         mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::for_each)", HT(op));
       } else {
          if (shouldUseThreadsAliveCodeGen()) { 
             // we are not inside a forEach lambda function, so we can use the threadActive variable
             AddPreHTProbeCounter(op);
-            appendKernel(fmt::format("auto {0} = {1}.find({2});", SLOT(op), HT(op), key));
-            auto threadActiveCondition = fmt::format("{0} != {1}.end()", SLOT(op), HT(op));
-            startThreadActiveScope(threadActiveCondition);
+            genProbeStmt(op, key, "_PK");
+            genProbeResultCheck(op);
             AddPostHTProbeCounter(op);
             if (shouldGenerateShuffle()) {
                saveOpToShuffleBuffer(joinOp);
@@ -1028,25 +1041,12 @@ class HyperTupleStreamCode : public TupleStreamCode {
          }
          columnData[colData.first] = colData.second;
       }
-      if (pk) {
-         mainArgs[HT(op)] = "HASHTABLE_PROBE_PK";
-         countArgs[HT(op)] = "HASHTABLE_PROBE_PK";
-      } else {
-         mainArgs[HT(op)] = "HASHTABLE_PROBE";
-         countArgs[HT(op)] = "HASHTABLE_PROBE";
-      }
       if (shouldUseBuf) {
          mainArgs[BUF(op)] = getBufPtrType();
          countArgs[BUF(op)] = getBufPtrType();
          mlirToGlobalSymbol[BUF(op)] = fmt::format("d_{}", BUF(op));
       }
-      // #ifdef MULTIMAP
-      if (!pk)
-         mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::for_each)", HT(op));
-      // #else
-      else
-         mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::find)", HT(op));
-      // #endif
+      
    }
    void CreateAggregationHashTable(mlir::Operation* op) {
       // We'll run the count kernels twice to get a better estimate of the aggregation hash table size.
@@ -1136,7 +1136,7 @@ cuco::linear_probing<1, cuco::default_hash_function<{2}>>() }};",
       mlir::ArrayAttr groupByKeys = aggOp.getGroupByCols();
       if (!groupByKeys.empty()) {
          auto key = MakeKeys(op, groupByKeys, KernelType::Main);
-         mainArgs[HT(op)] = "HASHTABLE_FIND";
+         mainArgs[HT(op)] = "HASHTABLE_PROBE";
          mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::find)", HT(op));
          appendKernel("// Aggregate in hashtable", KernelType::Main);
          appendKernel(fmt::format("auto {0} = {1}.find({2})->second;", buf_idx(op), HT(op), key), KernelType::Main);
@@ -1589,7 +1589,7 @@ cuco::linear_probing<1, cuco::default_hash_function<{2}>>() }};",
          _kernelName = "count";
       }
       bool hasHash = false;
-      for (auto p : _args) hasHash |= (p.second == "HASHTABLE_FIND" || p.second == "HASHTABLE_INSERT" || p.second == "HASHTABLE_PROBE" || p.second == "HASHTABLE_INSERT_SJ" || p.second == "HASHTABLE_PROBE_SJ" || p.second == "HASHTABLE_INSERT_PK" || p.second == "HASHTABLE_PROBE_PK" || p.second == "BLOOM_FILTER_CONTAINS" || p.second == "HLL_ESTIMATOR_REF");
+      for (auto p : _args) hasHash |= (p.second == "HASHTABLE_PROBE" || p.second == "HASHTABLE_INSERT" || p.second == "HASHTABLE_PROBE" || p.second == "HASHTABLE_INSERT_SJ" || p.second == "HASHTABLE_PROBE_SJ" || p.second == "HASHTABLE_INSERT_PK" || p.second == "HASHTABLE_PROBE_PK" || p.second == "BLOOM_FILTER_CONTAINS" || p.second == "HLL_ESTIMATOR_REF");
       if (hasHash) {
          if (shouldGenerateSmallerHashTables()) {
             // The hash tables can be different sized (e.g., one hash table can have a 32-bit key and another can have a 64-bit key)
@@ -1598,7 +1598,7 @@ cuco::linear_probing<1, cuco::default_hash_function<{2}>>() }};",
             auto id = 0;
             std::string sep = "";
             for (auto p : _args) {
-               if (p.second == "HASHTABLE_FIND" || p.second == "HASHTABLE_INSERT" || p.second == "HASHTABLE_PROBE" || p.second == "HASHTABLE_INSERT_SJ" || p.second == "HASHTABLE_PROBE_SJ" || p.second == "HASHTABLE_INSERT_PK" || p.second == "HASHTABLE_PROBE_PK" || p.second == "BLOOM_FILTER_CONTAINS" || p.second == "HLL_ESTIMATOR_REF") {
+               if (p.second == "HASHTABLE_PROBE" || p.second == "HASHTABLE_INSERT" || p.second == "HASHTABLE_PROBE" || p.second == "HASHTABLE_INSERT_SJ" || p.second == "HASHTABLE_PROBE_SJ" || p.second == "HASHTABLE_INSERT_PK" || p.second == "HASHTABLE_PROBE_PK" || p.second == "BLOOM_FILTER_CONTAINS" || p.second == "HLL_ESTIMATOR_REF") {
                   p.second = fmt::format("{}_{}", p.second, id++);
                   stream << fmt::format("{}typename {}", sep, p.second);
                   _args[p.first] = p.second;
@@ -1618,7 +1618,7 @@ cuco::linear_probing<1, cuco::default_hash_function<{2}>>() }};",
             bool hllRef = false;
             std::string sep = "";
             for (auto p : _args) {
-               if (p.second == "HASHTABLE_FIND" && !find) {
+               if (p.second == "HASHTABLE_PROBE" && !find) {
                   find = true;
                   stream << sep + "typename " + p.second;
                   sep = ", ";
@@ -2344,6 +2344,7 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
          outputFile << "#include <cuda_runtime.h>\n";
       }
       if (gUseBloomFiltersForJoin) outputFile << "#include <cuco/bloom_filter.cuh>\n";
+      if (gTileHashTables) outputFile << "#include \"tiled_static_map.cuh\"\n";
 
       if (usedPartitionHashJoin) {
          outputFile << "#include \"../db-utils/phj/partitioned_hash_join.cuh\"\n";
