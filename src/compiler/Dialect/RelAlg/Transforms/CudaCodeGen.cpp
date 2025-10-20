@@ -124,6 +124,21 @@ bool hasAnUpstreamFilter(mlir::Operation* op) {
 class HyperTupleStreamCode : public TupleStreamCode {
    std::map<KernelType, size_t> m_threadActiveScopeCount;
    PartitionHashJoinResultInfo m_joinInfo;
+   std::string genHTTilingLoops(std::map<std::string, std::string> _args) {
+      std::string launchString = "";
+      if (gTileHashTables) {
+         int tiled_hash_tables = 0;
+         for (auto p : _args) {
+            if (p.second.find("HASHTABLE_PROBE_TILED") != std::string::npos) {
+               tiled_hash_tables += 1;
+               // if (tiled_hash_tables > 1)
+               //    std::cerr << "Warning: More than one tiled hash table detected for kernel: " << _kernelName << GetId((void*) this) << std::endl;
+               launchString += fmt::format("for (size_t {1}_tile_idx = 0 ; {1}_tile_idx < d_{1}.num_tiles(); {1}_tile_idx++)\n", TILE_ID(this), p.first);
+            }
+         }
+      }
+      return launchString;
+   }
    std::string launchKernel(KernelType ty) override {
       std::string _kernelName;
       std::map<std::string, std::string> _args;
@@ -143,7 +158,7 @@ class HyperTupleStreamCode : public TupleStreamCode {
          args += fmt::format("{1}{0}", mlirToGlobalSymbol[p.first], sep);
          sep = ", ";
       }
-      return fmt::format("{0}_{1}<<<std::ceil((float){2}/128.), 128>>>({3});", _kernelName, GetId((void*) this), size, args);
+      return genHTTilingLoops(_args) + fmt::format("{0}_{1}<<<std::ceil((float){2}/128.), 128>>>({3});", _kernelName, GetId((void*) this), size, args);
    }
 
    public:
@@ -819,7 +834,7 @@ class HyperTupleStreamCode : public TupleStreamCode {
       bool shouldUseBuf = baseRelations.size() > 1 || !gUseHTValForRowIdx;
       if (shouldUseBuf) {
          appendKernel(fmt::format("auto {0} = atomicAdd((int*){1}, 1);", buf_idx(op), BUF_IDX(op)), KernelType::Main);
-         appendKernel(fmt::format("{0}.insert(cuco::pair{{{1}, {2}}});", HT(op), key, buf_idx(op)), KernelType::Main);
+         appendKernel(fmt::format("{0}.insert(cuco::pair{{{1}, ({3}){2}}});", HT(op), key, buf_idx(op), getHTValueType()), KernelType::Main);
          int i = 0;
          for (auto br : baseRelations) {
             appendKernel(fmt::format("{0}[{1} * {2} + {3}] = {4};",
@@ -833,7 +848,7 @@ class HyperTupleStreamCode : public TupleStreamCode {
       } else {
          // insert the row id of the first base relation
          assert(baseRelations.size() >= 1);
-         appendKernel(fmt::format("{0}.insert(cuco::pair{{{1}, {2}}});", HT(op), key, baseRelations.begin()->second), KernelType::Main);
+         appendKernel(fmt::format("{0}.insert(cuco::pair{{{1}, ({3}){2}}});", HT(op), key, baseRelations.begin()->second, getHTValueType()), KernelType::Main);
       }
       
       if (shouldUseBuf) {
@@ -1589,7 +1604,7 @@ cuco::linear_probing<1, cuco::default_hash_function<{2}>>() }};",
          _kernelName = "count";
       }
       bool hasHash = false;
-      auto templateArgs = {"HASHTABLE_PROBE", "HASHTABLE_INSERT", "HASHTABLE_PROBE_TILED", "HASHTABLE_INSERT_SJ", "HASHTABLE_PROBE_SJ", "HASHTABLE_INSERT_PK", "HASHTABLE_PROBE_PK", "BLOOM_FILTER_CONTAINS", "HLL_ESTIMATOR_REF"};
+      auto templateArgs = {"HASHTABLE_PROBE", "HASHTABLE_INSERT", "HASHTABLE_PROBE_TILED", "HASHTABLE_INSERT_SJ", "HASHTABLE_PROBE_SJ", "HASHTABLE_PROBE_TILED_SJ", "HASHTABLE_INSERT_PK", "HASHTABLE_PROBE_PK", "HASHTABLE_PROBE_TILED_PK", "BLOOM_FILTER_CONTAINS", "HLL_ESTIMATOR_REF"};
       for (auto p: _args) {
          for (auto tArg : templateArgs) {
             if (p.second == tArg) {
