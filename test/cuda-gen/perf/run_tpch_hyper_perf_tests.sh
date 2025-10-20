@@ -92,6 +92,13 @@ for arg in "$@"; do
       # Remove this specific argument from $@
       set -- "${@/$arg/}"
       ;;
+    --tile-hashtables)
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --tile-hashtables"
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      SUB_DIR="${SUB_DIR}_TiledHT"
+      SUFFIX="$SUFFIX-tiledht"
+      ;;
   esac
 done
 
