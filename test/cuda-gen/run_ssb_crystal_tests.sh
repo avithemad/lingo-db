@@ -8,7 +8,7 @@ CONTINUOUS_ARG=""
 for arg in "$@"; do
   case $arg in
     --smaller-hash-tables)
-      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --smaller-hash-tables" # make this default for now
+      # CODEGEN_OPTIONS="$CODEGEN_OPTIONS --smaller-hash-tables" # make this default for now
       # Remove this specific argument from $@
       set -- "${@/$arg/}"
       ;;
