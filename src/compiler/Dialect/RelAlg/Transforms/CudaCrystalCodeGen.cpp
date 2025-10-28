@@ -39,6 +39,35 @@ class CrystalTupleStreamCode : public TupleStreamCode {
          appendKernel("if (!selection_flags[ITEM]) continue;", ty);
    }
 
+   bool CanUseEncodedCompare(db::CmpOp compareOp) {
+      if (!gUseEncodedPredicates)
+         return false;
+      auto left = compareOp.getLeft();
+      auto right = compareOp.getRight();
+      auto leftType = mlirTypeToCudaType(left.getType());
+      auto rightType = mlirTypeToCudaType(right.getType());
+      if (leftType != "DBStringType")
+         return false;
+      // if (rightType != "DBStringType")
+      //    return false;
+      auto cmp = compareOp.getPredicate();
+      if (cmp == db::DBCmpPredicate::eq || cmp == db::DBCmpPredicate::neq)
+         return true;
+      return false;
+   }
+
+   bool CanUseEncodedCompare(db::BetweenOp betweenOp) {
+      if (!gUseEncodedPredicates)
+         return false;
+      auto val = betweenOp.getVal();
+      // auto lower = betweenOp.getLower();
+      // auto upper = betweenOp.getUpper();
+      auto valType = mlirTypeToCudaType(val.getType());
+      if (valType == "DBStringType")
+         return true;
+      return false;
+   }
+
    public:
    CrystalTupleStreamCode(relalg::BaseTableOp& baseTableOp) {
       std::string tableName = baseTableOp.getTableIdentifier().data();
@@ -254,18 +283,24 @@ class CrystalTupleStreamCode : public TupleStreamCode {
       }
       return cudaId;
    }
-   std::string SelectionOpDfs(mlir::Operation* op) {
+   std::string SelectionOpDfs(mlir::Operation* op, bool useEncodedCompare = false) {
       if (auto getColOp = mlir::dyn_cast_or_null<tuples::GetColumnOp>(op)) {
-         LoadColumn(getColOp.getAttr(), KernelType::Count);
-         return LoadColumn(getColOp.getAttr(), KernelType::Main) + "[ITEM]";
+         if (useEncodedCompare) {
+            LoadColumn<1>(getColOp.getAttr(), KernelType::Count);
+            return LoadColumn<1>(getColOp.getAttr(), KernelType::Main) + "[ITEM]";
+         } else {
+            LoadColumn<>(getColOp.getAttr(), KernelType::Count);
+            return LoadColumn<>(getColOp.getAttr(), KernelType::Main) + "[ITEM]";
+         }
       } else if (auto constOp = mlir::dyn_cast_or_null<db::ConstantOp>(op)) {
-         return translateConstantOp(constOp);
+         return translateConstantOp(constOp, useEncodedCompare);
       } else if (auto compareOp = mlir::dyn_cast_or_null<db::CmpOp>(op)) {
+         bool useEncodedCompare = CanUseEncodedCompare(compareOp);
          auto left = compareOp.getLeft();
-         std::string leftOperand = SelectionOpDfs(left.getDefiningOp());
+         std::string leftOperand = SelectionOpDfs(left.getDefiningOp(), useEncodedCompare);
 
          auto right = compareOp.getRight();
-         std::string rightOperand = SelectionOpDfs(right.getDefiningOp());
+         std::string rightOperand = SelectionOpDfs(right.getDefiningOp(), useEncodedCompare);
 
          auto cmp = compareOp.getPredicate();
          std::string predicate = "";
@@ -337,9 +372,10 @@ class CrystalTupleStreamCode : public TupleStreamCode {
          }
          return fmt::format("{0}({1})", function, args);
       } else if (auto betweenOp = mlir::dyn_cast_or_null<db::BetweenOp>(op)) {
-         std::string operand = SelectionOpDfs(betweenOp.getVal().getDefiningOp());
-         std::string lower = SelectionOpDfs(betweenOp.getLower().getDefiningOp());
-         std::string upper = SelectionOpDfs(betweenOp.getUpper().getDefiningOp());
+         bool useEncodedCompare = CanUseEncodedCompare(betweenOp);
+         std::string operand = SelectionOpDfs(betweenOp.getVal().getDefiningOp(), useEncodedCompare);
+         std::string lower = SelectionOpDfs(betweenOp.getLower().getDefiningOp(), useEncodedCompare);
+         std::string upper = SelectionOpDfs(betweenOp.getUpper().getDefiningOp(), useEncodedCompare);
 
          std::string lpred = betweenOp.getLowerInclusive() ? "Predicate::gte" : "Predicate::gt";
          std::string rpred = betweenOp.getUpperInclusive() ? "Predicate::lte" : "Predicate::lt";
@@ -395,7 +431,8 @@ class CrystalTupleStreamCode : public TupleStreamCode {
          return res;
       } else if (auto castOp = mlir::dyn_cast_or_null<db::CastOp>(op)) {
          auto val = castOp.getVal();
-         return fmt::format("(({1}){0})", SelectionOpDfs(val.getDefiningOp()), mlirTypeToCudaType(castOp.getRes().getType()));
+         auto targetType = useEncodedCompare ? "DBI16Type" : mlirTypeToCudaType(castOp.getRes().getType());
+         return fmt::format("(({1}){0})", SelectionOpDfs(val.getDefiningOp(), useEncodedCompare), targetType);
       }
       op->dump();
       assert(false && "Selection predicate not handled");

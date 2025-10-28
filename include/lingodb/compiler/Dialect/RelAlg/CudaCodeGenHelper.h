@@ -37,6 +37,7 @@ extern bool gEnableLogging;
 // hash table options
 extern bool gUseHTValForRowIdx; // TODO: Move to a getter
 extern bool gTileHashTables; // TODO: Move to a getter
+extern bool gUseEncodedPredicates; // TODO: Move to a getter
 
 // -- [start] kernel timing code generation --
 
@@ -167,7 +168,7 @@ struct ColumnDetail {
 
 int daysSinceEpoch(const std::string& dateStr);
 std::string mlirTypeToCudaType(const mlir::Type& ty);
-std::string translateConstantOp(db::ConstantOp& constantOp);
+std::string translateConstantOp(db::ConstantOp& constantOp, bool useEncodedCompare = false);
 
 typedef struct  {
    size_t cur_shuffle_id = 0;

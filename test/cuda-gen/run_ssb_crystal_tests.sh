@@ -4,6 +4,7 @@ CODEGEN_OPTIONS="--smaller-hash-tables"
 PROFILING=0
 SKIP_GEN=0
 CONTINUOUS_ARG=""
+SSB_SIMPLIFIED=0
 # for each arg in args
 for arg in "$@"; do
   case $arg in
@@ -61,6 +62,12 @@ for arg in "$@"; do
       # Remove this specific argument from $@
       set -- "${@/$arg/}"
       ;;
+    --use-encoded-predicates)
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --use-encoded-predicates"
+      SSB_SIMPLIFIED=1
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      ;;
   esac
 done
 
@@ -99,7 +106,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEST_DIR="$(dirname "$SCRIPT_DIR")"
 REPO_DIR="$(dirname "$TEST_DIR")"
 
-SSB_QUERY_DIR="$REPO_DIR/resources/sql/ssb"
+if [ $SSB_SIMPLIFIED -eq 1 ]; then
+  SSB_QUERY_DIR="$REPO_DIR/resources/sql/ssb_simplified"
+else
+  SSB_QUERY_DIR="$REPO_DIR/resources/sql/ssb"
+fi
 BUILD_DIR="$REPO_DIR/build/$BUILD_NAME"
 
 # Set the data directory if not already set

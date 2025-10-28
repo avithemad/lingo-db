@@ -6,6 +6,7 @@ SUB_DIR="."
 SUFFIX=""
 SKIP_GEN=0
 CONTINUOUS_ARG=""
+SSB_SIMPLIFIED=0
 for arg in "$@"; do
   case $arg in
     --smaller-hash-tables)
@@ -71,6 +72,14 @@ for arg in "$@"; do
       # Remove this specific argument from $@
       set -- "${@/$arg/}"
       ;;
+    --use-encoded-predicates)
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --use-encoded-predicates"
+      SSB_SIMPLIFIED=1
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      SUB_DIR+="_Encoded_Predicates"
+      SUFFIX+="-encoded-predicates"
+      ;;
   esac
 done
 
@@ -117,7 +126,11 @@ CUDA_GEN_DIR="$(dirname "$SCRIPT_DIR")"
 TEST_DIR="$(dirname $(dirname "$SCRIPT_DIR"))"
 REPO_DIR="$(dirname "$TEST_DIR")"
 
-SSB_DIR="$REPO_DIR/resources/sql/ssb"
+if [ $SSB_SIMPLIFIED -eq 1 ]; then
+  SSB_DIR="$REPO_DIR/resources/sql/ssb_simplified"
+else
+  SSB_DIR="$REPO_DIR/resources/sql/ssb"
+fi
 BUILD_DIR="$REPO_DIR/build/$BUILD_NAME"
 
 # Set the data directory if not already set
