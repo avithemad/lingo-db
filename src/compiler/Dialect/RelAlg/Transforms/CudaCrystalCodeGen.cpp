@@ -186,7 +186,7 @@ class CrystalTupleStreamCode : public TupleStreamCode {
          std::string ty = mlirTypeToCudaType(detailRef.type);
          if (colData == nullptr && mlirTypeToCudaType(detailRef.type) == "DBStringType") {
             colData = columnData[detailRef.getMlirSymbol() + "_encoded"];
-            ty = "DBI6Type";
+            ty = "DBI16Type";
          }
          if (colData == nullptr) {
             assert(false && "Renaming op: column ref not in tuple stream");
@@ -521,7 +521,7 @@ class CrystalTupleStreamCode : public TupleStreamCode {
       if (!joinOp) assert(false && "Build hash table accepts only semi join operation.");
       auto keys = joinOp->getAttrOfType<mlir::ArrayAttr>("rightHash");
       auto key = MakeKeys(op, keys, KernelType::Main);
-      appendKernel("// Insert hash table kernel;", KernelType::Main);
+      appendKernel("// Insert hash table kernel - SemiJoin", KernelType::Main);
       std::string kernelSize = getKernelSizeVariable();
       appendKernel("#pragma unroll", KernelType::Main);
       appendKernel(fmt::format("for (int ITEM = 0; ITEM < ITEMS_PER_THREAD && (ITEM*TB + tid < {0}); ++ITEM) {{", kernelSize), KernelType::Main);
