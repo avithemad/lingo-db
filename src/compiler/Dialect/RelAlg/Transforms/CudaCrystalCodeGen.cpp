@@ -539,8 +539,10 @@ class CrystalTupleStreamCode : public TupleStreamCode {
       auto key = MakeKeys(op, keys, KernelType::Main);
       appendKernel("// Probe Hash table SJ");
       addLoopBoilerPlate();
+      AddPreHTProbeCounter(op);
       appendKernel(fmt::format("auto {0} = {1}.find({2}[ITEM]);", SLOT(op), HT(op), key));
-      appendKernel(fmt::format("if ({0} == {1}.end()) {{selection_flags[ITEM] = 0;}}", SLOT(op), HT(op)));
+      appendKernel(fmt::format("if ({0} == {1}.end()) {{selection_flags[ITEM] = 0; continue; }}", SLOT(op), HT(op)));
+      AddPostHTProbeCounter(op);
       appendKernel("}");
       m_hasInsertedSelection = true;
 
@@ -556,8 +558,10 @@ class CrystalTupleStreamCode : public TupleStreamCode {
       auto key = MakeKeys(op, keys, KernelType::Main);
       appendKernel("//Probe Hash table (ASJ)");
       addLoopBoilerPlate();
+      AddPreHTProbeCounter(op);
       appendKernel(fmt::format("auto {0} = {1}.find({2}[ITEM]);", SLOT(op), HT(op), key));
-      appendKernel(fmt::format("if (!({0} == {1}.end())) {{selection_flags[ITEM] = 0;}}", SLOT(op), HT(op)));
+      appendKernel(fmt::format("if (!({0} == {1}.end())) {{selection_flags[ITEM] = 0; continue; }}", SLOT(op), HT(op)));
+      AddPostHTProbeCounter(op);
       appendKernel("}");
       m_hasInsertedSelection = true;
 
@@ -623,9 +627,11 @@ class CrystalTupleStreamCode : public TupleStreamCode {
       appendKernel(fmt::format("int64_t {0}[ITEMS_PER_THREAD];", slot_second(op)));
       appendKernel("// Probe Hash table MJ");
       addLoopBoilerPlate();
+      AddPreHTProbeCounter(op);
       appendKernel(fmt::format("auto {0} = {1}.find({2}[ITEM]);", SLOT(op), HT(op), key));
       appendKernel(fmt::format("if ({0} == {1}.end()) {{selection_flags[ITEM] = 0; continue;}}", SLOT(op), HT(op)));
       appendKernel(fmt::format("{0}[ITEM] = {1}->second;", slot_second(op), SLOT(op)));
+      AddPostHTProbeCounter(op);
       appendKernel("}");
       m_hasInsertedSelection = true;
 

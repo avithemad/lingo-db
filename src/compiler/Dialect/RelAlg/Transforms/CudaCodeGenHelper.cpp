@@ -252,6 +252,41 @@ void TupleStreamCode::genCreateHashTable(mlir::Operation* op, const mlir::ArrayA
    }
 }
 
+void TupleStreamCode::AddPreHTProbeCounter(mlir::Operation* op) {
+   if (!gPrintHashTableSizes) 
+      return;
+
+   recordHashTableProbe(op);
+
+   appendControlDecl(fmt::format("uint64_t* d_{0}_PreCounter = nullptr;", HT(op)));      
+   appendKernel(fmt::format("atomicAdd((int*){0}_PreCounter, 1);", HT(op)), KernelType::Main);
+   mainArgs[fmt::format("{0}_PreCounter", HT(op))] = "uint64_t*";
+   mlirToGlobalSymbol[fmt::format("{0}_PreCounter", HT(op))] = fmt::format("d_{0}_PreCounter", HT(op));      
+   appendControl(fmt::format("cudaMallocExt(&d_{0}_PreCounter, sizeof(uint64_t));", HT(op)));
+   deviceFrees.insert(fmt::format("d_{0}_PreCounter", HT(op)));
+   appendControl(fmt::format("cudaMemset(d_{0}_PreCounter, 0, sizeof(uint64_t));", HT(op)));
+
+   // host
+   appendControlDecl(fmt::format("uint64_t {0}_PreCounter;", HT(op)));
+}
+
+void TupleStreamCode::AddPostHTProbeCounter(mlir::Operation* op) {
+   if (!gPrintHashTableSizes) 
+      return;
+
+   // device
+   appendControlDecl(fmt::format("uint64_t* d_{0}_PostCounter = nullptr;", HT(op)));      
+   appendKernel(fmt::format("atomicAdd((int*){0}_PostCounter, 1);", HT(op)), KernelType::Main);
+   mainArgs[fmt::format("{0}_PostCounter", HT(op))] = "uint64_t*";
+   mlirToGlobalSymbol[fmt::format("{0}_PostCounter", HT(op))] = fmt::format("d_{0}_PostCounter", HT(op));      
+   appendControl(fmt::format("cudaMallocExt(&d_{0}_PostCounter, sizeof(uint64_t));", HT(op)));
+   deviceFrees.insert(fmt::format("d_{0}_PostCounter", HT(op)));
+   appendControl(fmt::format("cudaMemset(d_{0}_PostCounter, 0, sizeof(uint64_t));", HT(op)));
+
+   // host
+   appendControlDecl(fmt::format("uint64_t {0}_PostCounter;", HT(op)));
+}
+
 } // namespace cudacodegen
 
 // --- [start] code generation switches helpers ---

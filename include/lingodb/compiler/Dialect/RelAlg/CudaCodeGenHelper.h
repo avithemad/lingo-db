@@ -355,6 +355,9 @@ protected:
 
    size_t getL2CacheSize();
    void genCreateHashTable(mlir::Operation* op, const mlir::ArrayAttr& keys, std::string joinType);
+   void AddPreHTProbeCounter(mlir::Operation* op);
+   void AddPostHTProbeCounter(mlir::Operation* op);
+
 public:
    void printControlDeclarations(std::ostream& stream) {
       for (auto line : controlDeclarations) {

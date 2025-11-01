@@ -727,6 +727,7 @@ class HyperTupleStreamCode : public TupleStreamCode {
    }
    void genProbeStmt(mlir::Operation* op, std::string key, std::string joinType = "") {
       appendKernel("// Probe Hash table");
+      AddPreHTProbeCounter(op);
       if (gTileHashTables)
          appendKernel(fmt::format("auto [{0}, found_{3}] = {1}.find({2}, {4});", SLOT(op), HT(op), key, GetId(op), TILE_ID(op)));
       else
@@ -754,6 +755,7 @@ class HyperTupleStreamCode : public TupleStreamCode {
          else
             startThreadActiveScope(fmt::format("{0} != {1}.end()", SLOT(op), HT(op)));
       }
+      AddPreHTProbeCounter(op);      
    }
       
    void BuildHashTableAntiSemiJoin(mlir::Operation* op) {
@@ -772,11 +774,9 @@ class HyperTupleStreamCode : public TupleStreamCode {
       auto keys = joinOp->getAttrOfType<mlir::ArrayAttr>("leftHash");
       MakeKeys(op, keys, KernelType::Count);
       auto key = MakeKeys(op, keys, KernelType::Main);
-      AddPreHTProbeCounter(op);
       genProbeStmt(op, key, "_SJ");
       if (shouldUseThreadsAliveCodeGen()) {
          genProbeResultCheck(op);
-         AddPostHTProbeCounter(op);
          if (shouldGenerateShuffle()) {
             saveOpToShuffleBuffer(op);
             genShuffleThreads();
@@ -791,12 +791,9 @@ class HyperTupleStreamCode : public TupleStreamCode {
       auto keys = joinOp->getAttrOfType<mlir::ArrayAttr>("leftHash");
       MakeKeys(op, keys, KernelType::Count);
       auto key = MakeKeys(op, keys, KernelType::Main);
-
-      AddPreHTProbeCounter(op);
       genProbeStmt(op, key);
       if (shouldUseThreadsAliveCodeGen()) {
          genProbeResultCheck(op, true);
-         AddPostHTProbeCounter(op);
          if (shouldGenerateShuffle()) {
             // We don't really need to save this op to shuffle buffer 
             // as the pipeline only progresses when there's no hash table
@@ -927,41 +924,6 @@ class HyperTupleStreamCode : public TupleStreamCode {
       }
    }
 
-   void AddPreHTProbeCounter(mlir::Operation* op) {
-      if (!gPrintHashTableSizes) 
-         return;
-
-      recordHashTableProbe(op);
-
-      appendControlDecl(fmt::format("uint64_t* d_{0}_PreCounter = nullptr;", HT(op)));      
-      appendKernel(fmt::format("atomicAdd((int*){0}_PreCounter, 1);", HT(op)), KernelType::Main);
-      mainArgs[fmt::format("{0}_PreCounter", HT(op))] = "uint64_t*";
-      mlirToGlobalSymbol[fmt::format("{0}_PreCounter", HT(op))] = fmt::format("d_{0}_PreCounter", HT(op));      
-      appendControl(fmt::format("cudaMallocExt(&d_{0}_PreCounter, sizeof(uint64_t));", HT(op)));
-      deviceFrees.insert(fmt::format("d_{0}_PreCounter", HT(op)));
-      appendControl(fmt::format("cudaMemset(d_{0}_PreCounter, 0, sizeof(uint64_t));", HT(op)));
-
-      // host
-      appendControlDecl(fmt::format("uint64_t {0}_PreCounter;", HT(op)));
-   }
-
-   void AddPostHTProbeCounter(mlir::Operation* op) {
-      if (!gPrintHashTableSizes) 
-         return;
-
-      // device
-      appendControlDecl(fmt::format("uint64_t* d_{0}_PostCounter = nullptr;", HT(op)));      
-      appendKernel(fmt::format("atomicAdd((int*){0}_PostCounter, 1);", HT(op)), KernelType::Main);
-      mainArgs[fmt::format("{0}_PostCounter", HT(op))] = "uint64_t*";
-      mlirToGlobalSymbol[fmt::format("{0}_PostCounter", HT(op))] = fmt::format("d_{0}_PostCounter", HT(op));      
-      appendControl(fmt::format("cudaMallocExt(&d_{0}_PostCounter, sizeof(uint64_t));", HT(op)));
-      deviceFrees.insert(fmt::format("d_{0}_PostCounter", HT(op)));
-      appendControl(fmt::format("cudaMemset(d_{0}_PostCounter, 0, sizeof(uint64_t));", HT(op)));
-
-      // host
-      appendControlDecl(fmt::format("uint64_t {0}_PostCounter;", HT(op)));
-   }
-
    void ProbeHashTable(mlir::Operation* op, const std::map<std::string, ColumnMetadata*>& leftColumnData, bool pk, bool right) {
       auto joinOp = mlir::dyn_cast_or_null<relalg::InnerJoinOp>(op);
       if (!joinOp) assert(false && "Probe hash table accepts only inner join operation.");
@@ -984,10 +946,8 @@ class HyperTupleStreamCode : public TupleStreamCode {
       } else {
          if (shouldUseThreadsAliveCodeGen()) { 
             // we are not inside a forEach lambda function, so we can use the threadActive variable
-            AddPreHTProbeCounter(op);
             genProbeStmt(op, key, "_PK");
             genProbeResultCheck(op);
-            AddPostHTProbeCounter(op);
             if (shouldGenerateShuffle()) {
                saveOpToShuffleBuffer(joinOp);
                genShuffleThreads();
