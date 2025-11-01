@@ -722,7 +722,7 @@ class HyperTupleStreamCode : public TupleStreamCode {
       appendKernel("// Insert hash table kernel - SemiJoin", KernelType::Main);
       appendKernel(fmt::format("{0}.insert(cuco::pair{{{1}, 1}});", HT(op), key), KernelType::Main);
 
-      genCreateHashTable(op, keys);
+      genCreateHashTable(op, keys, "SJ");
       genLaunchKernel(KernelType::Main);
    }
    void genProbeStmt(mlir::Operation* op, std::string key, std::string joinType = "") {
@@ -755,21 +755,6 @@ class HyperTupleStreamCode : public TupleStreamCode {
             startThreadActiveScope(fmt::format("{0} != {1}.end()", SLOT(op), HT(op)));
       }
    }
-   void genCreateHashTable(mlir::Operation* op, const mlir::ArrayAttr& keys) {
-      appendControl("// Create hash table control;");
-      printHashTableSize(COUNT(op), getHTKeyType(keys), getHTValueType(), "2", op);
-      mainArgs[HT(op)] = "HASHTABLE_INSERT_PK";
-      mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::insert)", HT(op));
-      if (gTileHashTables) {
-         appendControlDecl(fmt::format("auto d_{0} = cuco::tiled_static_map{{ (int) 1, cuco::empty_key{{({1})-1}},cuco::empty_value{{({2})-1}},thrust::equal_to<{1}>{{}},cuco::linear_probing<1, cuco::default_hash_function<{1}>>() }};",
-                                 HT(op), getHTKeyType(keys), getHTValueType()));
-         appendControl(fmt::format("d_{0}.clear();", HT(op)));
-      } else {
-         appendControlDecl(fmt::format("auto d_{0} = cuco::static_map{{ (int) 1, cuco::empty_key{{({1})-1}},cuco::empty_value{{({2})-1}},thrust::equal_to<{1}>{{}},cuco::linear_probing<1, cuco::default_hash_function<{1}>>() }};",
-                              HT(op), getHTKeyType(keys), getHTValueType()));
-         appendControl(fmt::format("d_{0}.clear();", HT(op)));
-      }
-   }
       
    void BuildHashTableAntiSemiJoin(mlir::Operation* op) {
       auto joinOp = mlir::dyn_cast_or_null<relalg::AntiSemiJoinOp>(op);
@@ -778,7 +763,7 @@ class HyperTupleStreamCode : public TupleStreamCode {
       auto key = MakeKeys(op, keys, KernelType::Main);
       appendKernel("// Insert hash table kernel - AntiJoin", KernelType::Main);
       appendKernel(fmt::format("{0}.insert(cuco::pair{{{1}, 1}});", HT(op), key), KernelType::Main);
-      genCreateHashTable(op, keys);
+      genCreateHashTable(op, keys, "SJ");
       genLaunchKernel(KernelType::Main);
    }
    void ProbeHashTableSemiJoin(mlir::Operation* op) {
@@ -873,7 +858,7 @@ class HyperTupleStreamCode : public TupleStreamCode {
                                    HT(op), COUNT(op), getHTKeyType(keys), getHTValueType()));
       }
       else {
-         genCreateHashTable(op, keys);
+         genCreateHashTable(op, keys, "PK");
       }
       genLaunchKernel(KernelType::Main);
       

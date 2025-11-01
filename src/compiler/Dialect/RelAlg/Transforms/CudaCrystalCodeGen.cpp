@@ -516,13 +516,7 @@ class CrystalTupleStreamCode : public TupleStreamCode {
       appendKernel(fmt::format("{0}.insert(cuco::pair{{{1}[ITEM], 1}});", HT(op), key), KernelType::Main);
       appendKernel("}", KernelType::Main);
 
-      mainArgs[HT(op)] = "HASHTABLE_INSERT_SJ";
-      mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::insert)", HT(op));
-      appendControl("// Insert hash table control;");
-      printHashTableSize(COUNT(op), getHTKeyType(keys), getHTValueType(), "2", op);
-      appendControlDecl(fmt::format("auto d_{0} = cuco::static_map{{ (int) 1, cuco::empty_key{{({1})-1}},cuco::empty_value{{({2})-1}},thrust::equal_to<{2}>{{}},cuco::linear_probing<1, cuco::default_hash_function<{1}>>() }};",
-                                HT(op), getHTKeyType(keys), getHTValueType()));
-      appendControl(fmt::format("d_{0}.clear();", HT(op)));
+      genCreateHashTable(op, keys, "SJ");
       genLaunchKernel(KernelType::Main);
    }
    void BuildHashTableAntiSemiJoin(mlir::Operation* op) {
@@ -534,14 +528,7 @@ class CrystalTupleStreamCode : public TupleStreamCode {
       addLoopBoilerPlate(KernelType::Main);
       appendKernel(fmt::format("{0}.insert(cuco::pair{{{1}[ITEM], 1}});", HT(op), key), KernelType::Main);
       appendKernel("}", KernelType::Main);
-
-      mainArgs[HT(op)] = "HASHTABLE_INSERT_SJ";
-      mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::insert)", HT(op));
-      appendControl("// Insert hash table control;");
-      printHashTableSize(COUNT(op), getHTKeyType(keys), getHTValueType(), "2", op);
-      appendControlDecl(fmt::format("auto d_{0} = cuco::static_map{{ (int) 1, cuco::empty_key{{({1})-1}},cuco::empty_value{{({2})-1}},thrust::equal_to<{1}>{{}},cuco::linear_probing<1, cuco::default_hash_function<{1}>>() }};",
-                              HT(op), getHTKeyType(keys), getHTValueType()));
-      appendControl(fmt::format("d_{0}.clear();", HT(op)));
+      genCreateHashTable(op, keys, "SJ");
       genLaunchKernel(KernelType::Main);
    }
    void ProbeHashTableSemiJoin(mlir::Operation* op) {
@@ -606,10 +593,7 @@ class CrystalTupleStreamCode : public TupleStreamCode {
          assert(baseRelations.size() >= 1);
          appendKernel(fmt::format("{0}.insert(cuco::pair{{{1}[ITEM], {2}}});", HT(op), key, baseRelations.begin()->second), KernelType::Main);
       }
-      appendControl("// Insert hash table control;");
       appendKernel("}", KernelType::Main);
-      mainArgs[HT(op)] = "HASHTABLE_INSERT";
-      mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::insert)", HT(op));
       if (shouldUseBuf) {
          mainArgs[BUF_IDX(op)] = getBufIdxPtrType();
          mainArgs[BUF(op)] = getBufPtrType();
@@ -623,12 +607,8 @@ class CrystalTupleStreamCode : public TupleStreamCode {
          appendControl(fmt::format("cudaMallocExt(&d_{0}, sizeof({3}) * {1} * {2});", BUF(op), COUNT(op), baseRelations.size(), getBufEltType()));
          deviceFrees.insert(fmt::format("d_{0}", BUF(op)));
       }
-      printHashTableSize(COUNT(op), getHTKeyType(keys), getHTValueType(), "2", op);
-      appendControlDecl(fmt::format("auto d_{0} = cuco::static_map{{ (int) 1, cuco::empty_key{{({1})-1}},cuco::empty_value{{({2})-1}},thrust::equal_to<{1}>{{}},cuco::linear_probing<1, cuco::default_hash_function<{1}>>() }};",
-                                   HT(op), getHTKeyType(keys), getHTValueType()));
-      appendControl(fmt::format("d_{0}.clear();", HT(op)));
+      genCreateHashTable(op, keys, "PK");
       genLaunchKernel(KernelType::Main);
-      // appendControl(fmt::format("cudaFree(d_{0});", BUF_IDX(op)));
       return columnData;
    }
 

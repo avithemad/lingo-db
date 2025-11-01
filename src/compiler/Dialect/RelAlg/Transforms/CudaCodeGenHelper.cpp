@@ -236,6 +236,22 @@ size_t TupleStreamCode::getL2CacheSize() {
    exit(1);
 }
 
+void TupleStreamCode::genCreateHashTable(mlir::Operation* op, const mlir::ArrayAttr& keys, std::string joinType = "") {
+   appendControl("// Create hash table control;");
+   printHashTableSize(COUNT(op), getHTKeyType(keys), getHTValueType(), "2", op);
+   mainArgs[HT(op)] = "HASHTABLE_INSERT_" + joinType;
+   mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::insert)", HT(op));
+   if (gTileHashTables) {
+      appendControlDecl(fmt::format("auto d_{0} = cuco::tiled_static_map{{ (int) 1, cuco::empty_key{{({1})-1}},cuco::empty_value{{({2})-1}},thrust::equal_to<{1}>{{}},cuco::linear_probing<1, cuco::default_hash_function<{1}>>() }};",
+                              HT(op), getHTKeyType(keys), getHTValueType()));
+      appendControl(fmt::format("d_{0}.clear();", HT(op)));
+   } else {
+      appendControlDecl(fmt::format("auto d_{0} = cuco::static_map{{ (int) 1, cuco::empty_key{{({1})-1}},cuco::empty_value{{({2})-1}},thrust::equal_to<{1}>{{}},cuco::linear_probing<1, cuco::default_hash_function<{1}>>() }};",
+                           HT(op), getHTKeyType(keys), getHTValueType()));
+      appendControl(fmt::format("d_{0}.clear();", HT(op)));
+   }
+}
+
 } // namespace cudacodegen
 
 // --- [start] code generation switches helpers ---
