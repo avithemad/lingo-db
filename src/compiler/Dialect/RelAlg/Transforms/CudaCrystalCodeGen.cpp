@@ -31,11 +31,11 @@ class CrystalTupleStreamCode : public TupleStreamCode {
       return fmt::format("{0}_{1}<<<std::ceil((float){2}/(float)TILE_SIZE), TILE_SIZE/ITEMS_PER_THREAD>>>({3});", _kernelName, GetId((void*) this), size, args);
    }
 
-   void addLoopBoilerPlate(KernelType ty = KernelType::Main_And_Count) {
+   void addLoopBoilerPlate(KernelType ty = KernelType::Main_And_Count, bool forceSelectionCheck = false) {
       std::string kernelSize = getKernelSizeVariable();
       appendKernel("#pragma unroll", ty);
       appendKernel(fmt::format("for (int ITEM = 0; ITEM < ITEMS_PER_THREAD && (ITEM*TB + tid < {0}); ++ITEM) {{", kernelSize), ty);
-      if (m_genSelectionCheckUniversally || m_hasInsertedSelection )
+      if (m_genSelectionCheckUniversally || m_hasInsertedSelection || forceSelectionCheck)
          appendKernel("if (!selection_flags[ITEM]) continue;", ty);
    }
 
@@ -226,12 +226,7 @@ class CrystalTupleStreamCode : public TupleStreamCode {
       std::string colType = mlirTypeToCudaType(detail.type);
       if (enc == 1) colType = "DBI16Type"; // use for string encoded columns
       appendKernel(fmt::format("{0} {1}[ITEMS_PER_THREAD];", colType, cudaId), ty);
-      std::string kernelSize = getKernelSizeVariable();
-      appendKernel("#pragma unroll", ty);
-      appendKernel(fmt::format("for (int ITEM = 0; ITEM < ITEMS_PER_THREAD && (ITEM*TB + tid < {0}); ++ITEM) {{", kernelSize), ty);
-      if (!(colData->rid == "ITEM*TB + tid") || m_hasInsertedSelection) {
-         appendKernel("if (!selection_flags[ITEM]) continue;", ty);
-      }
+      addLoopBoilerPlate(ty, (!(colData->rid == "ITEM*TB + tid")));
       appendKernel(fmt::format("{0}[ITEM] = {1};", cudaId, colData->loadExpression + (colData->type == ColumnType::Direct ? "[" + colData->rid + "]" : "")), ty);
       appendKernel("}", ty);
       if (mlirSymbol != colData->loadExpression) {
@@ -410,10 +405,7 @@ class CrystalTupleStreamCode : public TupleStreamCode {
             std::string condition = SelectionOpDfs(matched.getDefiningOp());
             if (condition == "!(false)" || condition == "true")
                return; // This is a null check op. No-op for now
-            std::string kernelSize = getKernelSizeVariable();
-            appendKernel("#pragma unroll");
-            appendKernel(fmt::format("for (int ITEM = 0; ITEM < ITEMS_PER_THREAD && (ITEM*TB + tid < {0}); ++ITEM) {{", kernelSize));
-            appendKernel("if (!selection_flags[ITEM]) continue;");
+            addLoopBoilerPlate();
             appendKernel(fmt::format("selection_flags[ITEM] &= {0};", condition));
             appendKernel("}");
             return;
@@ -429,9 +421,7 @@ class CrystalTupleStreamCode : public TupleStreamCode {
       countArgs[COUNT(op)] = "uint64_t*";
       mlirToGlobalSymbol[COUNT(op)] = fmt::format("d_{}", COUNT(op));
       appendKernel("// Materialize count", KernelType::Count);
-      appendKernel("#pragma unroll", KernelType::Count);
-      appendKernel(fmt::format("for (int ITEM = 0; ITEM < ITEMS_PER_THREAD && (ITEM*TB + tid < {0}); ++ITEM) {{", getKernelSizeVariable()), KernelType::Count);
-      appendKernel("if (!selection_flags[ITEM]) continue;", KernelType::Count);
+      addLoopBoilerPlate(KernelType::Count);
       appendKernel(fmt::format("atomicAdd((int*){0}, 1);", COUNT(op)), KernelType::Count);
       appendKernel("}", KernelType::Count);
 
@@ -522,10 +512,7 @@ class CrystalTupleStreamCode : public TupleStreamCode {
       auto keys = joinOp->getAttrOfType<mlir::ArrayAttr>("rightHash");
       auto key = MakeKeys(op, keys, KernelType::Main);
       appendKernel("// Insert hash table kernel - SemiJoin", KernelType::Main);
-      std::string kernelSize = getKernelSizeVariable();
-      appendKernel("#pragma unroll", KernelType::Main);
-      appendKernel(fmt::format("for (int ITEM = 0; ITEM < ITEMS_PER_THREAD && (ITEM*TB + tid < {0}); ++ITEM) {{", kernelSize), KernelType::Main);
-      appendKernel(fmt::format("if (!selection_flags[ITEM]) continue;"), KernelType::Main);
+      addLoopBoilerPlate(KernelType::Main);
       appendKernel(fmt::format("{0}.insert(cuco::pair{{{1}[ITEM], 1}});", HT(op), key), KernelType::Main);
       appendKernel("}", KernelType::Main);
 
@@ -544,10 +531,7 @@ class CrystalTupleStreamCode : public TupleStreamCode {
       auto keys = joinOp->getAttrOfType<mlir::ArrayAttr>("rightHash");
       auto key = MakeKeys(op, keys, KernelType::Main);
       appendKernel("// Insert hash table kernel;", KernelType::Main);
-      std::string kernelSize = getKernelSizeVariable();
-      appendKernel("#pragma unroll", KernelType::Main);
-      appendKernel(fmt::format("for (int ITEM = 0; ITEM < ITEMS_PER_THREAD && (ITEM*TB + tid < {0}); ++ITEM) {{", kernelSize), KernelType::Main);
-      appendKernel(fmt::format("if (!selection_flags[ITEM]) continue;"), KernelType::Main);
+      addLoopBoilerPlate(KernelType::Main);
       appendKernel(fmt::format("{0}.insert(cuco::pair{{{1}[ITEM], 1}});", HT(op), key), KernelType::Main);
       appendKernel("}", KernelType::Main);
 
@@ -566,12 +550,8 @@ class CrystalTupleStreamCode : public TupleStreamCode {
       auto keys = joinOp->getAttrOfType<mlir::ArrayAttr>("leftHash");
       MakeKeys(op, keys, KernelType::Count);
       auto key = MakeKeys(op, keys, KernelType::Main);
-      appendKernel("// Probe Hash table");
-      std::string kernelSize = getKernelSizeVariable();
-      appendKernel("#pragma unroll");
-      appendKernel(fmt::format("for (int ITEM = 0; ITEM < ITEMS_PER_THREAD && (ITEM*TB + tid < {0}); ++ITEM) {{", kernelSize));
-      if (m_genSelectionCheckUniversally || m_hasInsertedSelection )
-         appendKernel("if (!selection_flags[ITEM]) continue;");
+      appendKernel("// Probe Hash table SJ");
+      addLoopBoilerPlate();
       appendKernel(fmt::format("auto {0} = {1}.find({2}[ITEM]);", SLOT(op), HT(op), key));
       appendKernel(fmt::format("if ({0} == {1}.end()) {{selection_flags[ITEM] = 0;}}", SLOT(op), HT(op)));
       appendKernel("}");
@@ -587,12 +567,8 @@ class CrystalTupleStreamCode : public TupleStreamCode {
       auto keys = joinOp->getAttrOfType<mlir::ArrayAttr>("leftHash");
       MakeKeys(op, keys, KernelType::Count);
       auto key = MakeKeys(op, keys, KernelType::Main);
-      appendKernel("//Probe Hash table");
-      std::string kernelSize = getKernelSizeVariable();
-      appendKernel("#pragma unroll");
-      appendKernel(fmt::format("for (int ITEM = 0; ITEM < ITEMS_PER_THREAD && (ITEM*TB + tid < {0}); ++ITEM) {{", kernelSize));
-      if (m_genSelectionCheckUniversally || m_hasInsertedSelection )
-         appendKernel("if (!selection_flags[ITEM]) continue;");
+      appendKernel("//Probe Hash table (ASJ)");
+      addLoopBoilerPlate();
       appendKernel(fmt::format("auto {0} = {1}.find({2}[ITEM]);", SLOT(op), HT(op), key));
       appendKernel(fmt::format("if (!({0} == {1}.end())) {{selection_flags[ITEM] = 0;}}", SLOT(op), HT(op)));
       appendKernel("}");
@@ -609,10 +585,7 @@ class CrystalTupleStreamCode : public TupleStreamCode {
       auto keys = joinOp->getAttrOfType<mlir::ArrayAttr>(hash);
       auto key = MakeKeys(op, keys, KernelType::Main);
       appendKernel("// Insert hash table kernel;", KernelType::Main);
-      std::string kernelSize = getKernelSizeVariable();
-      appendKernel("#pragma unroll", KernelType::Main);
-      appendKernel(fmt::format("for (int ITEM = 0; ITEM < ITEMS_PER_THREAD && (ITEM*TB + tid < {0}); ++ITEM) {{", kernelSize), KernelType::Main);
-      appendKernel(fmt::format("if (!selection_flags[ITEM]) continue;"), KernelType::Main);
+      addLoopBoilerPlate(KernelType::Main);
       auto baseRelations = getBaseRelations(columnData);
       bool shouldUseBuf = baseRelations.size() > 1 || !gUseHTValForRowIdx;
       if (shouldUseBuf) {
@@ -667,12 +640,9 @@ class CrystalTupleStreamCode : public TupleStreamCode {
       MakeKeys(op, keys, KernelType::Count);
       auto key = MakeKeys(op, keys, KernelType::Main);
 
-      std::string kernelSize = getKernelSizeVariable();
       appendKernel(fmt::format("int64_t {0}[ITEMS_PER_THREAD];", slot_second(op)));
-      appendKernel("#pragma unroll");
-      appendKernel(fmt::format("for (int ITEM = 0; ITEM < ITEMS_PER_THREAD && (ITEM*TB + tid < {0}); ++ITEM) {{", kernelSize));
-      if (m_genSelectionCheckUniversally || m_hasInsertedSelection )
-         appendKernel("if (!selection_flags[ITEM]) continue;");
+      appendKernel("// Probe Hash table MJ");
+      addLoopBoilerPlate();
       appendKernel(fmt::format("auto {0} = {1}.find({2}[ITEM]);", SLOT(op), HT(op), key));
       appendKernel(fmt::format("if ({0} == {1}.end()) {{selection_flags[ITEM] = 0; continue;}}", SLOT(op), HT(op)));
       appendKernel(fmt::format("{0}[ITEM] = {1}->second;", slot_second(op), SLOT(op)));
@@ -730,9 +700,7 @@ class CrystalTupleStreamCode : public TupleStreamCode {
       }
       auto key = MakeKeys(op, groupByKeys, KernelType::Count);
       appendKernel("// Create aggregation hash table", KernelType::Count);
-      appendKernel("#pragma unroll", KernelType::Count);
-      appendKernel(fmt::format("for (int ITEM = 0; ITEM < ITEMS_PER_THREAD && (ITEM*TB + tid < {0}); ++ITEM) {{", getKernelSizeVariable()), KernelType::Count);
-      appendKernel("if (!selection_flags[ITEM]) continue;", KernelType::Count);
+      addLoopBoilerPlate(KernelType::Count);
       appendKernel(fmt::format("if (countKeys) estimator.add({0}[ITEM]); else ", key), KernelType::Count);
       appendKernel(fmt::format("{0}.insert(cuco::pair{{{1}[ITEM], 1}});", HT(op), key), KernelType::Count);
       appendKernel("}", KernelType::Count);
@@ -832,11 +800,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
             }
          }
       }
-      std::string kernelSize = getKernelSizeVariable();
-      appendKernel("#pragma unroll", KernelType::Main);
-      appendKernel(fmt::format("for (int ITEM = 0; ITEM < ITEMS_PER_THREAD && (ITEM*TB + tid < {0}); ++ITEM) {{", kernelSize), KernelType::Main);
-      if (m_genSelectionCheckUniversally || m_hasInsertedSelection )
-         appendKernel(fmt::format("if (!selection_flags[ITEM]) continue;"), KernelType::Main);
+      addLoopBoilerPlate(KernelType::Main);
       if (groupByKeys.empty()) {
          appendKernel(fmt::format("auto {0} = 0;", buf_idx(op)), KernelType::Main); // all the keys are zero here
       } else { 
@@ -962,10 +926,7 @@ insertKeys<<<std::ceil((float){2}/128.), 128>>>(raw_keys{0}, d_{1}.ref(cuco::ins
             LoadColumn(columnAttr, KernelType::Main);
          }
       }
-      std::string kernelSize = getKernelSizeVariable();
-      appendKernel("#pragma unroll", KernelType::Main);
-      appendKernel(fmt::format("for (int ITEM = 0; ITEM < ITEMS_PER_THREAD && (ITEM*TB + tid < {0}); ++ITEM) {{", kernelSize), KernelType::Main);
-      appendKernel(fmt::format("if (!selection_flags[ITEM]) continue;"), KernelType::Main);
+      addLoopBoilerPlate(KernelType::Main);
       appendKernel(fmt::format("auto {0} = atomicAdd((int*){1}, 1);", mat_idx(op), MAT_IDX(op)), KernelType::Main);
       for (auto col : materializeOp.getCols()) {
          auto columnAttr = mlir::cast<tuples::ColumnRefAttr>(col);
