@@ -94,6 +94,7 @@ fi
 # run the crystal orig tests
 SSB_UTILS_H="$CRYSTAL_PATH/src/ssb/ssb_utils.h"
 sed -i "s/#define SF 1/#define SF $SCALE_FACTOR/" "$SSB_UTILS_H"
+sed -i "s|#define BASE_PATH.*|#define BASE_PATH \"$CRYSTAL_PATH/test/ssb/data/\"|" "$SSB_UTILS_H"
 
 pushd $CRYSTAL_PATH
 
