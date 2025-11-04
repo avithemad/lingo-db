@@ -136,6 +136,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CUDA_GEN_DIR="$(dirname "$SCRIPT_DIR")"
 TEST_DIR="$(dirname "$CUDA_GEN_DIR")"
 REPO_DIR="$(dirname "$TEST_DIR")"
+SRC_DIR="$SQL_PLAN_COMPILER_DIR/gpu-db/ssb-$SCALE_FACTOR"
 
 SSB_QUERY_DIR="$REPO_DIR/resources/sql/ssb"
 BUILD_DIR="$REPO_DIR/build/$BUILD_NAME"
@@ -154,8 +155,8 @@ if [ $SKIP_GEN -eq 0 ]; then
   GEN_CUDF="$BUILD_DIR/gen-cuda $SSB_DATA_DIR --gen-cuda$CRYSTAL_SUFFIX-code --ssb $CODEGEN_OPTIONS --profiling"
   for QUERY in "${QUERIES[@]}"; do
     # First run the run-sql tool to generate CUDA and get reference output
-    OUTPUT_FILE=$CUDA_GEN_DIR/"ssb-$QUERY-ref.csv"
-    GEN_CUDF="$GEN_CUDF $SSB_QUERY_DIR/$QUERY.sql $CUDA_GEN_DIR/q$QUERY$FILE_SUFFIX.codegen.cu $OUTPUT_FILE" 
+    OUTPUT_FILE=$SRC_DIR/"ssb-$QUERY-ref.csv"
+    GEN_CUDF="$GEN_CUDF $SSB_QUERY_DIR/$QUERY.sql $SRC_DIR/q$QUERY$FILE_SUFFIX.codegen.cu $OUTPUT_FILE" 
   done
   echo $GEN_CUDF
   $GEN_CUDF > /dev/null # ignore the output. We are not comparing
@@ -167,13 +168,13 @@ if [ $SKIP_GEN -eq 0 ]; then
 
   for QUERY in "${QUERIES[@]}"; do
     # format the generated cuda code
-    FORMAT_CMD="clang-format -i $CUDA_GEN_DIR/q$QUERY$FILE_SUFFIX.codegen.cu -style=Microsoft"
+    FORMAT_CMD="clang-format -i $SRC_DIR/q$QUERY$FILE_SUFFIX.codegen.cu -style=Microsoft"
     echo $FORMAT_CMD
     $FORMAT_CMD
   done
 fi
 
-SRC_DIR="$SQL_PLAN_COMPILER_DIR/gpu-db/ssb-$SCALE_FACTOR"
+
 CD_CMD="cd $SRC_DIR"
 echo $CD_CMD
 $CD_CMD
