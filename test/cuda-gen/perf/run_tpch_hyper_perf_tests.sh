@@ -7,6 +7,7 @@ SUB_DIR="."
 SUFFIX=""
 SKIP_GEN=0
 CONTINUOUS_ARG=""
+CUR_GPU=$(nvidia-smi --query-gpu=name --format=csv,noheader | head -n 1 | awk '{print $2}')
 for arg in "$@"; do
   case $arg in
     --smaller-hash-tables)
