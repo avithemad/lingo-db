@@ -31,6 +31,7 @@ struct PartitionHashJoinResultInfo {
    std::map<std::string, RowIdColToPtrIdMap> resultVarToRowIdColPtrIdMap;
    std::map<std::string, std::string> resultVarToCudaType;
    std::map<std::string, std::string> tableToIdxMap;
+   std::string resultVarName;
 
    void merge(const PartitionHashJoinResultInfo& other) {
       tableToResultVarMap.insert(other.tableToResultVarMap.begin(), other.tableToResultVarMap.end());
@@ -1595,6 +1596,12 @@ cuco::linear_probing<1, cuco::default_hash_function<{2}>>() }};",
       stream << "}\n";
    }
 
+   void printFreePhjResult(std::ostream& stream) {
+      if (m_joinInfo.resultVarName.empty())
+         return;
+      stream << fmt::format("{0}.free_mem();\n", m_joinInfo.resultVarName);
+   }
+
    void ExtractMaterializedPointerFromJoinResult(mlir::Operation* op, const std::string& tableName, MaterializedColumnInfo& columnInfo) {
       assert(m_joinInfo.tableToIdxMap.contains(tableName) && "Table -> RowIdxCol info isn't present.");
       std::string rowId = m_joinInfo.tableToIdxMap[tableName];
@@ -1918,9 +1925,10 @@ cuco::linear_probing<1, cuco::default_hash_function<{2}>>() }};",
       for (int32_t i = 0; i < (int32_t)materializedRightCols.rowIdColumnVarNames.size(); i++) {
          rowIdColToPtrMap[materializedRightCols.rowIdColumnVarNames[i]] = i + materializedLeftCols.rowIdColumnVarNames.size() + 1;
       }
-      resultInfo.resultVarToRowIdColPtrIdMap[std::move(resultColumns.columnVarName)] = std::move(rowIdColToPtrMap);
+      resultInfo.resultVarToRowIdColPtrIdMap[resultColumns.columnVarName] = std::move(rowIdColToPtrMap);
       resultInfo.merge(leftStreamCode->m_joinInfo);
       resultInfo.merge(rightStreamCode->m_joinInfo);
+      resultInfo.resultVarName = std::move(resultColumns.columnVarName);
       return std::move(resultInfo);
    }
 };
@@ -2306,6 +2314,7 @@ std::clog << \"Auxiliary memory: \" << aux_mem / (1024) << \" KB\" << std::endl;
 
       for (auto code : kernelSchedule) {
          code->printFrees(outputFile);
+         code->printFreePhjResult(outputFile);
       }
       outputFile << "}";
       outputFile.close();
