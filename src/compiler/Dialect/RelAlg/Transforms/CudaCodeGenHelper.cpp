@@ -150,7 +150,7 @@ int daysSinceEpoch(const std::string& dateStr) {
    auto epoch = std::chrono::system_clock::from_time_t(0);
    auto duration = std::chrono::duration_cast<std::chrono::hours>(tp - epoch);
 
-   return (duration.count() / 24) + 1; // Convert hours to days
+   return static_cast<int>(std::ceil(duration.count() / 24.0));
 }
 
 std::string mlirTypeToCudaType(const mlir::Type& ty) {
