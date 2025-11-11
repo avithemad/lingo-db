@@ -264,7 +264,7 @@ class HyperTupleStreamCode : public TupleStreamCode {
       for (auto& [resultVar, rowIdxColToPtrIdMap] : m_joinInfo.resultVarToRowIdColPtrIdMap) {
          for (auto& [rowIdCol, ptrId] : rowIdxColToPtrIdMap) {
             mlirToGlobalSymbol[rowIdCol] = fmt::format("{0}.get_typed_ptr<{1}>()", resultVar, ptrId);
-            mainArgs[rowIdCol] = countArgs[rowIdCol] = "uint64_t*";
+            mainArgs[rowIdCol] = countArgs[rowIdCol] = fmt::format("{0}*", ROW_ID_TYPE);
          }
       }
 
