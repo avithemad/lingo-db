@@ -44,7 +44,7 @@ struct PartitionHashJoinResultInfo {
    }
 };
 
-#define ROW_ID_TYPE "uint64_t"
+#define ROW_ID_TYPE "uint32_t"
 
 struct JoinOpDownstreamColumnUseInfo {
    JoinOpDownstreamColumnUseInfo() = default;
