@@ -100,6 +100,11 @@ for arg in "$@"; do
       SUB_DIR="${SUB_DIR}_TiledHT"
       SUFFIX="$SUFFIX-tiledht"
       ;;
+    --use-ballot-shuffle)
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --use-ballot-shuffle"
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      ;;
   esac
 done
 

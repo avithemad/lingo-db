@@ -408,9 +408,9 @@ void checkForCodeGenSwitches(int& argc, char** argv);
 // --- [start] Pyper ---
 extern bool gPyperShuffle; // TODO: Move to a getter
 extern bool gThreadsAlwaysAlive; // TODO: Move to a getter
-// -- [end] Pyper ---
-
+extern bool gUseBallotShuffle;
 extern bool gShuffleAllOps; // TODO: Move to a getter
+// -- [end] Pyper ---
 
 bool isPrimaryKey(const std::set<std::string>& keysSet);
 bool invertJoinIfPossible(std::set<std::string>& rightkeysSet, bool left_pk);

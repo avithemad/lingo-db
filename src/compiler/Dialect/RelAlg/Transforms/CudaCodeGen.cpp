@@ -568,9 +568,12 @@ class HyperTupleStreamCode : public TupleStreamCode {
          startThreadActiveScope("true");
       else
          assert(false && "Shuffle: We shouldn't be here if shuffles are not enabled");
+      if (gUseBallotShuffle)
+         appendKernel(fmt::format("auto shuffle_slot = get_shuffle_buf_idx_ballot(&shuffle_buf_idx[{0}], threadActive);", m_shuffleData.cur_shuffle_id));
+      else
+         appendKernel(fmt::format("auto shuffle_slot = get_shuffle_buf_idx_atomic(&shuffle_buf_idx[{0}], threadActive);", m_shuffleData.cur_shuffle_id));
       startThreadActiveScope("threadActive");
-      appendKernel("// Save current state to shuffle buffer");      
-      appendKernel(fmt::format("auto shuffle_slot = atomicAdd_block(&shuffle_buf_idx[{0}], 1);", m_shuffleData.cur_shuffle_id));
+      appendKernel("// Save current state to shuffle buffer");
       appendKernel(fmt::format("shuffle_buf_tid[shuffle_slot] = tid;"));
       for (auto& op : m_shuffleData.shuffleBufOps) {
          auto slotValue = (m_shuffleData.savedOps.find(op) != m_shuffleData.savedOps.end()) ? slot_or_shuf_val(op) : SHUF_BUF_EXPR(op);

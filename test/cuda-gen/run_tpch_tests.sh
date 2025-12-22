@@ -82,6 +82,11 @@ for arg in "$@"; do
       # Remove this specific argument from $@
       set -- "${@/$arg/}"
       ;;
+    --use-ballot-shuffle)
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --use-ballot-shuffle"
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      ;;
   esac
 done
 
@@ -130,6 +135,7 @@ fi
 
 if [ -z "$QUERIES" ]; then
   QUERIES=(1 3 4 5 6 7 8 9 10 12 13 14 16 17 18 19 20)
+  QUERIES=(1 3 5 6 7 9 10 12 13 14 16 17 18 19 20)
 fi
 
 TPCH_CUDA_GEN_DIR="$SQL_PLAN_COMPILER_DIR/gpu-db/tpch-$SCALE_FACTOR"
