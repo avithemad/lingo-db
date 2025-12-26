@@ -7,7 +7,7 @@ SUB_DIR="."
 SUFFIX=""
 SKIP_GEN=0
 CONTINUOUS_ARG=""
-CUR_GPU=$(nvidia-smi --query-gpu=name --format=csv,noheader | head -n 1 | awk '{print $2}')
+CUR_GPU?=$(nvidia-smi --query-gpu=name --format=csv,noheader | head -n 1 | awk '{print $2}')
 for arg in "$@"; do
   case $arg in
     --smaller-hash-tables)
@@ -72,6 +72,7 @@ for arg in "$@"; do
       ;;
     --use-partition-hash-join)
       CODEGEN_OPTIONS="$CODEGEN_OPTIONS --use-partition-hash-join"
+      SUB_DIR="HT32_PHJ"
       FILE_SUFFIX=".phj"
       SUFFIX="$SUFFIX-phj"
       # Remove this specific argument from $@
