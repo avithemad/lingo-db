@@ -430,4 +430,7 @@ extern BloomFilterPolicy gBloomFilterPolicy;
 extern bool gTwoItemsPerThread; // TODO: Move to a getter
 extern bool gOneItemPerThread; // TODO: Move to a getter
 
+// ssb vs tpch
+extern bool gCompilingSSB; // TODO: Move to a getter
+
 #endif // LINGODB_COMPILER_DIALECT_RELALG_CUDA_CODE_GEN_HELPER_H

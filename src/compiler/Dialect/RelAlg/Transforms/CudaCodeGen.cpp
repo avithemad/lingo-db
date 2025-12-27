@@ -2267,9 +2267,12 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
             #include <thrust/host_vector.h>\n \
             #include \"cudautils.cuh\"\n\
             #include \"db_types.h\"\n\
-            #include \"dbruntime.h\"\n\
             #include <chrono>\n \
             #include <cuco/hyperloglog.cuh>\n";
+      if (gCompilingSSB)
+         outputFile << "#include \"ssb-runtime.h\"\n";
+      else
+         outputFile << "#include \"tpch-runtime.h\"\n";
 
       if (generateKernelTimingCode()) {
          outputFile << "#include <cuda_runtime.h>\n";
