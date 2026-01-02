@@ -94,6 +94,14 @@ for arg in "$@"; do
       CRYSTAL_SUFFIX="-crystal"
       QUERY_SUFFIX=".crystal"
       ;;
+    --use-partition-hash-join)
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --use-partition-hash-join"
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      QUERY_SUFFIX=".phj"
+      SUB_DIR="HT32_PHJ"
+      SUFFIX="-ht32-phj"
+      ;;
   esac
 done
 
