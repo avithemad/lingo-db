@@ -22,11 +22,13 @@ static bool gGenPerOperationProfile = false;
 static bool gGenIsProfiling = false; // Do not generate multiple iteration loops if we are profiling
 static bool gPartitionHashJoinCodeGenEnabled = false;
 bool gUseHTValForRowIdx = true; // Use hash table value as row index instead of storing row index separately in a buf
+static std::string gProfileRangeName = "PROFILE_RANGE";
 
 bool generateKernelTimingCode() { return gGenKernelTimingCode; }
 bool generatePerOperationProfile() { return gGenPerOperationProfile; }
 bool isProfiling() { return gGenIsProfiling; }
 bool usePartitionHashJoin() { return gPartitionHashJoinCodeGenEnabled; }
+std::string& getProfileRangeName() { return gProfileRangeName; }
 
 // -- [end] kernel timing code generation --
 

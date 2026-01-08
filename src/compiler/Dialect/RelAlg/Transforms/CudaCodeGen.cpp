@@ -2282,6 +2282,10 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
 
       if (usedPartitionHashJoin) {
          outputFile << "#include \"../db-utils/phj/partitioned_hash_join.cuh\"\n";
+         if (isProfiling()) {
+            outputFile << "#include \"nvtx3/nvtx3.hpp\"\n";
+            outputFile << "#include <optional>\n";
+         }
       }
 
       for (auto code : kernelSchedule) {
@@ -2304,6 +2308,15 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
          outputFile << "bool runCountKernel = (iter == 0);\n";
          outputFile << "if (iter == 1) startTime = std::chrono::high_resolution_clock::now();\n"; // start the timer after the warp up iteration
       }
+      else if (isProfiling() && usedPartitionHashJoin) {
+         outputFile << "size_t numIterations = 2;\n";
+         outputFile << "for (size_t iter = 0; iter < numIterations; iter++) {\n";
+         outputFile << "bool enableProfiling = (iter == 1);\n";
+         outputFile << "std::optional<nvtx3::scoped_range> profilingRange;\n";
+         outputFile << "if (enableProfiling) {\n";
+         outputFile << fmt::format("profilingRange.emplace(nvtx3::message(\"{0}\"));\n", getProfileRangeName());
+         outputFile << "}\n";
+      }
       for (auto code : kernelSchedule) {
          code->printControl(outputFile);
       }
@@ -2313,6 +2326,9 @@ class CudaCodeGen : public mlir::PassWrapper<CudaCodeGen, mlir::OperationPass<ml
          outputFile << fmt::format("auto duration = std::chrono::duration_cast<std::chrono::microseconds>(endTime - startTime)/(numIterations - 1);\n");
          if (generateKernelTimingCode() && !gPrintHashTableSizes)
             outputFile << "std::cout << \"total_query, \" << duration.count() / 1000. << std::endl;\n";
+      }
+      else if (isProfiling() && usedPartitionHashJoin) {
+         outputFile << "}\n"; // end of iteration loop
       }
       outputFile << "std::clog << \"Used memory: \" << used_mem / (1024 * 1024) << \" MB\" << std::endl; \n\
 size_t aux_mem = usedGpuMem() - used_mem;\n\
