@@ -44,6 +44,7 @@ bool generateKernelTimingCode();
 bool generatePerOperationProfile();
 bool isProfiling();
 bool usePartitionHashJoin();
+std::string& getProfileRangeName();
 
 // -- [end] kernel timing code generation --
 
