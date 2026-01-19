@@ -7,6 +7,7 @@ SUB_DIR="."
 SUFFIX=""
 SKIP_GEN=0
 CONTINUOUS_ARG=""
+LOAD_COLUMNS_PER_QUERY=""
 CUR_GPU?=$(nvidia-smi --query-gpu=name --format=csv,noheader | head -n 1 | awk '{print $2}')
 for arg in "$@"; do
   case $arg in
@@ -72,6 +73,7 @@ for arg in "$@"; do
       ;;
     --use-partition-hash-join)
       CODEGEN_OPTIONS="$CODEGEN_OPTIONS --use-partition-hash-join"
+      LOAD_COLUMNS_PER_QUERY="--load-columns-per-query"
       SUB_DIR="HT32_PHJ"
       FILE_SUFFIX=".phj"
       SUFFIX="$SUFFIX-phj"
@@ -239,7 +241,7 @@ QUERIES_STR=$(IFS=,; echo "${QUERIES_WITH_SUFFIX[*]}")
 
 echo $QUERIES_STR
 
-RUN_QUERY_CMD="build/dbruntime --data_dir $TPCH_DATA_DIR/ --query_num $QUERIES_STR --op_file $OUTPUT_FILE --scale_factor $SCALE_FACTOR $CONTINUOUS_ARG"
+RUN_QUERY_CMD="build/dbruntime --data_dir $TPCH_DATA_DIR/ --query_num $QUERIES_STR --op_file $OUTPUT_FILE --scale_factor $SCALE_FACTOR $CONTINUOUS_ARG $LOAD_COLUMNS_PER_QUERY"
 echo $RUN_QUERY_CMD
 $RUN_QUERY_CMD
 

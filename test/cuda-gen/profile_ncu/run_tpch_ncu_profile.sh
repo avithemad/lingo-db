@@ -7,6 +7,7 @@ SUFFIX=""
 CRYSTAL_FLAG=false
 CRYSTAL_SUFFIX=""
 QUERY_SUFFIX=""
+PROFILE_OPTIONS=""
 for arg in "$@"; do
   case $arg in
     --smaller-hash-tables)
@@ -43,6 +44,14 @@ for arg in "$@"; do
       set -- "${@/$arg/}"
       SUB_DIR="HT32_BF_LargeHT_FitBF"
       SUFFIX="-ht32-bf-largeht-fitbf"
+      ;;
+    --use-partition-hash-join)
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      SUB_DIR="HT32_PHJ"
+      SUFFIX+="-ht32-phj"
+      QUERY_SUFFIX=".phj"
+      PROFILE_OPTIONS="--nvtx --nvtx-include PROFILE_RANGE/"
       ;;
     --threads-always-alive)
       # CODEGEN_OPTIONS="$CODEGEN_OPTIONS --threads-always-alive" # make this default for now
@@ -93,6 +102,14 @@ for arg in "$@"; do
       CRYSTAL_FLAG=true
       CRYSTAL_SUFFIX="-crystal"
       QUERY_SUFFIX=".crystal"
+      ;;
+    --use-partition-hash-join)
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --use-partition-hash-join"
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      QUERY_SUFFIX=".phj"
+      SUB_DIR="HT32_PHJ"
+      SUFFIX="-ht32-phj"
       ;;
   esac
 done
@@ -158,7 +175,7 @@ $MAKE_REPORT_FOLDER
 
 # Iterate over the queries
 for QUERY in "${QUERIES[@]}"; do
-  RUN_PROFILE_CMD="ncu --set full -f --export $REPORT_FOLDER/q$QUERY-tpch-$SCALE_FACTOR$CRYSTAL_SUFFIX$SUFFIX.ncu-rep ./build/dbruntime --data_dir $TPCH_DATA_DIR/ --query_num $QUERY$QUERY_SUFFIX"
+  RUN_PROFILE_CMD="ncu --set full $PROFILE_OPTIONS -f --export $REPORT_FOLDER/q$QUERY-tpch-$SCALE_FACTOR$CRYSTAL_SUFFIX$SUFFIX.ncu-rep ./build/dbruntime --data_dir $TPCH_DATA_DIR/ --query_num $QUERY$QUERY_SUFFIX"
   echo $RUN_PROFILE_CMD
   $RUN_PROFILE_CMD # > op | tee 2>&1
 done

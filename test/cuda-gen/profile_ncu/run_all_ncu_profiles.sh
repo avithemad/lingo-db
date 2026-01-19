@@ -122,16 +122,19 @@ run_hyper_test_config "Pyper Shuffle" $SCALE_FACTOR --smaller-hash-tables --pype
 # Test Configuration 8: With shuffle all ops
 run_hyper_test_config "Shuffle All Ops" $SCALE_FACTOR --smaller-hash-tables --shuffle-all-ops
 
-# Test Configuration 9: Basic crystal run
+# Test Configuration 9: With HT32 PHJ
+run_hyper_test_config "HT32 PHJ" $SCALE_FACTOR --smaller-hash-tables --use-partition-hash-join
+
+# Test Configuration 10: Basic crystal run
 run_crystal_test_config "Basic" $SCALE_FACTOR
 
-# Test Configuration 10: Crystal with smaller hash tables
+# Test Configuration 11: Crystal with smaller hash tables
 run_crystal_test_config "Smaller Hash Tables" $SCALE_FACTOR --smaller-hash-tables
 
-# Test Configuration 11: Crystal with two items per thread
+# Test Configuration 12: Crystal with two items per thread
 run_crystal_test_config "Two Items Per Thread" $SCALE_FACTOR --smaller-hash-tables --two-items-per-thread
 
-# Test Configuration 12: Crystal with one item per thread
+# Test Configuration 13: Crystal with one item per thread
 run_crystal_test_config "One Item Per Thread" $SCALE_FACTOR --smaller-hash-tables --one-item-per-thread
 
 echo "========================================"

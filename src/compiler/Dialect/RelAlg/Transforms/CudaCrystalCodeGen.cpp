@@ -1565,9 +1565,13 @@ class CudaCrystalCodeGen : public mlir::PassWrapper<CudaCrystalCodeGen, mlir::Op
 #include <thrust/host_vector.h>\n\
 #include \"cudautils.cuh\"\n\
 #include \"db_types.h\"\n\
-#include \"dbruntime.h\"\n\
 #include <chrono>\n\
 #include <cuco/hyperloglog.cuh>\n";
+if (gCompilingSSB)
+   outputFile << "#include \"ssb-runtime.h\"\n";
+else
+   outputFile << "#include \"tpch-runtime.h\"\n";
+
    if (gOneItemPerThread) {
       outputFile << "#define ITEMS_PER_THREAD 1\n\
 #define TILE_SIZE 128\n\
