@@ -2,6 +2,16 @@
 
 # Script to run TPC-H tests with different parameter combinations
 # Usage: ./run_all_tpch_tests.sh [scale_factor]
+SSB_ARG=""
+for arg in "$@"; do
+  case $arg in
+    --ssb)
+      SSB_ARG="--ssb"
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      ;;
+  esac
+done
 
 SCALE_FACTOR="$1"
 if [ -z "$SCALE_FACTOR" ]; then
@@ -76,11 +86,11 @@ run_test_config() {
 }
 
 run_hyper_test_config() {
-  run_test_config "$RUN_HYPER_SCRIPT" "$@" $OTHER_OPTIONS
+  run_test_config "$RUN_HYPER_SCRIPT" "$@" $OTHER_OPTIONS $SSB_ARG
 }
 
 run_crystal_test_config() {
-  run_test_config "$RUN_CRYSTAL_SCRIPT" "$@" $OTHER_OPTIONS
+  run_test_config "$RUN_CRYSTAL_SCRIPT" "$@" $OTHER_OPTIONS $SSB_ARG
 }
 
 echo "Starting TPC-H tests with scale factor: $SCALE_FACTOR"

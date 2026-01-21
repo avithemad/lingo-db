@@ -171,7 +171,6 @@ if [ $SKIP_GEN -eq 0 ]; then
   rm -f $TPCH_CUDA_GEN_DIR/*.csv
   rm -f $TPCH_CUDA_GEN_DIR/*.log
   
-  echo "Using batch gen-cuda"    
   GEN_CUDF="$BUILD_DIR/gen-cuda $TPCH_DATA_DIR --gen-cuda-code $CODEGEN_OPTIONS"
   # First run the run-sql tool to generate CUDA and get reference output
   for QUERY in "${QUERIES[@]}"; do      
@@ -180,7 +179,7 @@ if [ $SKIP_GEN -eq 0 ]; then
   done
 
   echo $GEN_CUDF
-  $GEN_CUDF > /dev/null # ignore the output
+  $GEN_CUDF > /dev/null # ignore the output. We are not comparing
 
   for QUERY in "${QUERIES[@]}"; do
     # format the generated cuda code
