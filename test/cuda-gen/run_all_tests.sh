@@ -37,18 +37,18 @@ exec 2>&1
 
 # Get the directory of this script
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RUN_HYPER_SCRIPT="$SCRIPT_DIR/run_tpch_tests.sh"
+RUN_HYPER_SCRIPT="$SCRIPT_DIR/run_hyper_tests.sh"
 
-# Check if the run_tpch_tests.sh script exists
+# Check if the run_hyper_tests.sh script exists
 if [ ! -f "$RUN_HYPER_SCRIPT" ]; then
-  echo "Error: run_tpch_tests.sh not found at $RUN_HYPER_SCRIPT"
+  echo "Error: run_hyper_tests.sh not found at $RUN_HYPER_SCRIPT"
   exit 1
 fi
 
-RUN_CRYSTAL_SCRIPT="$SCRIPT_DIR/run_tpch_crystal_tests.sh"
-# Check if the run_tpch_crystal_tests.sh script exists
+RUN_CRYSTAL_SCRIPT="$SCRIPT_DIR/run_crystal_tests.sh"
+# Check if the run_crystal_tests.sh script exists
 if [ ! -f "$RUN_CRYSTAL_SCRIPT" ]; then
-  echo "Error: run_tpch_crystal_tests.sh not found at $RUN_CRYSTAL_SCRIPT"
+  echo "Error: run_crystal_tests.sh not found at $RUN_CRYSTAL_SCRIPT"
   exit 1
 fi
 
