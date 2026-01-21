@@ -55,11 +55,21 @@ mkdir -p $OUTPUT_DIR
 echo "Output directory: $OUTPUT_DIR"
 
 QUERIES=(1 3 4 5 6 7 8 9 10 12 13 14 16 17 18 19 20)
-if [ $SCALE_FACTOR -gt 20 ]; then
-  QUERIES=(1 3 4 5 6 7 8 10 12 13 14 16 17 18 19 20)
+if [ $CUR_GPU == "4090" ]; then
+  if [ $SCALE_FACTOR -gt 10 ]; then
+    QUERIES=(3 4 5 6 7 8 10 12 13 14 16 17 18 19 20)
+  fi
+  if [ $SCALE_FACTOR -gt 20 ]; then
+    QUERIES=(3 4 5 6 7 8 10 12 13 14 16 17 18 19 20)
+  fi
 fi
-if [ $SCALE_FACTOR -gt 30 ]; then
-  QUERIES=(3 4 5 6 7 8 10 12 13 14 16 17 18 19 20)
+if [ $CUR_GPU == "A6000" ]; then
+  if [ $SCALE_FACTOR -gt 20 ]; then
+    QUERIES=(1 3 4 5 6 7 8 10 12 13 14 16 17 18 19 20)
+  fi
+  if [ $SCALE_FACTOR -gt 30 ]; then
+    QUERIES=(3 4 5 6 7 8 10 12 13 14 16 17 18 19 20)
+  fi
 fi
 
 # cleanup the result files and logs
