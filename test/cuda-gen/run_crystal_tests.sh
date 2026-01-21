@@ -102,12 +102,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEST_DIR="$(dirname "$SCRIPT_DIR")"
 REPO_DIR="$(dirname "$TEST_DIR")"
 
-BENCHMARK_DIR="$REPO_DIR/resources/sql/$BENCHMARK_NAME"
+SQL_SRC_DIR="$REPO_DIR/resources/sql/$BENCHMARK_NAME"
 BUILD_DIR="$REPO_DIR/build/$BUILD_NAME"
 
 # Set the data directory if not already set
-if [ -z "$TPCH_DATA_DIR" ]; then
-  TPCH_DATA_DIR="$REPO_DIR/resources/data/$BENCHMARK_NAME-$SCALE_FACTOR"
+if [ -z "$DATA_DIR" ]; then
+  DATA_DIR="$REPO_DIR/resources/data/$BENCHMARK_NAME-$SCALE_FACTOR"
 fi
 
 if [ -z "$QUERIES" ]; then
@@ -118,9 +118,9 @@ if [ -z "$QUERIES" ]; then
   fi
 fi
 
-TPCH_CUDA_GEN_DIR="$SQL_PLAN_COMPILER_DIR/gpu-db/$BENCHMARK_NAME-$SCALE_FACTOR"
-echo "TPCH_CUDA_GEN_DIR: $TPCH_CUDA_GEN_DIR"
-pushd $TPCH_CUDA_GEN_DIR
+CUDA_GEN_DIR="$SQL_PLAN_COMPILER_DIR/gpu-db/$BENCHMARK_NAME-$SCALE_FACTOR"
+echo "CUDA_GEN_DIR: $CUDA_GEN_DIR"
+pushd $CUDA_GEN_DIR
 MAKE_RUNTIME="make build-runtime CUCO_SRC_PATH=$CUCO_SRC_PATH"
 echo $MAKE_RUNTIME
 $MAKE_RUNTIME
@@ -136,17 +136,17 @@ if [ $SKIP_GEN -eq 0 ]; then
   # cleanup the result files, built shared objects
   rm -f build/*.codegen.so # do this so that we don't run other queries by mistake
   rm -f $SCRIPT_DIR/*.csv
-  rm -f $TPCH_CUDA_GEN_DIR/*.csv
-  rm -f $TPCH_CUDA_GEN_DIR/*.log
-  rm -f $TPCH_CUDA_GEN_DIR/*.codegen.cu
+  rm -f $CUDA_GEN_DIR/*.csv
+  rm -f $CUDA_GEN_DIR/*.log
+  rm -f $CUDA_GEN_DIR/*.codegen.cu
 
   # generate new files
   FILE_SUFFIX=".crystal"
-  GEN_CUDF="$BUILD_DIR/gen-cuda $TPCH_DATA_DIR --gen-cuda-crystal-code $CODEGEN_OPTIONS"
+  GEN_CUDF="$BUILD_DIR/gen-cuda $DATA_DIR --gen-cuda-crystal-code $CODEGEN_OPTIONS"
     # First run the run-sql tool to generate CUDA and get reference output
   for QUERY in "${QUERIES[@]}"; do
     OUTPUT_FILE=$SCRIPT_DIR/"$BENCHMARK_NAME-$QUERY-ref.csv"
-    GEN_CUDF="$GEN_CUDF $BENCHMARK_DIR/$QUERY.sql $TPCH_CUDA_GEN_DIR/q$QUERY$FILE_SUFFIX.codegen.cu $OUTPUT_FILE" 
+    GEN_CUDF="$GEN_CUDF $SQL_SRC_DIR/$QUERY.sql $CUDA_GEN_DIR/q$QUERY$FILE_SUFFIX.codegen.cu $OUTPUT_FILE" 
   done
 
   echo $GEN_CUDF
@@ -154,7 +154,7 @@ if [ $SKIP_GEN -eq 0 ]; then
 
   for QUERY in "${QUERIES[@]}"; do
     # format the generated cuda code
-    FORMAT_CMD="clang-format -i $TPCH_CUDA_GEN_DIR/q$QUERY$FILE_SUFFIX.codegen.cu -style=Microsoft"
+    FORMAT_CMD="clang-format -i $CUDA_GEN_DIR/q$QUERY$FILE_SUFFIX.codegen.cu -style=Microsoft"
     echo $FORMAT_CMD
     $FORMAT_CMD
   done
@@ -193,7 +193,7 @@ for i in "${QUERIES[@]}"; do
 done
 QUERIES_STR="${QUERIES_STR%,*}" # remove trailing comma
 
-RUN_QUERY_CMD="build/dbruntime --data_dir $TPCH_DATA_DIR/ --query_num $QUERIES_STR"
+RUN_QUERY_CMD="build/dbruntime --data_dir $DATA_DIR/ --query_num $QUERIES_STR"
 echo $RUN_QUERY_CMD
 $RUN_QUERY_CMD
 
@@ -201,7 +201,7 @@ cd -
 
 for QUERY in "${QUERIES[@]}"; do
   OUTPUT_FILE="$BENCHMARK_NAME-$QUERY-ref.csv"
-  PYTHON_CMD="python $SCRIPT_DIR/compare_tpch_outputs.py $SCRIPT_DIR/$OUTPUT_FILE $TPCH_CUDA_GEN_DIR/cuda-$BENCHMARK_NAME-$QUERY.crystal.csv"
+  PYTHON_CMD="python $SCRIPT_DIR/compare_tpch_outputs.py $SCRIPT_DIR/$OUTPUT_FILE $CUDA_GEN_DIR/cuda-$BENCHMARK_NAME-$QUERY.crystal.csv"
   echo $PYTHON_CMD
   $PYTHON_CMD
 
