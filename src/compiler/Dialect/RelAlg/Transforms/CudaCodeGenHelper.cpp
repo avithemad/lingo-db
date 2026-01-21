@@ -293,7 +293,7 @@ void TupleStreamCode::AddPostHTProbeCounter(mlir::Operation* op) {
 
 // --- [start] code generation switches helpers ---
 
-bool gStaticMapOnly = true;
+bool gUseMultiMapIfNecessary = false;
 bool gUseBloomFiltersForJoin = false;
 bool gThreadsAlwaysAlive = true;
 bool gPyperShuffle = false;
@@ -371,7 +371,7 @@ void checkForBloomFilterOptions(int& args, char **argv) {
 
 void checkForCodeGenSwitches(int& argc, char** argv) {
    std::tuple<bool*, std::string, std::string> switches[]  = {
-      std::make_tuple(&gStaticMapOnly, "--static-map-only", "static map only code generation"),
+      std::make_tuple(&gUseMultiMapIfNecessary, "--use-multi-map", "multimap based code generation"),
       std::make_tuple(&gUseBloomFiltersForJoin, "--use-bloom-filters", "bloom filters for join"),
       std::make_tuple(&gThreadsAlwaysAlive, "--threads-always-alive", "threads always alive"),
       std::make_tuple(&gPyperShuffle, "--pyper-shuffle", "pyper shuffle code generation"),
@@ -422,13 +422,13 @@ bool isPrimaryKey(const std::set<std::string>& keysSet) {
 }
 
 bool invertJoinIfPossible(std::set<std::string>& rightkeysSet, bool left_pk) {
-   if (left_pk == false && gStaticMapOnly) {
+   if (left_pk == false && !gUseMultiMapIfNecessary) {
       // check if right side is a pk
       bool right_pk = isPrimaryKey(rightkeysSet);
-      if (right_pk == false && gStaticMapOnly) {
+      if (right_pk == false && !gUseMultiMapIfNecessary) {
          assert(false && "This join is not possible without multimap, since both sides are not pk");
       }
-      if (right_pk == true && gStaticMapOnly) {
+      if (right_pk == true && !gUseMultiMapIfNecessary) {
          return true;
       }
    }

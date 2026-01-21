@@ -855,8 +855,9 @@ class HyperTupleStreamCode : public TupleStreamCode {
       if (!pk) {
          mainArgs[HT(op)] = "HASHTABLE_INSERT";
          mlirToGlobalSymbol[HT(op)] = fmt::format("d_{}.ref(cuco::insert)", HT(op));
-         appendControl(fmt::format("auto d_{0} = cuco::experimental::static_multimap{{ (int){1}*2, cuco::empty_key{{({2})-1}},cuco::empty_value{{({3})-1}},thrust::equal_to<{2}>{{}},cuco::linear_probing<1, cuco::default_hash_function<{2}>>() }};",
+         appendControlDecl(fmt::format("auto d_{0} = cuco::experimental::static_multimap{{ (int) 1, cuco::empty_key{{({2})-1}},cuco::empty_value{{({3})-1}},thrust::equal_to<{2}>{{}},cuco::linear_probing<1, cuco::default_hash_function<{2}>>() }};",
                                    HT(op), COUNT(op), getHTKeyType(keys), getHTValueType()));
+         appendControl(fmt::format("d_{0}.clear();", HT(op)));
       }
       else {
          genCreateHashTable(op, keys, "PK");

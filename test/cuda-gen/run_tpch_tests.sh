@@ -6,6 +6,8 @@ USE_RUN_SQL=0 # set to 1 to use run-sql to generate cuda code. 0 to use batch ge
 PROFILING=0
 SKIP_GEN=0
 CONTINOUS_ARG=""
+BENCHMARK_NAME="tpch"
+
 # for each arg in args
 for arg in "$@"; do
   case $arg in
@@ -87,6 +89,12 @@ for arg in "$@"; do
       # Remove this specific argument from $@
       set -- "${@/$arg/}"
       ;;
+    --ssb)
+      BENCHMARK_NAME="ssb"
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --ssb --use-multi-map"
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      ;;
   esac
 done
 
@@ -125,20 +133,23 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEST_DIR="$(dirname "$SCRIPT_DIR")"
 REPO_DIR="$(dirname "$TEST_DIR")"
 
-TPCH_DIR="$REPO_DIR/resources/sql/tpch"
+BENCHMARK_DIR="$REPO_DIR/resources/sql/$BENCHMARK_NAME"
 BUILD_DIR="$REPO_DIR/build/$BUILD_NAME"
 
 # Set the data directory if not already set
 if [ -z "$TPCH_DATA_DIR" ]; then
-  TPCH_DATA_DIR="$REPO_DIR/resources/data/tpch-$SCALE_FACTOR"
+  TPCH_DATA_DIR="$REPO_DIR/resources/data/$BENCHMARK_NAME-$SCALE_FACTOR"
 fi
 
 if [ -z "$QUERIES" ]; then
-  QUERIES=(1 3 4 5 6 7 8 9 10 12 13 14 16 17 18 19 20)
-  QUERIES=(1 3 5 6 7 9 10 12 13 14 16 17 18 19 20)
+  if [ "$BENCHMARK_NAME" == "ssb" ]; then
+    QUERIES=(11 12 13 21 22 23 31 32 33 34 41 42 43)
+  else
+    QUERIES=(1 3 4 5 6 7 8 9 10 12 13 14 16 17 18 19 20)
+  fi
 fi
 
-TPCH_CUDA_GEN_DIR="$SQL_PLAN_COMPILER_DIR/gpu-db/tpch-$SCALE_FACTOR"
+TPCH_CUDA_GEN_DIR="$SQL_PLAN_COMPILER_DIR/gpu-db/$BENCHMARK_NAME-$SCALE_FACTOR"
 echo "TPCH_CUDA_GEN_DIR: $TPCH_CUDA_GEN_DIR"
 pushd $TPCH_CUDA_GEN_DIR
 MAKE_RUNTIME="make build-runtime CUCO_SRC_PATH=$CUCO_SRC_PATH"
@@ -164,8 +175,8 @@ if [ $SKIP_GEN -eq 0 ]; then
   GEN_CUDF="$BUILD_DIR/gen-cuda $TPCH_DATA_DIR --gen-cuda-code $CODEGEN_OPTIONS"
   # First run the run-sql tool to generate CUDA and get reference output
   for QUERY in "${QUERIES[@]}"; do      
-    OUTPUT_FILE=$SCRIPT_DIR/"tpch-$QUERY-ref.csv"
-    GEN_CUDF="$GEN_CUDF $TPCH_DIR/$QUERY.sql $TPCH_CUDA_GEN_DIR/q$QUERY$FILE_SUFFIX.codegen.cu $OUTPUT_FILE" 
+    OUTPUT_FILE=$SCRIPT_DIR/"$BENCHMARK_NAME-$QUERY-ref.csv"
+    GEN_CUDF="$GEN_CUDF $BENCHMARK_DIR/$QUERY.sql $TPCH_CUDA_GEN_DIR/q$QUERY$FILE_SUFFIX.codegen.cu $OUTPUT_FILE" 
   done
 
   echo $GEN_CUDF
@@ -221,8 +232,8 @@ $RUN_QUERY_CMD
 cd -
 
 for QUERY in "${QUERIES[@]}"; do
-  OUTPUT_FILE="tpch-$QUERY-ref.csv"
-  PYTHON_CMD="python $SCRIPT_DIR/compare_tpch_outputs.py $SCRIPT_DIR/$OUTPUT_FILE $TPCH_CUDA_GEN_DIR/cuda-tpch-$QUERY$FILE_SUFFIX.csv"
+  OUTPUT_FILE="$BENCHMARK_NAME-$QUERY-ref.csv"
+  PYTHON_CMD="python $SCRIPT_DIR/compare_tpch_outputs.py $SCRIPT_DIR/$OUTPUT_FILE $TPCH_CUDA_GEN_DIR/cuda-$BENCHMARK_NAME-$QUERY$FILE_SUFFIX.csv"
   echo $PYTHON_CMD
   $PYTHON_CMD
 
