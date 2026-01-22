@@ -6,12 +6,18 @@
 OTHER_OPTIONS=""
 SUB_DIR="."
 SUFFIX=""
+SSB_SUFFIX=""
 for arg in "$@"; do
   case $arg in
     --print-hash-table-sizes)
       OTHER_OPTIONS="$OTHER_OPTIONS --print-hash-table-sizes"
       # Remove this specific argument from $@
-      set -- "${@/$arg/}"      
+      set -- "${@/$arg/}"  
+      ;;    
+    --ssb)
+      SSB_SUFFIX="--ssb"
+      set -- "${@/$arg/}"
+      ;;
   esac
 done
 
@@ -88,11 +94,11 @@ run_test_config() {
 }
 
 run_hyper_test_config() {
-  run_test_config "$RUN_HYPER_PERF_SCRIPT" "$@" $OTHER_OPTIONS
+  run_test_config "$RUN_HYPER_PERF_SCRIPT" "$@" $OTHER_OPTIONS $SSB_SUFFIX
 }
 
 run_crystal_test_config() {
-  run_test_config "$RUN_CRYSTAL_PERF_SCRIPT" "$@" $OTHER_OPTIONS
+  run_test_config "$RUN_CRYSTAL_PERF_SCRIPT" "$@" $OTHER_OPTIONS $SSB_SUFFIX
 }
 
 echo "Starting TPC-H tests with scale factor: $SCALE_FACTOR"

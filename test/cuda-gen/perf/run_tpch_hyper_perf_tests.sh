@@ -8,7 +8,7 @@ SUFFIX=""
 SKIP_GEN=0
 CONTINUOUS_ARG=""
 LOAD_COLUMNS_PER_QUERY=""
-CUR_GPU?=$(nvidia-smi --query-gpu=name --format=csv,noheader | head -n 1 | awk '{print $2}')
+BENCHMARK_NAME="tpch"
 for arg in "$@"; do
   case $arg in
     --smaller-hash-tables)
@@ -108,6 +108,12 @@ for arg in "$@"; do
       # Remove this specific argument from $@
       set -- "${@/$arg/}"
       ;;
+    --ssb)
+      BENCHMARK_NAME="ssb"
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --ssb --use-multi-map"
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      ;;
   esac
 done
 
@@ -138,7 +144,7 @@ if [ -n "$CUR_GPU" ]; then
   echo "Using CUR_GPU from environment variable: $CUR_GPU"
 else
   echo "CUR_GPU environment variable is not set."
-  exit 1
+  CUR_GPU=$(nvidia-smi --query-gpu=name --format=csv,noheader | head -n 1 | awk '{print $2}')
 fi
 
 # Set build name variable if not already set
@@ -154,26 +160,28 @@ CUDA_GEN_DIR="$(dirname "$SCRIPT_DIR")"
 TEST_DIR="$(dirname $(dirname "$SCRIPT_DIR"))"
 REPO_DIR="$(dirname "$TEST_DIR")"
 
-TPCH_DIR="$REPO_DIR/resources/sql/tpch"
+SQL_DIR="$REPO_DIR/resources/sql/$BENCHMARK_NAME"
 BUILD_DIR="$REPO_DIR/build/$BUILD_NAME"
 
-
 # Set the data directory if not already set
-if [ -z "$TPCH_DATA_DIR" ]; then
-  TPCH_DATA_DIR="$REPO_DIR/resources/data/tpch-$SCALE_FACTOR"
+if [ -z "$DATA_DIR" ]; then
+  DATA_DIR="$REPO_DIR/resources/data/$BENCHMARK_NAME-$SCALE_FACTOR"
 fi
 
-
 if [ -z "$QUERIES" ]; then
-  QUERIES=(1 3 4 5 6 7 8 9 10 12 13 14 16 17 18 19 20)
-  if [ $SCALE_FACTOR -gt 60 ]; then
-    QUERIES=(1 3 5 6 7 8 10 12 13 14 16 17 19 20) # Queries 4, 9 and 18 have large hash tables. Run out of memory on A6000
+  if [ "$BENCHMARK_NAME" == "ssb" ]; then
+    QUERIES=(11 12 13 21 22 23 31 32 33 34 41 42 43)
+  else
+    QUERIES=(1 3 4 5 6 7 8 9 10 12 13 14 16 17 18 19 20)
+    if [ $SCALE_FACTOR -gt 60 ]; then
+      QUERIES=(1 3 5 6 7 8 10 12 13 14 16 17 19 20) # Queries 4, 9 and 18 have large hash tables. Run out of memory on A6000
+    fi
   fi
 fi
 
-TPCH_CUDA_GEN_DIR="$SQL_PLAN_COMPILER_DIR/gpu-db/tpch-$SCALE_FACTOR"
-echo "TPCH_CUDA_GEN_DIR: $TPCH_CUDA_GEN_DIR"
-pushd $TPCH_CUDA_GEN_DIR
+CUDA_GEN_DIR="$SQL_PLAN_COMPILER_DIR/gpu-db/$BENCHMARK_NAME-$SCALE_FACTOR"
+echo "CUDA_GEN_DIR: $CUDA_GEN_DIR"
+pushd $CUDA_GEN_DIR
 MAKE_RUNTIME="make build-runtime CUCO_SRC_PATH=$CUCO_SRC_PATH"
 echo $MAKE_RUNTIME
 $MAKE_RUNTIME
@@ -184,26 +192,26 @@ if [ $? -ne 0 ]; then
   exit 1
 fi
 
-OUTPUT_DIR=$SQL_PLAN_COMPILER_DIR/reports/ncu/$CUR_GPU/tpch-$SCALE_FACTOR/$SUB_DIR
+OUTPUT_DIR=$SQL_PLAN_COMPILER_DIR/reports/ncu/$CUR_GPU/$BENCHMARK_NAME-$SCALE_FACTOR/$SUB_DIR
 mkdir -p $OUTPUT_DIR
-OUTPUT_FILE=$OUTPUT_DIR/tpch-$SCALE_FACTOR-hyper$SUFFIX-perf.csv
+OUTPUT_FILE=$OUTPUT_DIR/$BENCHMARK_NAME-$SCALE_FACTOR-hyper$SUFFIX-perf.csv
 echo "Output file: $OUTPUT_FILE"
 
 # Empty the output file
 echo -n "" > $OUTPUT_FILE
 if [ $SKIP_GEN -eq 0 ]; then
-  GEN_CUDF="$BUILD_DIR/gen-cuda $TPCH_DATA_DIR --gen-cuda-code --gen-kernel-timing $CODEGEN_OPTIONS"
+  GEN_CUDF="$BUILD_DIR/gen-cuda $DATA_DIR --gen-cuda-code --gen-kernel-timing $CODEGEN_OPTIONS"
   for QUERY in "${QUERIES[@]}"; do
     # First run the run-sql tool to generate CUDA and get reference output
-    RES_CSV=$CUDA_GEN_DIR/"tpch-$QUERY-ref.csv"
-    GEN_CUDF="$GEN_CUDF $TPCH_DIR/$QUERY.sql $TPCH_CUDA_GEN_DIR/q$QUERY$FILE_SUFFIX.codegen.cu $RES_CSV"
+    RES_CSV=$CUDA_GEN_DIR/"$BENCHMARK_NAME-$QUERY-ref.csv"
+    GEN_CUDF="$GEN_CUDF $SQL_DIR/$QUERY.sql $CUDA_GEN_DIR/q$QUERY$FILE_SUFFIX.codegen.cu $RES_CSV"
   done
   echo $GEN_CUDF
   $GEN_CUDF > /dev/null # ignore the output. We are not comparing
 
   for QUERY in "${QUERIES[@]}"; do
     # format the generated cuda code
-    FORMAT_CMD="clang-format -i $TPCH_CUDA_GEN_DIR/q$QUERY$FILE_SUFFIX.codegen.cu -style=Microsoft"
+    FORMAT_CMD="clang-format -i $CUDA_GEN_DIR/q$QUERY$FILE_SUFFIX.codegen.cu -style=Microsoft"
     echo $FORMAT_CMD
     $FORMAT_CMD
   done
@@ -241,7 +249,7 @@ QUERIES_STR=$(IFS=,; echo "${QUERIES_WITH_SUFFIX[*]}")
 
 echo $QUERIES_STR
 
-RUN_QUERY_CMD="build/dbruntime --data_dir $TPCH_DATA_DIR/ --query_num $QUERIES_STR --op_file $OUTPUT_FILE --scale_factor $SCALE_FACTOR $CONTINUOUS_ARG $LOAD_COLUMNS_PER_QUERY"
+RUN_QUERY_CMD="build/dbruntime --data_dir $DATA_DIR/ --query_num $QUERIES_STR --op_file $OUTPUT_FILE --scale_factor $SCALE_FACTOR $CONTINUOUS_ARG $LOAD_COLUMNS_PER_QUERY"
 echo $RUN_QUERY_CMD
 $RUN_QUERY_CMD
 
