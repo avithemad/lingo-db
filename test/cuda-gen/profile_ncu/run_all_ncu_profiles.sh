@@ -27,19 +27,19 @@ exec 2>&1
 
 # Get the directory of this script
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RUN_HYPER_SCRIPT="$SCRIPT_DIR/../run_tpch_tests.sh"
+RUN_HYPER_SCRIPT="$SCRIPT_DIR/../run_hyper_tests.sh"
 
-# Check if the run_tpch_tests.sh script exists
+# Check if the run_hyper_tests.sh script exists
 if [ ! -f "$RUN_HYPER_SCRIPT" ]; then
-  echo "Error: run_tpch_tests.sh not found at $RUN_HYPER_SCRIPT"
+  echo "Error: run_hyper_tests.sh not found at $RUN_HYPER_SCRIPT"
   exit 1
 fi
 
-RUN_CRYSTAL_SCRIPT="$SCRIPT_DIR/../run_tpch_crystal_tests.sh"
+RUN_CRYSTAL_SCRIPT="$SCRIPT_DIR/../run_crystal_tests.sh"
 
-# Check if the run_tpch_crystal_perf_tests.sh script exists
+# Check if the run_crystal_tests.sh script exists
 if [ ! -f "$RUN_CRYSTAL_SCRIPT" ]; then
-  echo "Error: run_tpch_crystal_perf_tests.sh not found at $RUN_CRYSTAL_SCRIPT"
+  echo "Error: run_crystal_tests.sh not found at $RUN_CRYSTAL_SCRIPT"
   exit 1
 fi
 
@@ -98,44 +98,44 @@ echo "Starting TPC-H tests with scale factor: $SCALE_FACTOR"
 echo "All output will be logged to: $LOG_FILE"
 echo "========================================"
 
-# Test Configuration 1: Basic run
-run_hyper_test_config "Basic" $SCALE_FACTOR
+# # Test Configuration 1: Basic run
+# run_hyper_test_config "Basic" $SCALE_FACTOR
 
-# Test Configuration 2: With smaller hash tables
-run_hyper_test_config "Smaller Hash Tables" $SCALE_FACTOR --smaller-hash-tables
+# # Test Configuration 2: With smaller hash tables
+# run_hyper_test_config "Smaller Hash Tables" $SCALE_FACTOR --smaller-hash-tables
 
-# Test Configuration 3: With bloom filters
-run_hyper_test_config "Bloom Filters" $SCALE_FACTOR --smaller-hash-tables --use-bloom-filters
+# # Test Configuration 3: With bloom filters
+# run_hyper_test_config "Bloom Filters" $SCALE_FACTOR --smaller-hash-tables --use-bloom-filters
 
-# Test Configuration 4: With bloom filters and large hash tables
-run_hyper_test_config "Bloom Filters" $SCALE_FACTOR --smaller-hash-tables --use-bloom-filters-for-large-ht
+# # Test Configuration 4: With bloom filters and large hash tables
+# run_hyper_test_config "Bloom Filters" $SCALE_FACTOR --smaller-hash-tables --use-bloom-filters-for-large-ht
 
-# Test Configuration 5: With bloom filters - large hash tables and small bf
-run_hyper_test_config "Bloom Filters" $SCALE_FACTOR --smaller-hash-tables --use-bloom-filters-for-large-ht-small-bf
+# # Test Configuration 5: With bloom filters - large hash tables and small bf
+# run_hyper_test_config "Bloom Filters" $SCALE_FACTOR --smaller-hash-tables --use-bloom-filters-for-large-ht-small-bf
 
-# Test Configuration 6: With bloom filters - large hash tables and fit bf
-run_hyper_test_config "Bloom Filters" $SCALE_FACTOR --smaller-hash-tables --use-bloom-filters-for-large-ht-fit-bf
+# # Test Configuration 6: With bloom filters - large hash tables and fit bf
+# run_hyper_test_config "Bloom Filters" $SCALE_FACTOR --smaller-hash-tables --use-bloom-filters-for-large-ht-fit-bf
 
-# Test Configuration 7: With pyper shuffle
-run_hyper_test_config "Pyper Shuffle" $SCALE_FACTOR --smaller-hash-tables --pyper-shuffle
+# # Test Configuration 7: With pyper shuffle
+# run_hyper_test_config "Pyper Shuffle" $SCALE_FACTOR --smaller-hash-tables --pyper-shuffle
 
-# Test Configuration 8: With shuffle all ops
-run_hyper_test_config "Shuffle All Ops" $SCALE_FACTOR --smaller-hash-tables --shuffle-all-ops
+# # Test Configuration 8: With shuffle all ops
+# run_hyper_test_config "Shuffle All Ops" $SCALE_FACTOR --smaller-hash-tables --shuffle-all-ops
 
 # Test Configuration 9: With HT32 PHJ
 run_hyper_test_config "HT32 PHJ" $SCALE_FACTOR --smaller-hash-tables --use-partition-hash-join
 
-# Test Configuration 10: Basic crystal run
-run_crystal_test_config "Basic" $SCALE_FACTOR
+# # Test Configuration 10: Basic crystal run
+# run_crystal_test_config "Basic" $SCALE_FACTOR
 
-# Test Configuration 11: Crystal with smaller hash tables
-run_crystal_test_config "Smaller Hash Tables" $SCALE_FACTOR --smaller-hash-tables
+# # Test Configuration 11: Crystal with smaller hash tables
+# run_crystal_test_config "Smaller Hash Tables" $SCALE_FACTOR --smaller-hash-tables
 
-# Test Configuration 12: Crystal with two items per thread
-run_crystal_test_config "Two Items Per Thread" $SCALE_FACTOR --smaller-hash-tables --two-items-per-thread
+# # Test Configuration 12: Crystal with two items per thread
+# run_crystal_test_config "Two Items Per Thread" $SCALE_FACTOR --smaller-hash-tables --two-items-per-thread
 
-# Test Configuration 13: Crystal with one item per thread
-run_crystal_test_config "One Item Per Thread" $SCALE_FACTOR --smaller-hash-tables --one-item-per-thread
+# # Test Configuration 13: Crystal with one item per thread
+# run_crystal_test_config "One Item Per Thread" $SCALE_FACTOR --smaller-hash-tables --one-item-per-thread
 
 echo "========================================"
 echo "FINAL RESULTS SUMMARY"
