@@ -344,6 +344,7 @@ static void checkForCodegenSwitch(int &argc, char** argv, bool* config, const st
 void checkForBloomFilterOptions(int& args, char **argv) {
    bool hasBloomFilterFlags = false;
    auto bloom_filter_configs = {
+      std::make_tuple("--bloom-filter-policy-high-sel", BloomFilterHighSel, "Add bloom filter only when the probe selectivity is high"),
       std::make_tuple("--bloom-filter-policy-large-ht", BloomFilterLargeHT, "Add bloom filter only when HT is larger than L2 cache"),
       std::make_tuple("--bloom-filter-policy-large-ht-small-bf", BloomFilterLargeHTSmallBF, "Add bloom filter only when HT is larger than L2 cache and the bloom filter can fit in L2 cache"),
       std::make_tuple("--bloom-filter-policy-large-ht-fit-bf", BloomFilterLargeHTFitBF, "Add bloom filter only when HT is larger than L2 cache, but fit the bloom filter to L2 cache")

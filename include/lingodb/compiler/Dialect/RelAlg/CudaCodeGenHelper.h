@@ -421,6 +421,7 @@ void emitTimingEventCreation(std::ostream& outputFile);
 extern bool gUseBloomFiltersForJoin; // TODO: Move to a getter
 enum BloomFilterPolicy { 
    AddBloomFiltersToAllJoins, // default bloom filter policy
+   BloomFilterHighSel, // add bloom filter only when the probe selectivity is high
    BloomFilterLargeHT, // add bloom filter only when HT is larger than L2 cache
    BloomFilterLargeHTSmallBF, // add bloom filter only when HT is larger than L2 cache and the bloom filter can fit in L2 cache
    BloomFilterLargeHTFitBF // add bloom filter only when HT is larger than L2 cache, but fit the bloom filter to L2 cache

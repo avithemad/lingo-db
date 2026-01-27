@@ -21,6 +21,11 @@ for arg in "$@"; do
       # Remove this specific argument from $@
       set -- "${@/$arg/}"
       ;;
+    --use-bloom-filters-high-sel)
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --use-bloom-filters --bloom-filter-policy-high-sel"
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      ;;
     --use-bloom-filters-for-large-ht)
       CODEGEN_OPTIONS="$CODEGEN_OPTIONS --use-bloom-filters --bloom-filter-policy-large-ht"
       # Remove this specific argument from $@

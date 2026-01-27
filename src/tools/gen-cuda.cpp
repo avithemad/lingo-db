@@ -11,6 +11,7 @@
 #include <string>
 
 extern std::string gOpFilePath; // TODO: This is bad coupling between codegen and main. Pass it as a param
+extern std::string gQueryNumber; // TODO: This is bad coupling between codegen and main. Pass it as a param
 
 namespace {
 utility::GlobalSetting<bool> eagerLoading("system.eager_loading", false);
@@ -101,7 +102,19 @@ int main(int argc, char** argv) {
    for (size_t i = 0; i < sql_files.size(); i++) {
       std::string inputFileName = sql_files[i];
       gOpFilePath = op_files[i];
-      std::cerr << "Processing SQL file: " << inputFileName << " with output file: " << gOpFilePath << ", result file: " << result_files[i] << '\n';
+    // Extract query number from inputFileName (expected format: */xx.sql)
+    std::string fileName = inputFileName;
+    auto lastSlash = fileName.find_last_of("/\\");
+    if (lastSlash != std::string::npos)
+       fileName = fileName.substr(lastSlash + 1);
+    auto lastDot = fileName.find_last_of('.');
+    if (lastDot != std::string::npos)
+       fileName = fileName.substr(0, lastDot);
+    gQueryNumber = fileName;
+
+    std::cerr << "Processing query " << gQueryNumber << " (SQL file: " << inputFileName
+            << " with output file: " << gOpFilePath
+            << ", result file: " << result_files[i] << ")\n";
       RedirectStdIO redirectStdOut(result_files[i], STDOUT_FILENO);
 
       lingodb::compiler::support::eval::init();
