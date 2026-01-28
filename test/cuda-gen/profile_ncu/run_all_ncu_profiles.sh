@@ -104,17 +104,20 @@ echo "========================================"
 # # Test Configuration 2: With smaller hash tables
 # run_hyper_test_config "Smaller Hash Tables" $SCALE_FACTOR --smaller-hash-tables
 
-# # Test Configuration 3: With bloom filters
-# run_hyper_test_config "Bloom Filters" $SCALE_FACTOR --smaller-hash-tables --use-bloom-filters
+# Test Configuration 3: With bloom filters
+run_hyper_test_config "Bloom Filters" $SCALE_FACTOR --smaller-hash-tables --use-bloom-filters
 
-# # Test Configuration 4: With bloom filters and large hash tables
-# run_hyper_test_config "Bloom Filters" $SCALE_FACTOR --smaller-hash-tables --use-bloom-filters-for-large-ht
+# Test Configuration 3: With bloom filters with high selectivity
+run_hyper_test_config "Bloom Filters High Sel" $SCALE_FACTOR --smaller-hash-tables --use-bloom-filters-high-sel
 
-# # Test Configuration 5: With bloom filters - large hash tables and small bf
-# run_hyper_test_config "Bloom Filters" $SCALE_FACTOR --smaller-hash-tables --use-bloom-filters-for-large-ht-small-bf
+# Test Configuration 4: With bloom filters and large hash tables
+run_hyper_test_config "Bloom Filters" $SCALE_FACTOR --smaller-hash-tables --use-bloom-filters-for-large-ht
 
-# # Test Configuration 6: With bloom filters - large hash tables and fit bf
-# run_hyper_test_config "Bloom Filters" $SCALE_FACTOR --smaller-hash-tables --use-bloom-filters-for-large-ht-fit-bf
+# Test Configuration 5: With bloom filters - large hash tables and small bf
+run_hyper_test_config "Bloom Filters" $SCALE_FACTOR --smaller-hash-tables --use-bloom-filters-for-large-ht-small-bf
+
+# Test Configuration 6: With bloom filters - large hash tables and fit bf
+run_hyper_test_config "Bloom Filters" $SCALE_FACTOR --smaller-hash-tables --use-bloom-filters-for-large-ht-fit-bf
 
 # # Test Configuration 7: With pyper shuffle
 # run_hyper_test_config "Pyper Shuffle" $SCALE_FACTOR --smaller-hash-tables --pyper-shuffle
@@ -122,8 +125,8 @@ echo "========================================"
 # # Test Configuration 8: With shuffle all ops
 # run_hyper_test_config "Shuffle All Ops" $SCALE_FACTOR --smaller-hash-tables --shuffle-all-ops
 
-# Test Configuration 9: With HT32 PHJ
-run_hyper_test_config "HT32 PHJ" $SCALE_FACTOR --smaller-hash-tables --use-partition-hash-join
+# # Test Configuration 9: With HT32 PHJ
+# run_hyper_test_config "HT32 PHJ" $SCALE_FACTOR --smaller-hash-tables --use-partition-hash-join
 
 # # Test Configuration 10: Basic crystal run
 # run_crystal_test_config "Basic" $SCALE_FACTOR

@@ -18,36 +18,6 @@ namespace cudacodegen {
 
 static int StreamId = 0;
 
-// Hack, we want to use the query number to also check which hash tables to set the bloom filters for
-using QueryId = int32_t;
-using HashTableId = int32_t;
-using QueryToHashTableSkipMap = std::map<QueryId, std::set<HashTableId>>;
-
-// Map from query number to the set of hash table IDs for which bloom filters should be skipped.
-static const QueryToHashTableSkipMap gSkipBloomFiltersForHashTables = {
-   // { <query-id>, { <hash-table-id>, ... } },
-   { 8,  { 6, 10, 12 } },   // q8: HT_6, HT_10, HT_12 have selection ratio 1.00
-   { 9,  { 2, 4, 6, 8 } },  // q9: HT_2, HT_4, HT_6, HT_8 have selection ratio 1.00
-   { 10, { 2, 4 } },        // q10: HT_2, HT_4 have selection ratio 1.00
-   { 12, { 0 } },           // q12: HT_0 has selection ratio 1.00
-   { 13, { 0 } },           // q13: HT_0 has selection ratio 1.00
-   { 16, { 2 } },           // q16: HT_2 has selection ratio 1.00
-   { 18, { 4 } },           // q18: HT_4 has selection ratio 1.00
-};
-
-bool shouldSkipBFForHashTable(std::string htId) {
-   if (gQueryNumber.empty()) {
-      return false;
-   }
-   QueryId queryId = std::stoi(gQueryNumber);
-   auto it = gSkipBloomFiltersForHashTables.find(queryId);
-   if (it != gSkipBloomFiltersForHashTables.end()) {
-      const auto& htSet = it->second;
-      return htSet.find(std::stoi(htId)) != htSet.end();
-   }
-   return false;
-}
-
 struct MaterializedColumnInfo {
    std::string columnVarName;
    std::string columnCudaType;
@@ -790,7 +760,7 @@ class HyperTupleStreamCode : public TupleStreamCode {
          else
             startThreadActiveScope(fmt::format("{0} != {1}.end()", SLOT(op), HT(op)));
       }
-      AddPreHTProbeCounter(op);      
+      AddPostHTProbeCounter(op);      
    }
       
    void BuildHashTableAntiSemiJoin(mlir::Operation* op) {

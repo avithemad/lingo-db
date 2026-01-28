@@ -38,6 +38,37 @@ extern bool gEnableLogging;
 extern bool gUseHTValForRowIdx; // TODO: Move to a getter
 extern bool gTileHashTables; // TODO: Move to a getter
 
+// bloom filter related
+extern bool gUseBloomFiltersForJoin; // TODO: Move to a getter
+enum BloomFilterPolicy { 
+   AddBloomFiltersToAllJoins, // default bloom filter policy
+   BloomFilterHighSel, // add bloom filter only when the probe selectivity is high
+   BloomFilterLargeHT, // add bloom filter only when HT is larger than L2 cache
+   BloomFilterLargeHTSmallBF, // add bloom filter only when HT is larger than L2 cache and the bloom filter can fit in L2 cache
+   BloomFilterLargeHTFitBF // add bloom filter only when HT is larger than L2 cache, but fit the bloom filter to L2 cache
+};
+extern BloomFilterPolicy gBloomFilterPolicy;
+
+// Hack, we want to use the query number to also check which hash tables to set the bloom filters for
+using QueryId = int32_t;
+using HashTableId = int32_t;
+using QueryToHashTableSkipMap = std::map<QueryId, std::set<HashTableId>>;
+
+// Map from query number to the set of hash table IDs for which bloom filters should be skipped.
+static const QueryToHashTableSkipMap gSkipBloomFiltersForHashTables = {
+   // { <query-id>, { <hash-table-id>, ... } },
+   { 8,  { 6, 10, 12 } },   // q8: HT_6, HT_10, HT_12 have selection ratio 1.00
+   { 9,  { 2, 4, 6, 8 } },  // q9: HT_2, HT_4, HT_6, HT_8 have selection ratio 1.00
+   { 10, { 2, 4 } },        // q10: HT_2, HT_4 have selection ratio 1.00
+   { 12, { 0 } },           // q12: HT_0 has selection ratio 1.00
+   { 13, { 0 } },           // q13: HT_0 has selection ratio 1.00
+   { 16, { 2 } },           // q16: HT_2 has selection ratio 1.00
+   { 18, { 4 } },           // q18: HT_4 has selection ratio 1.00
+};
+
+extern std::string gQueryNumber;
+bool shouldSkipBFForHashTable(std::string htId);
+
 // -- [start] kernel timing code generation --
 
 bool generateKernelTimingCode();
@@ -312,8 +343,17 @@ protected:
          }
 
          auto kernel_name = "main_" +  GetId((void*) this);
-         appendControl(fmt::format("if (runCountKernel) {{ std::cout << \"-- HT Size: \" << (uint32_t)({0} * {1}) * (sizeof({2}) + sizeof({3})) << \" bytes, Count: \" << {0} << \", ID: {9}, Op: {6}, OpId : {7}, Left: {4}, Right: {5}, Kernel: {8} --\" << std::endl;", count_var, load_factor, key_size, value_size, leftHashStr, rightHashStr, op->getName().getStringRef().str(), GetId((void*) op), kernel_name, HT((void*) op)));
-         appendControl(fmt::format("std::cout << \"-- HT_Build: {0}, Op: {1}, OpId: {2}, Kernel: {3} --\" << std::endl; }}", HT((void*) op), op->getName().getStringRef().str(), GetId((void*) op), kernel_name));
+         auto id = GetId((void*) op);
+         auto opName = op->getName().getStringRef().str();
+         auto ht_var = HT((void*) op);
+         auto bf_var = BF((void*) op);         
+         appendControl(fmt::format("if (runCountKernel) {{")); 
+         appendControl(fmt::format("auto ht_size_{0} = (uint32_t)({1} * {2} * (sizeof({3}) + sizeof({4})));", GetId((void*) op), count_var, load_factor, key_size, value_size));
+         appendControl(fmt::format("std::cout << \"-- HT Size: \" << ht_size_{0} << \" bytes, Count: \" << {1} << \", ID: {2}, Op: {3}, OpId : {0}, Left: {4}, Right: {5}, Kernel: {6} --\" << std::endl;", id, count_var, ht_var, opName, leftHashStr, rightHashStr, kernel_name));
+         appendControl(fmt::format("std::cout << \"-- HT_Build: {0}, Op: {1}, OpId: {2}, Kernel: {3} --\" << std::endl;", ht_var, opName, id, kernel_name));
+         if (gUseBloomFiltersForJoin)
+            appendControl(fmt::format("printBloomFilterInfo(\"{0}\", \"{1}\", \"{2}\", {3}, ht_size_{4}, {5}, {6});", ht_var, bf_var, kernel_name, count_var, id, gBloomFilterPolicy, shouldSkipBFForHashTable(id)));
+         appendControl("} // runCountKernel");
       }
    }
 
@@ -416,17 +456,6 @@ extern bool gShuffleAllOps; // TODO: Move to a getter
 bool isPrimaryKey(const std::set<std::string>& keysSet);
 bool invertJoinIfPossible(std::set<std::string>& rightkeysSet, bool left_pk);
 void emitTimingEventCreation(std::ostream& outputFile);
-
-// bloom filter related
-extern bool gUseBloomFiltersForJoin; // TODO: Move to a getter
-enum BloomFilterPolicy { 
-   AddBloomFiltersToAllJoins, // default bloom filter policy
-   BloomFilterHighSel, // add bloom filter only when the probe selectivity is high
-   BloomFilterLargeHT, // add bloom filter only when HT is larger than L2 cache
-   BloomFilterLargeHTSmallBF, // add bloom filter only when HT is larger than L2 cache and the bloom filter can fit in L2 cache
-   BloomFilterLargeHTFitBF // add bloom filter only when HT is larger than L2 cache, but fit the bloom filter to L2 cache
-};
-extern BloomFilterPolicy gBloomFilterPolicy;
 
 // crystal tiling
 extern bool gTwoItemsPerThread; // TODO: Move to a getter

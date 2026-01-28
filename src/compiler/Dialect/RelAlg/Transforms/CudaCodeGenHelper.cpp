@@ -341,6 +341,19 @@ static void checkForCodegenSwitch(int &argc, char** argv, bool* config, const st
    }
 }
 
+bool shouldSkipBFForHashTable(std::string htId) {
+   if (gQueryNumber.empty()) {
+      return false;
+   }
+   QueryId queryId = std::stoi(gQueryNumber);
+   auto it = gSkipBloomFiltersForHashTables.find(queryId);
+   if (it != gSkipBloomFiltersForHashTables.end()) {
+      const auto& htSet = it->second;
+      return htSet.find(std::stoi(htId)) != htSet.end();
+   }
+   return false;
+}
+
 void checkForBloomFilterOptions(int& args, char **argv) {
    bool hasBloomFilterFlags = false;
    auto bloom_filter_configs = {
