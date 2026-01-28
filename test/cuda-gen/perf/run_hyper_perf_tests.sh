@@ -30,7 +30,7 @@ for arg in "$@"; do
       # Remove this specific argument from $@
       set -- "${@/$arg/}"
       SUB_DIR="HT32_BF_HighSel"
-      SUFFIX="-ht32-bf"
+      SUFFIX="-ht32-bf-highsel"
       ;;
     --use-bloom-filters-for-large-ht)
       CODEGEN_OPTIONS="$CODEGEN_OPTIONS --use-bloom-filters --bloom-filter-policy-large-ht"

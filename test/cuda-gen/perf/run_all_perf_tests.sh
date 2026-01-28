@@ -114,6 +114,9 @@ run_hyper_test_config "Smaller Hash Tables" $SCALE_FACTOR --smaller-hash-tables
 # Test Configuration 3: With bloom filters
 run_hyper_test_config "Bloom Filters" $SCALE_FACTOR --smaller-hash-tables --use-bloom-filters
 
+# Test Configuration 3: With bloom filters high sel
+run_hyper_test_config "Bloom Filters High Sel" $SCALE_FACTOR --smaller-hash-tables --use-bloom-filters-high-sel
+
 # Test Configuration 4: With bloom filters and large hash tables
 run_hyper_test_config "Bloom Filters Large HT" $SCALE_FACTOR --smaller-hash-tables --use-bloom-filters-for-large-ht
 
@@ -141,8 +144,8 @@ run_crystal_test_config "Smaller Hash Tables" $SCALE_FACTOR --smaller-hash-table
 # Test Configuration 12: Crystal with two items per thread
 run_crystal_test_config "Two Items Per Thread" $SCALE_FACTOR --smaller-hash-tables --two-items-per-thread
 
-# Test Configuration 13: Crystal with one item per thread
-run_crystal_test_config "One Item Per Thread" $SCALE_FACTOR --smaller-hash-tables --one-item-per-thread
+# # Test Configuration 13: Crystal with one item per thread
+# run_crystal_test_config "One Item Per Thread" $SCALE_FACTOR --smaller-hash-tables --one-item-per-thread
 
 echo "========================================"
 echo "FINAL RESULTS SUMMARY"
