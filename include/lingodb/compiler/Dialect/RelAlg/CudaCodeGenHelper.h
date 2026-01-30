@@ -351,8 +351,6 @@ protected:
          appendControl(fmt::format("auto ht_size_{0} = (uint32_t)({1} * {2} * (sizeof({3}) + sizeof({4})));", GetId((void*) op), count_var, load_factor, key_size, value_size));
          appendControl(fmt::format("std::cout << \"-- HT Size: \" << ht_size_{0} << \" bytes, Count: \" << {1} << \", ID: {2}, Op: {3}, OpId : {0}, Left: {4}, Right: {5}, Kernel: {6} --\" << std::endl;", id, count_var, ht_var, opName, leftHashStr, rightHashStr, kernel_name));
          appendControl(fmt::format("std::cout << \"-- HT_Build: {0}, Op: {1}, OpId: {2}, Kernel: {3} --\" << std::endl;", ht_var, opName, id, kernel_name));
-         if (gUseBloomFiltersForJoin)
-            appendControl(fmt::format("printBloomFilterInfo(\"{0}\", \"{1}\", \"{2}\", {3}, ht_size_{4}, {5}, {6});", ht_var, bf_var, kernel_name, count_var, id, gBloomFilterPolicy, shouldSkipBFForHashTable(id)));
          appendControl("} // runCountKernel");
       }
    }

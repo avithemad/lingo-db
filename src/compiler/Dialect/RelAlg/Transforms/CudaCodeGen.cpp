@@ -878,11 +878,16 @@ class HyperTupleStreamCode : public TupleStreamCode {
          else
             appendControl(fmt::format("auto {0}_count = max(d_{1}.size()/32, 1);", BF(op), HT(op)));
          
-         
+         auto hasLowSelectivity = shouldSkipBFForHashTable(GetId(op));
          if (gBloomFilterPolicy == AddBloomFiltersToAllJoins) // always create a bloom filter
             appendControl(fmt::format("skip_{0} = false;", BF(op)));
-         else {
-            if (shouldSkipBFForHashTable(GetId(op)))
+         else if (gBloomFilterPolicy == BloomFilterHighSel) {
+            if (hasLowSelectivity)
+               appendControl(fmt::format("skip_{0} = true;", BF(op)));
+            else
+               appendControl(fmt::format("skip_{0} = false;", BF(op)));
+         } else { // other bloom filter policies, we still only add bloom filters for high selectivity joins
+            if (hasLowSelectivity)
                appendControl(fmt::format("skip_{0} = true;", BF(op)));
             else {
                appendControl(fmt::format("auto ht_size_{0} = d_{1}.size() * 2 * (sizeof({2}) + sizeof({3}));", GetId(op), HT(op), getHTKeyType(keys), getHTValueType()));
@@ -896,8 +901,8 @@ class HyperTupleStreamCode : public TupleStreamCode {
          }
          {
             ScopedRunCountKernel rck(this);
-            appendControl(fmt::format("d_{0} = new cuco::bloom_filter<{1}>({0}_count);", BF(op), getHTKeyType(keys))); // 32 is an arbitrary constant. We need to fix this.
-            log(fmt::format("Bloom filter {0} created", BF(op)));
+            appendControl(fmt::format("d_{0} = new cuco::bloom_filter<{1}>({0}_count);", BF(op), getHTKeyType(keys))); // 32 is an arbitrary constant. We need to fix this.            
+            
          }
          appendControl(fmt::format("if (!skip_{0}) {{", BF(op)));
          appendControl(fmt::format("d_{0}->clear();", BF(op)));
@@ -910,8 +915,11 @@ class HyperTupleStreamCode : public TupleStreamCode {
             appendControl(fmt::format("d_{0} = new cuco::bloom_filter<{1}>(1);", BF(op), getHTKeyType(keys)));
             log(fmt::format("Bloom filter {0} skipped", BF(op)));
          }
-         
          appendControl("}"); // end of else
+         if (gPrintHashTableSizes) {
+            ScopedRunCountKernel rck(this);
+            appendControl(fmt::format("printBloomFilterInfo(\"{0}\", \"{1}\", \"{2}\", d_{0}.size(), d_{0}.size() * 2 * (sizeof({3}) + sizeof({4})), {5}, {6}, skip_{1});", HT(op), BF(op), "main_" + GetId(this), getHTKeyType(keys), getHTValueType(), gBloomFilterPolicy, shouldSkipBFForHashTable(GetId(op))));
+         }
       }
 
       return columnData;

@@ -24,6 +24,13 @@ for arg in "$@"; do
       SUB_DIR="HT32_BF"
       SUFFIX="-ht32-bf"
       ;;
+    --use-bloom-filters-high-sel)
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --use-bloom-filters --bloom-filter-policy-high-sel"
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      SUB_DIR="HT32_BF_HighSel"
+      SUFFIX="-ht32-bf-highsel"
+      ;;
     --use-bloom-filters-for-large-ht)
       CODEGEN_OPTIONS="$CODEGEN_OPTIONS --use-bloom-filters --bloom-filter-policy-large-ht"
       # Remove this specific argument from $@
