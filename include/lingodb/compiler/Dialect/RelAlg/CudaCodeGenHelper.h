@@ -58,10 +58,11 @@ using QueryToHashTableSkipMap = std::map<QueryId, std::set<HashTableId>>;
 static const QueryToHashTableSkipMap gSkipBloomFiltersForHashTables = {
    // { <query-id>, { <hash-table-id>, ... } },
    { 8,  { 6, 10, 12 } },   // q8: HT_6, HT_10, HT_12 have selection ratio 1.00
-   { 9,  { 2, 4, 6, 8 } },  // q9: HT_2, HT_4, HT_6, HT_8 have selection ratio 1.00
+   { 9,  { 0, 2, 4, 6, 8 } },  // q9: HT_2, HT_4, HT_6, HT_8 have selection ratio 1.00
    { 10, { 2, 4 } },        // q10: HT_2, HT_4 have selection ratio 1.00
    { 12, { 0 } },           // q12: HT_0 has selection ratio 1.00
    { 13, { 0 } },           // q13: HT_0 has selection ratio 1.00
+   { 14, { 0 } },
    { 16, { 2 } },           // q16: HT_2 has selection ratio 1.00
    { 18, { 4 } },           // q18: HT_4 has selection ratio 1.00
 };
