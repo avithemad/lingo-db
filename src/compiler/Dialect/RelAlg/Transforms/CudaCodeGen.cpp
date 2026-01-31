@@ -899,12 +899,12 @@ class HyperTupleStreamCode : public TupleStreamCode {
                }
             }
          }
+         appendControl(fmt::format("if (!skip_{0}) {{", BF(op)));
          {
             ScopedRunCountKernel rck(this);
             appendControl(fmt::format("d_{0} = new cuco::bloom_filter<{1}>({0}_count);", BF(op), getHTKeyType(keys))); // 32 is an arbitrary constant. We need to fix this.            
             
          }
-         appendControl(fmt::format("if (!skip_{0}) {{", BF(op)));
          appendControl(fmt::format("d_{0}->clear();", BF(op)));
          appendControl(fmt::format("thrust::device_vector<{0}> keys_{1}(d_{2}.size()), vals_{1}(d_{2}.size());", getHTKeyType(keys), GetId(op), HT(op)));
          appendControl(fmt::format("d_{0}.retrieve_all(keys_{1}.begin(), vals_{1}.begin());", HT(op), GetId(op))); // retrieve all the keys from the hash table into the keys vector        
