@@ -50,11 +50,11 @@ if [ ! -f "$RUN_CRYSTAL_SCRIPT" ]; then
   exit 1
 fi
 
-RUN_PROFILE_SCRIPT="$SCRIPT_DIR/run_tpch_ncu_profile.sh"
+RUN_PROFILE_SCRIPT="$SCRIPT_DIR/run_ncu_profile.sh"
 
-# Check if the run_tpch_ncu_profile.sh script exists
+# Check if the run_ncu_profile.sh script exists
 if [ ! -f "$RUN_PROFILE_SCRIPT" ]; then
-  echo "Error: run_tpch_ncu_profile.sh not found at $RUN_PROFILE_SCRIPT"
+  echo "Error: run_ncu_profile.sh not found at $RUN_PROFILE_SCRIPT"
   exit 1
 fi
 
