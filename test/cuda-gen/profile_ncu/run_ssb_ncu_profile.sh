@@ -1,17 +1,19 @@
 #!/bin/bash
 
-CODEGEN_OPTIONS="--threads-always-alive --smaller-hash-tables"
+CODEGEN_OPTIONS="--threads-always-alive"
 # for each arg in args
 SUB_DIR="."
 SUFFIX=""
 CRYSTAL_FLAG=false
 CRYSTAL_SUFFIX=""
 QUERY_SUFFIX=""
+PROFILE_OPTIONS=""
 SKIP_GEN=0
+BENCHMARK_NAME="tpch"
 for arg in "$@"; do
   case $arg in
     --smaller-hash-tables)
-      # CODEGEN_OPTIONS="$CODEGEN_OPTIONS --smaller-hash-tables" # make this default for now
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --smaller-hash-tables"
       # Remove this specific argument from $@
       set -- "${@/$arg/}"
       SUB_DIR="HT32"
@@ -23,6 +25,13 @@ for arg in "$@"; do
       set -- "${@/$arg/}"
       SUB_DIR="HT32_BF"
       SUFFIX="-ht32-bf"
+      ;;
+    --use-bloom-filters-high-sel)
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --use-bloom-filters --bloom-filter-policy-high-sel"
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      SUB_DIR="HT32_BF_HighSel"
+      SUFFIX="-ht32-bf-highsel"
       ;;
     --use-bloom-filters-for-large-ht)
       CODEGEN_OPTIONS="$CODEGEN_OPTIONS --use-bloom-filters --bloom-filter-policy-large-ht"
@@ -44,6 +53,14 @@ for arg in "$@"; do
       set -- "${@/$arg/}"
       SUB_DIR="HT32_BF_LargeHT_FitBF"
       SUFFIX="-ht32-bf-largeht-fitbf"
+      ;;
+    --use-partition-hash-join)
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      SUB_DIR="HT32_PHJ"
+      SUFFIX+="-ht32-phj"
+      QUERY_SUFFIX=".phj"
+      PROFILE_OPTIONS="--nvtx --nvtx-include PROFILE_RANGE/"
       ;;
     --threads-always-alive)
       # CODEGEN_OPTIONS="$CODEGEN_OPTIONS --threads-always-alive" # make this default for now
@@ -95,9 +112,21 @@ for arg in "$@"; do
       CRYSTAL_SUFFIX="-crystal"
       QUERY_SUFFIX=".crystal"
       ;;
+    --use-partition-hash-join)
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --use-partition-hash-join"
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      QUERY_SUFFIX=".phj"
+      SUB_DIR="HT32_PHJ"
+      SUFFIX="-ht32-phj"
     --skip-gen)
       SKIP_GEN=1
       # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      ;;
+    --ssb)
+      # Remove this specific argument from $@
+      BENCHMARK_NAME="ssb"
       set -- "${@/$arg/}"
       ;;
   esac
@@ -136,14 +165,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CUDA_GEN_DIR="$(dirname "$SCRIPT_DIR")"
 TEST_DIR="$(dirname "$CUDA_GEN_DIR")"
 REPO_DIR="$(dirname "$TEST_DIR")"
-SRC_DIR="$SQL_PLAN_COMPILER_DIR/gpu-db/ssb-$SCALE_FACTOR"
+SRC_DIR="$SQL_PLAN_COMPILER_DIR/gpu-db/$BENCHMARK_NAME-$SCALE_FACTOR"
 
-SSB_QUERY_DIR="$REPO_DIR/resources/sql/ssb"
+SQL_DIR="$REPO_DIR/resources/sql/$BENCHMARK_NAME"
 BUILD_DIR="$REPO_DIR/build/$BUILD_NAME"
 
 # Set the data directory if not already set
-if [ -z "$SSB_DATA_DIR" ]; then
-  SSB_DATA_DIR="$REPO_DIR/resources/data/ssb-$SCALE_FACTOR"
+if [ -z "$DATA_DIR" ]; then
+  DATA_DIR="$REPO_DIR/resources/data/$BENCHMARK_NAME-$SCALE_FACTOR"
 fi
 
 if [ -z "$QUERIES" ]; then
@@ -152,11 +181,11 @@ fi
 
 if [ $SKIP_GEN -eq 0 ]; then
   # Generate the files
-  GEN_CUDF="$BUILD_DIR/gen-cuda $SSB_DATA_DIR --gen-cuda$CRYSTAL_SUFFIX-code --ssb $CODEGEN_OPTIONS --profiling"
+  GEN_CUDF="$BUILD_DIR/gen-cuda $DATA_DIR --gen-cuda$CRYSTAL_SUFFIX-code --ssb $CODEGEN_OPTIONS --profiling"
   for QUERY in "${QUERIES[@]}"; do
     # First run the run-sql tool to generate CUDA and get reference output
     OUTPUT_FILE=$SRC_DIR/"ssb-$QUERY-ref.csv"
-    GEN_CUDF="$GEN_CUDF $SSB_QUERY_DIR/$QUERY.sql $SRC_DIR/q$QUERY$FILE_SUFFIX.codegen.cu $OUTPUT_FILE" 
+    GEN_CUDF="$GEN_CUDF $SQL_DIR/$QUERY.sql $SRC_DIR/q$QUERY$FILE_SUFFIX.codegen.cu $OUTPUT_FILE" 
   done
   echo $GEN_CUDF
   $GEN_CUDF > /dev/null # ignore the output. We are not comparing
@@ -180,7 +209,7 @@ echo $CD_CMD
 $CD_CMD
 
 REPORT_BASE_FOLDER="$SQL_PLAN_COMPILER_DIR/reports/ncu"
-REPORT_FOLDER="$REPORT_BASE_FOLDER/$CUR_GPU/ssb-$SCALE_FACTOR$CRYSTAL_SUFFIX/$SUB_DIR"
+REPORT_FOLDER="$REPORT_BASE_FOLDER/$CUR_GPU/$BENCHMARK_NAME-$SCALE_FACTOR$CRYSTAL_SUFFIX/$SUB_DIR"
 
 MAKE_REPORT_FOLDER="mkdir -p $REPORT_FOLDER"
 echo $MAKE_REPORT_FOLDER
@@ -188,7 +217,7 @@ $MAKE_REPORT_FOLDER
 
 # Iterate over the queries
 for QUERY in "${QUERIES[@]}"; do
-  RUN_PROFILE_CMD="ncu --set full -f --export $REPORT_FOLDER/q$QUERY-ssb-$SCALE_FACTOR$CRYSTAL_SUFFIX$SUFFIX.ncu-rep ./build/dbruntime --data_dir $SSB_DATA_DIR/ --query_num $QUERY$QUERY_SUFFIX"
+  RUN_PROFILE_CMD="ncu --set full $PROFILE_OPTIONS -f --export $REPORT_FOLDER/q$QUERY-$BENCHMARK_NAME-$SCALE_FACTOR$CRYSTAL_SUFFIX$SUFFIX.ncu-rep ./build/dbruntime --data_dir $DATA_DIR/ --query_num $QUERY$QUERY_SUFFIX"
   echo $RUN_PROFILE_CMD
   $RUN_PROFILE_CMD # > op | tee 2>&1
 done

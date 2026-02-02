@@ -8,10 +8,12 @@ CRYSTAL_FLAG=false
 CRYSTAL_SUFFIX=""
 QUERY_SUFFIX=""
 PROFILE_OPTIONS=""
+BENCHMARK_NAME="tpch"
+
 for arg in "$@"; do
   case $arg in
     --smaller-hash-tables)
-      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --smaller-hash-tables" # make this default for now
+      CODEGEN_OPTIONS="$CODEGEN_OPTIONS --smaller-hash-tables"
       # Remove this specific argument from $@
       set -- "${@/$arg/}"
       SUB_DIR="HT32"
@@ -118,6 +120,11 @@ for arg in "$@"; do
       SUB_DIR="HT32_PHJ"
       SUFFIX="-ht32-phj"
       ;;
+    --ssb)
+      # Remove this specific argument from $@
+      BENCHMARK_NAME="ssb"
+      set -- "${@/$arg/}"
+      ;;
   esac
 done
 
@@ -154,27 +161,30 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CUDA_GEN_DIR="$(dirname "$SCRIPT_DIR")"
 TEST_DIR="$(dirname "$CUDA_GEN_DIR")"
 REPO_DIR="$(dirname "$TEST_DIR")"
+SRC_DIR="$SQL_PLAN_COMPILER_DIR/gpu-db/$BENCHMARK_NAME-$SCALE_FACTOR"
 
-TPCH_DIR="$REPO_DIR/resources/sql/tpch"
+SQL_DIR="$REPO_DIR/resources/sql/$BENCHMARK_NAME"
 BUILD_DIR="$REPO_DIR/build/$BUILD_NAME"
 
 # Set the data directory if not already set
-if [ -z "$TPCH_DATA_DIR" ]; then
-  TPCH_DATA_DIR="$REPO_DIR/resources/data/tpch-$SCALE_FACTOR"
+if [ -z "$DATA_DIR" ]; then
+  DATA_DIR="$REPO_DIR/resources/data/$BENCHMARK_NAME-$SCALE_FACTOR"
 fi
 
-# List of queries to run - 1, 3, 5, 6, 7, 8, 9
 if [ -z "$QUERIES" ]; then
-  QUERIES=(1 3 4 5 6 7 8 9 10 12 13 14 16 17 18 19 20)
+  if [ "$BENCHMARK_NAME" == "tpch" ]; then
+    QUERIES=(1 3 4 5 6 7 8 9 10 12 13 14 16 17 18 19 20)
+  else
+    QUERIES=(11 12 13 21 22 23 31 32 33 34 41 42 43)
+  fi
 fi
 
-SRC_DIR="$SQL_PLAN_COMPILER_DIR/gpu-db/tpch-$SCALE_FACTOR"
 CD_CMD="cd $SRC_DIR"
 echo $CD_CMD
 $CD_CMD
 
 REPORT_BASE_FOLDER="$SQL_PLAN_COMPILER_DIR/reports/ncu"
-REPORT_FOLDER="$REPORT_BASE_FOLDER/$CUR_GPU/tpch-$SCALE_FACTOR$CRYSTAL_SUFFIX/$SUB_DIR"
+REPORT_FOLDER="$REPORT_BASE_FOLDER/$CUR_GPU/$BENCHMARK_NAME-$SCALE_FACTOR$CRYSTAL_SUFFIX/$SUB_DIR"
 
 MAKE_REPORT_FOLDER="mkdir -p $REPORT_FOLDER"
 echo $MAKE_REPORT_FOLDER
@@ -182,7 +192,7 @@ $MAKE_REPORT_FOLDER
 
 # Iterate over the queries
 for QUERY in "${QUERIES[@]}"; do
-  RUN_PROFILE_CMD="ncu --set full $PROFILE_OPTIONS -f --export $REPORT_FOLDER/q$QUERY-tpch-$SCALE_FACTOR$CRYSTAL_SUFFIX$SUFFIX.ncu-rep ./build/dbruntime --data_dir $TPCH_DATA_DIR/ --query_num $QUERY$QUERY_SUFFIX"
+  RUN_PROFILE_CMD="ncu --set full $PROFILE_OPTIONS -f --export $REPORT_FOLDER/q$QUERY-$BENCHMARK_NAME-$SCALE_FACTOR$CRYSTAL_SUFFIX$SUFFIX.ncu-rep ./build/dbruntime --data_dir $DATA_DIR/ --query_num $QUERY$QUERY_SUFFIX"
   echo $RUN_PROFILE_CMD
   $RUN_PROFILE_CMD # > op | tee 2>&1
 done
