@@ -1,10 +1,17 @@
 #!/bin/bash
 
 SSB_SUFFIX=""
+ROOFLINE_SUFFIX=""
 for arg in "$@"; do
   case $arg in
     --ssb)
       SSB_SUFFIX="--ssb"
+      set -- "${@/$arg/}"
+      ;;
+  esac
+  case $arg in
+    --roofline)
+      ROOFLINE_SUFFIX="--roofline"
       set -- "${@/$arg/}"
       ;;
   esac
@@ -93,7 +100,8 @@ run_test_config() {
 
 run_hyper_test_config() {
     run_test_config "$RUN_HYPER_SCRIPT" "$@" --profiling $SSB_SUFFIX
-    run_test_config "$RUN_PROFILE_SCRIPT" "$@" $SSB_SUFFIX
+    run_test_config "$RUN_PROFILE_SCRIPT" "$@" $SSB_SUFFIX $ROOFLINE_SUFFIX
+
 }
 
 run_crystal_test_config() {

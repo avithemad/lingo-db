@@ -9,6 +9,7 @@ CRYSTAL_SUFFIX=""
 QUERY_SUFFIX=""
 PROFILE_OPTIONS=""
 BENCHMARK_NAME="tpch"
+ROOFLINE_METRICS=""
 
 for arg in "$@"; do
   case $arg in
@@ -125,6 +126,12 @@ for arg in "$@"; do
       BENCHMARK_NAME="ssb"
       set -- "${@/$arg/}"
       ;;
+    --roofline)
+      ROOFLINE_METRICS="--metrics smsp__sass_thread_inst_executed_op_integer_pred_on.sum.per_cycle_elapsed"
+      # Remove this specific argument from $@
+      set -- "${@/$arg/}"
+      ;;
+
   esac
 done
 
@@ -186,13 +193,17 @@ $CD_CMD
 REPORT_BASE_FOLDER="$SQL_PLAN_COMPILER_DIR/reports/ncu"
 REPORT_FOLDER="$REPORT_BASE_FOLDER/$CUR_GPU/$BENCHMARK_NAME-$SCALE_FACTOR$CRYSTAL_SUFFIX/$SUB_DIR"
 
+if [ -n "$ROOFLINE_METRICS" ]; then
+  REPORT_FOLDER="$REPORT_FOLDER/roofline"
+fi
+
 MAKE_REPORT_FOLDER="mkdir -p $REPORT_FOLDER"
 echo $MAKE_REPORT_FOLDER
 $MAKE_REPORT_FOLDER
 
 # Iterate over the queries
 for QUERY in "${QUERIES[@]}"; do
-  RUN_PROFILE_CMD="ncu --set full $PROFILE_OPTIONS -f --export $REPORT_FOLDER/q$QUERY-$BENCHMARK_NAME-$SCALE_FACTOR$CRYSTAL_SUFFIX$SUFFIX.ncu-rep ./build/dbruntime --data_dir $DATA_DIR/ --query_num $QUERY$QUERY_SUFFIX"
+  RUN_PROFILE_CMD="ncu --set full $ROOFLINE_METRICS $PROFILE_OPTIONS -f --export $REPORT_FOLDER/q$QUERY-$BENCHMARK_NAME-$SCALE_FACTOR$CRYSTAL_SUFFIX$SUFFIX.ncu-rep ./build/dbruntime --data_dir $DATA_DIR/ --query_num $QUERY$QUERY_SUFFIX --use-shm"
   echo $RUN_PROFILE_CMD
   $RUN_PROFILE_CMD # > op | tee 2>&1
 done
